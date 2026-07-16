@@ -1,0 +1,23 @@
+{
+  "name": "igp-development-platform",
+  "version": "0.1.62",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server/index.js",
+    "build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1",
+    "test": "node --test test/*.test.js",
+    "verify": "npm run test && npm run build && npm run verify:upload-log && npm run verify:secret-exposure",
+    "verify:upload-log": "node scripts/verify-upload-log.js",
+    "verify:secret-exposure": "node scripts/check-secret-exposure.js",
+    "log-change": "node scripts/log-change.js"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "express": "^5.1.0",
+    "vite": "^7.2.7",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  },
+  "devDependencies": {}
+}

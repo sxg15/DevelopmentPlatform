@@ -1,0 +1,103 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 3000
+  },
+  "feishu": {
+    "appId": "",
+    "appSecret": ""
+  },
+  "webApp": {
+    "publicBaseUrl": "http://127.0.0.1:3000/",
+    "openMode": "appCenter"
+  },
+  "knowledgeBase": {
+    "spaceId": "",
+    "requirementsParentName": "需求列表",
+    "requirementsTemplateName": "模板",
+    "requirementsTemplateAppToken": "",
+    "requirementsIdPrefix": "R-",
+    "requirementsIdDigits": 4,
+    "requirementsFieldNames": {
+      "requirementId": "需求ID",
+      "itemId": "需求ID",
+      "title": "需求标题",
+      "description": "需求描述",
+      "proposer": "提出人员",
+      "priority": "优先级",
+      "assignees": "处理人员",
+      "status": "处理状态",
+      "proposedAt": "提出时间",
+      "expectedDays": "期望时限",
+      "attachments": "附件",
+      "comments": "留言",
+      "statusChangeLog": "处理状态变动记录"
+    },
+    "bugsParentName": "Bug列表",
+    "bugsTemplateName": "模板",
+    "bugsTemplateAppToken": "",
+    "bugsIdPrefix": "B-",
+    "bugsIdDigits": 4,
+    "bugsFieldNames": {
+      "bugId": "BugID",
+      "itemId": "BugID",
+      "title": "标题",
+      "description": "详细描述",
+      "proposer": "提出人员",
+      "priority": "优先级",
+      "assignees": "处理人员",
+      "status": "处理状态",
+      "proposedAt": "发现时间",
+      "expectedDays": "期望时限",
+      "attachments": "附件",
+      "comments": "留言",
+      "statusChangeLog": "处理状态变动记录"
+    }
+  },
+  "debug": {
+    "userName": "调试用户",
+    "openId": ""
+  },
+  "bitable": {
+    "projectBase": {
+      "appToken": "",
+      "tableId": "",
+      "viewId": "",
+      "fieldNames": {
+        "projectId": "项目ID",
+        "projectName": "项目名称",
+        "projectIcon": "项目图标"
+      }
+    },
+    "projectPermission": {
+      "appToken": "",
+      "tableId": "",
+      "viewId": "",
+      "fieldNames": {
+        "projectId": "项目ID",
+        "permissionUsers": [
+          "超级管理员",
+          "研发",
+          "测试",
+          "发行",
+          "商务"
+        ]
+      }
+    },
+    "toolPermission": {
+      "appToken": "",
+      "tableId": "",
+      "viewId": "",
+      "fieldNames": {
+        "department": "部门",
+        "tools": {
+          "requirements": "需求列表",
+          "bugs": "Bug列表",
+          "builds": "打包列表",
+          "review": "内容审查"
+        }
+      }
+    },
+    "links": []
+  }
+}

@@ -1,0 +1,12 @@
+node_modules/
+dist/
+Publish/
+config/config.json
+.idea/
+.env
+.DS_Store
+npm-debug.log*
+*.local
+*.log
+.dev-server*.log
+.prod-server*.log
