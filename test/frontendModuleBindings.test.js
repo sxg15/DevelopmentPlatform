@@ -80,3 +80,17 @@ test('work item timeline keeps React Chrono custom card content visible', () => 
   assert.match(source, /compactText:\s*false/);
   assert.doesNotMatch(source, /compactText:\s*true/);
 });
+
+test('work item timeline overrides React Chrono card minimum widths', () => {
+  const desktopStyles = fs.readFileSync('src/styles/workItems.css', 'utf8');
+  const responsiveStyles = fs.readFileSync('src/styles/responsive.css', 'utf8');
+
+  assert.match(
+    desktopStyles,
+    /\.work-item-timeline-chrono \.timeline-card-content\s*\{[^}]*min-width:\s*216px\s*!important;/s,
+  );
+  assert.match(
+    responsiveStyles,
+    /\.work-item-timeline-chrono \.timeline-card-content\s*\{[^}]*min-width:\s*202px\s*!important;/s,
+  );
+});

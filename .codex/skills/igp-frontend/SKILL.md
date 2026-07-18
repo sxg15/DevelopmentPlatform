@@ -48,6 +48,9 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - React Chrono must use `content.compactText: false` for these custom cards;
   enabling compact text maps to the library's low-density mode and hides custom
   event content.
+- Override the custom timeline card's `width`, `min-width`, and `max-width`
+  together. React Chrono supplies a 280px minimum width that otherwise makes
+  adjacent compact cards overlap their fixed-width node columns.
 - Load React Chrono's global stylesheet before project styles so local base and
   work-item rules retain cascade ownership.
 - Preserve local snapshot and draft keys when changing workspace state.

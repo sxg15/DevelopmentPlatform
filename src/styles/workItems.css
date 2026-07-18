@@ -1953,6 +1953,7 @@
 
 .work-item-timeline-chrono .timeline-card-content {
   width: 216px;
+  min-width: 216px !important;
   max-width: 216px;
   height: 164px !important;
   min-height: 164px;

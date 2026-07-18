@@ -383,6 +383,7 @@
 
   .work-item-timeline-chrono .timeline-card-content {
     width: 202px;
+    min-width: 202px !important;
     max-width: 202px;
   }
 
