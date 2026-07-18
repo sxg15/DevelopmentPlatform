@@ -9,5 +9,6 @@ config/config.json
 npm-debug.log*
 *.local
 *.log
+logs/
 .dev-server*.log
 .prod-server*.log

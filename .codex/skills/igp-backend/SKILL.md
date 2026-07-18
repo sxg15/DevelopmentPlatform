@@ -31,8 +31,10 @@ Read `AGENTS.md`, then locate the owning layer.
 - Keep `/api/client-errors` available before authentication and rate-limited so
   startup failures can be diagnosed without allowing log flooding. Normalize
   reports through `shared/clientErrorUtils.js`, log them with the `[client-error]`
-  prefix, and never persist request bodies or identity details beyond the
-  sanitized diagnostic fields.
+  prefix, append sanitized JSONL entries to `logs/client-errors.log` in development
+  or `Publish/logs/client-errors.log` in production, and retain one 10 MB rotated
+  backup. File-write failures must not change the endpoint response. Never persist
+  request bodies or identity details beyond the sanitized diagnostic fields.
 - When adding server modules, keep `scripts/build.ps1` copying the complete
   `server/` tree.
 - Prefer `getCachedValue` for shared promise-aware TTL cache behavior.

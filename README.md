@@ -48,6 +48,15 @@
 打包时，所有产物都会生成到根目录 `Publish` 文件夹。每次构建都会把 `config/config.json` 覆盖到 `Publish/config.json`。服务端会读取这个文件，但不会把 App Secret 返回给浏览器。
 `Publish` 根目录会生成 `StartWebBackend.bat` 和 `StopWebBackend.bat`，用于一键启动和停止网页后端服务。
 
+## 异常日志
+
+浏览器上报的页面运行异常会以 UTF-8 JSONL 格式保存到本地：
+
+- 开发环境：`logs/client-errors.log`
+- 发布环境：`Publish/logs/client-errors.log`
+
+每行以 `[client-error]` 开头，可直接搜索页面显示的错误编号。日志只包含经过脱敏和截断的诊断字段，不保存表单、需求/Bug内容、令牌或运行配置。文件达到 10 MB 后会轮转为 `client-errors.log.1`。
+
 ## 常用命令
 
 ```bash

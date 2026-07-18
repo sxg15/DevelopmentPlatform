@@ -74,7 +74,9 @@ Shared modules must remain runtime-neutral and importable from Node tests.
 - `server/integrations/wikiClient.js`: Wiki node lookup, creation, copying, polling,
   and caches.
 - `server/runtime/`: async cache, sessions, SSE hub, network helpers, and sanitized
-  client-error log entries.
+  client-error log entries. Browser runtime errors append to
+  `logs/client-errors.log` in development and `Publish/logs/client-errors.log` in
+  production, with one 10 MB rotated backup.
 - `server/services/updateService.js`: remote update manifest retrieval.
 
 Keep Feishu HTTP details in `server/integrations/`, process-local state in

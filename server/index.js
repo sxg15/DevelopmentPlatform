@@ -49,6 +49,7 @@ import {
 } from './runtime/sessionStore.js';
 import { createWorkItemRealtimeHub } from './runtime/workItemRealtime.js';
 import {
+  clientErrorLogFilePath,
   createClientErrorRateLimiter,
   writeClientErrorLog,
 } from './runtime/clientErrorLog.js';
@@ -1835,6 +1836,7 @@ if (isProduction) {
 
 app.listen(port, host, () => {
   console.log(`Server started on ${host}:${port}`);
+  console.log(`Client error log: ${clientErrorLogFilePath}`);
   for (const url of getLocalUrls(port)) {
     console.log(url);
   }
