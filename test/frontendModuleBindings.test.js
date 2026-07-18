@@ -73,3 +73,10 @@ for (const file of FRONTEND_MODULES) {
     assert.deepEqual(unresolved, []);
   });
 }
+
+test('work item timeline keeps React Chrono custom card content visible', () => {
+  const source = fs.readFileSync('src/ui/work-items/WorkItemTimeline.jsx', 'utf8');
+
+  assert.match(source, /compactText:\s*false/);
+  assert.doesNotMatch(source, /compactText:\s*true/);
+});

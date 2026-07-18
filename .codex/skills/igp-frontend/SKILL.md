@@ -45,6 +45,9 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
   currently loaded events from oldest to newest, show each compact event card
   directly above its corresponding node, and preserve horizontal scrolling
   instead of switching to a vertical layout at narrow widths.
+- React Chrono must use `content.compactText: false` for these custom cards;
+  enabling compact text maps to the library's low-density mode and hides custom
+  event content.
 - Load React Chrono's global stylesheet before project styles so local base and
   work-item rules retain cascade ownership.
 - Preserve local snapshot and draft keys when changing workspace state.

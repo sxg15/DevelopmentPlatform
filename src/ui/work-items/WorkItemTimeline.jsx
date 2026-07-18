@@ -135,7 +135,7 @@ export default function WorkItemTimeline({ toolConfig, record }) {
               }}
               content={{
                 allowHTML: false,
-                compactText: true,
+                compactText: false,
                 readMore: false,
                 semanticTags: {
                   title: 'div',
