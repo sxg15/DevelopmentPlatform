@@ -39,14 +39,21 @@ import {
   validateToolPermissionConfig,
 } from './config/runtimeConfig.js';
 import { getLocalUrls } from './runtime/network.js';
+import {
+  buildClearSessionCookie,
+  buildSessionCookie,
+  createSession,
+  deleteSession,
+  getSession,
+  getSessionId,
+} from './runtime/sessionStore.js';
+import { createWorkItemRealtimeHub } from './runtime/workItemRealtime.js';
 import { fetchUpdateManifest } from './services/updateService.js';
 
 const host = runtimeConfig.server.host;
 const port = runtimeConfig.server.port;
 const appId = runtimeConfig.feishu.appId;
 const appSecret = runtimeConfig.feishu.appSecret;
-const sessions = new Map();
-const realtimeSubscribers = new Map();
 let tenantTokenCache = null;
 let peopleDirectoryCache = null;
 
@@ -70,6 +77,12 @@ const wikiChildrenCache = new Map();
 const workItemNodeCache = new Map();
 const workItemTableContextCache = new Map();
 const projectOverviewCache = new Map();
+const {
+  publishWorkItemUpdated,
+  subscribe: subscribeToWorkItemUpdates,
+} = createWorkItemRealtimeHub({
+  onPublish: ({ projectId }) => invalidateProjectOverviewCache(projectId),
+});
 
 const app = express();
 
@@ -163,9 +176,7 @@ app.post('/api/auth/debug', async (_request, response) => {
 
 app.post('/api/auth/logout', (request, response) => {
   const sessionId = getSessionId(request);
-  if (sessionId) {
-    sessions.delete(sessionId);
-  }
+  deleteSession(sessionId);
 
   response.setHeader('Set-Cookie', buildClearSessionCookie());
   response.json({ ok: true });
@@ -702,28 +713,14 @@ async function handleRealtimeStream(request, response) {
     const allowedToolsByProject = new Map(
       projects.map((project) => [project.projectId, new Set((project.allowedTools || []).map((tool) => tool.id))]),
     );
-    const subscriberId = crypto.randomUUID();
-
     response.status(200);
     response.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     response.setHeader('Cache-Control', 'no-cache, no-transform');
     response.setHeader('Connection', 'keep-alive');
     response.setHeader('X-Accel-Buffering', 'no');
     response.flushHeaders();
-    writeRealtimeEvent(response, 'ready', { connectedAt: Date.now() });
-
-    const heartbeat = setInterval(() => {
-      response.write(': keepalive\n\n');
-    }, 20000);
-    realtimeSubscribers.set(subscriberId, { response, allowedToolsByProject, heartbeat });
-
-    request.on('close', () => {
-      const subscriber = realtimeSubscribers.get(subscriberId);
-      if (subscriber?.heartbeat) {
-        clearInterval(subscriber.heartbeat);
-      }
-      realtimeSubscribers.delete(subscriberId);
-    });
+    const unsubscribe = subscribeToWorkItemUpdates(response, allowedToolsByProject);
+    request.on('close', unsubscribe);
   } catch (error) {
     const message = error instanceof Error ? error.message : '建立实时连接失败';
     response.status(message.includes('权限') ? 403 : 502).json({ message });
@@ -5786,107 +5783,6 @@ async function readJson(response) {
   }
 }
 
-function createSession(user, userAccessToken = '') {
-  const sessionId = crypto.randomUUID();
-  sessions.set(sessionId, {
-    user,
-    userAccessToken,
-    createdAt: Date.now(),
-  });
-  return sessionId;
-}
-
-function getSession(request) {
-  cleanupSessions();
-  const sessionId = getSessionId(request);
-  if (!sessionId) {
-    return null;
-  }
-  return sessions.get(sessionId) || null;
-}
-
-function getSessionId(request) {
-  return parseCookies(request.headers.cookie).igp_session || '';
-}
-
-function parseCookies(cookieHeader = '') {
-  return cookieHeader.split(';').reduce((cookies, part) => {
-    const [rawName, ...rawValue] = part.trim().split('=');
-    if (!rawName) {
-      return cookies;
-    }
-    cookies[rawName] = decodeURIComponent(rawValue.join('='));
-    return cookies;
-  }, {});
-}
-
-function buildSessionCookie(sessionId) {
-  const maxAge = 60 * 60 * 2;
-  return [
-    `igp_session=${encodeURIComponent(sessionId)}`,
-    'Path=/',
-    'HttpOnly',
-    'SameSite=Lax',
-    `Max-Age=${maxAge}`,
-  ].join('; ');
-}
-
-function buildClearSessionCookie() {
-  return [
-    'igp_session=',
-    'Path=/',
-    'HttpOnly',
-    'SameSite=Lax',
-    'Max-Age=0',
-  ].join('; ');
-}
-
-function publishWorkItemUpdated(event) {
-  const payload = {
-    projectId: String(event?.projectId || '').trim(),
-    toolId: String(event?.toolId || '').trim(),
-    recordId: String(event?.recordId || '').trim(),
-    occurredAt: Date.now(),
-  };
-
-  if (!payload.projectId || !payload.toolId || !payload.recordId) {
-    return;
-  }
-
-  invalidateProjectOverviewCache(payload.projectId);
-
-  for (const [subscriberId, subscriber] of realtimeSubscribers.entries()) {
-    const allowedToolIds = subscriber.allowedToolsByProject.get(payload.projectId);
-    if (!allowedToolIds?.has(payload.toolId)) {
-      continue;
-    }
-
-    try {
-      writeRealtimeEvent(subscriber.response, 'work-item-updated', payload);
-    } catch {
-      if (subscriber.heartbeat) {
-        clearInterval(subscriber.heartbeat);
-      }
-      realtimeSubscribers.delete(subscriberId);
-    }
-  }
-}
-
-function writeRealtimeEvent(response, eventName, payload) {
-  response.write(`event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`);
-}
-
 function isPeopleSearchReauthorizationRequired(message) {
   return message.includes('登录授权已失效');
-}
-
-function cleanupSessions() {
-  const ttlMs = 2 * 60 * 60 * 1000;
-  const now = Date.now();
-
-  for (const [sessionId, session] of sessions.entries()) {
-    if (now - session.createdAt > ttlMs) {
-      sessions.delete(sessionId);
-    }
-  }
 }
