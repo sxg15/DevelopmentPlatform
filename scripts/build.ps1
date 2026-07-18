@@ -35,6 +35,7 @@ if ($LASTEXITCODE -ne 0) {
 
 New-Item -ItemType Directory -Path $publishServerDir | Out-Null
 Copy-Item -LiteralPath (Join-Path $rootDir 'server\index.js') -Destination (Join-Path $publishServerDir 'index.js') -Force
+Copy-Item -LiteralPath (Join-Path $rootDir 'shared') -Destination (Join-Path $publishDir 'shared') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $rootDir 'package.json') -Destination (Join-Path $publishDir 'package.json') -Force
 Copy-Item -LiteralPath (Join-Path $rootDir 'package-lock.json') -Destination (Join-Path $publishDir 'package-lock.json') -Force
 

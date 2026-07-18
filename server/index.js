@@ -5,6 +5,25 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
+import { buildUpdateResponse } from '../shared/updateManifest.js';
+import { countWaitingAssignedWorkItems } from '../shared/workItemRealtimeUtils.js';
+import {
+  DEFAULT_DEVELOPMENT_SUPER_ADMIN_FIELD,
+  canManageWorkItemAssignees,
+  getRoleGrantedWorkItemToolIds,
+  supportsUnassignedWorkItemRouting,
+  validateWorkItemAssignmentChoice,
+} from '../shared/workItemAssignmentUtils.js';
+import {
+  buildRequirementSubmissionAttachmentChangeText,
+  getSubmissionAttachmentToken,
+  isRequirementSubmissionAttachmentRequired,
+} from '../shared/requirementSubmissionAttachmentUtils.js';
+import {
+  PROJECT_OVERVIEW_TOOL_ORDER,
+  buildProjectOverviewData,
+  normalizeProjectOverviewConfig,
+} from '../shared/projectOverviewUtils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -15,7 +34,9 @@ const host = runtimeConfig.server.host;
 const port = runtimeConfig.server.port;
 const appId = runtimeConfig.feishu.appId;
 const appSecret = runtimeConfig.feishu.appSecret;
+const currentAppVersion = readCurrentAppVersion();
 const sessions = new Map();
+const realtimeSubscribers = new Map();
 let tenantTokenCache = null;
 let peopleDirectoryCache = null;
 
@@ -29,11 +50,12 @@ const PROJECT_DATA_CACHE_TTL_MS = 60 * 1000;
 const STRUCTURE_CACHE_TTL_MS = 5 * 60 * 1000;
 const LONG_STRUCTURE_CACHE_TTL_MS = 10 * 60 * 1000;
 const SUPER_ADMIN_DEPARTMENT = '超级管理员';
-const WORK_ITEM_TOOL_IDS = new Set(['requirements', 'bugs']);
+const WORK_ITEM_TOOL_IDS = new Set(['requirements', 'bugs', 'feedback']);
 const PROJECT_TOOL_DEFINITIONS = [
   { id: 'overview', label: '项目总览' },
   { id: 'requirements', label: '需求列表' },
   { id: 'bugs', label: 'Bug列表' },
+  { id: 'feedback', label: '反馈列表' },
   { id: 'builds', label: '打包列表' },
   { id: 'review', label: '内容审查' },
 ];
@@ -46,6 +68,7 @@ const wikiTitleCache = new Map();
 const wikiChildrenCache = new Map();
 const workItemNodeCache = new Map();
 const workItemTableContextCache = new Map();
+const projectOverviewCache = new Map();
 
 const app = express();
 
@@ -65,6 +88,34 @@ app.get('/api/config', (_request, response) => {
       openId: runtimeConfig.debug.openId,
     },
   });
+});
+
+app.get('/api/updates', async (request, response) => {
+  try {
+    if (!getSession(request)) {
+      response.status(401).json({ message: '请先登录飞书' });
+      return;
+    }
+
+    const manifestUrl = runtimeConfig.updates.manifestUrl;
+    if (!manifestUrl) {
+      response.json({
+        enabled: false,
+        currentVersion: currentAppVersion,
+        latestVersion: currentAppVersion,
+        updateAvailable: false,
+        releases: [],
+      });
+      return;
+    }
+
+    const manifest = await fetchUpdateManifest(manifestUrl);
+    response.json(buildUpdateResponse(manifest, currentAppVersion, String(request.query.since || '').trim()));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '获取更新日志失败';
+    const status = message.includes('HTTPS') || message.includes('格式') ? 500 : 502;
+    response.status(status).json({ message });
+  }
 });
 
 app.get('/api/me', async (request, response) => {
@@ -156,6 +207,18 @@ app.get('/api/projects', async (request, response) => {
   }
 });
 
+app.get('/api/projects/related-counts', async (request, response) => {
+  await handleRelatedWorkItemCounts(request, response);
+});
+
+app.get('/api/projects/:projectId/overview', async (request, response) => {
+  await handleProjectOverview(request, response);
+});
+
+app.get('/api/realtime/stream', async (request, response) => {
+  await handleRealtimeStream(request, response);
+});
+
 app.get('/api/projects/:recordId/icon', async (request, response) => {
   try {
     validateProjectBaseConfig();
@@ -214,12 +277,20 @@ app.post('/api/projects/:projectId/bugs/ensure', async (request, response) => {
   await handleWorkItemEnsure(request, response, 'bugs');
 });
 
+app.post('/api/projects/:projectId/feedback/ensure', async (request, response) => {
+  await handleWorkItemEnsure(request, response, 'feedback');
+});
+
 app.post('/api/projects/:projectId/requirements', async (request, response) => {
   await handleWorkItemCreate(request, response, 'requirements');
 });
 
 app.post('/api/projects/:projectId/bugs', async (request, response) => {
   await handleWorkItemCreate(request, response, 'bugs');
+});
+
+app.post('/api/projects/:projectId/feedback', async (request, response) => {
+  await handleWorkItemCreate(request, response, 'feedback');
 });
 
 app.put('/api/projects/:projectId/requirements/:recordId', async (request, response) => {
@@ -230,12 +301,36 @@ app.put('/api/projects/:projectId/bugs/:recordId', async (request, response) => 
   await handleWorkItemUpdate(request, response, 'bugs');
 });
 
+app.put('/api/projects/:projectId/feedback/:recordId', async (request, response) => {
+  await handleWorkItemUpdate(request, response, 'feedback');
+});
+
+app.get('/api/projects/:projectId/requirements/:recordId', async (request, response) => {
+  await handleWorkItemRead(request, response, 'requirements');
+});
+
+app.get('/api/projects/:projectId/bugs/:recordId', async (request, response) => {
+  await handleWorkItemRead(request, response, 'bugs');
+});
+
+app.get('/api/projects/:projectId/feedback/:recordId', async (request, response) => {
+  await handleWorkItemRead(request, response, 'feedback');
+});
+
 app.get('/api/projects/:projectId/requirements/attachments/:fileToken', async (request, response) => {
   await handleWorkItemAttachment(request, response, 'requirements');
 });
 
 app.get('/api/projects/:projectId/bugs/attachments/:fileToken', async (request, response) => {
   await handleWorkItemAttachment(request, response, 'bugs');
+});
+
+app.get('/api/projects/:projectId/feedback/attachments/:fileToken', async (request, response) => {
+  await handleWorkItemAttachment(request, response, 'feedback');
+});
+
+app.post('/api/projects/:projectId/requirements/:recordId/submission-attachments', async (request, response) => {
+  await handleRequirementSubmissionAttachmentsUpdate(request, response);
 });
 
 app.post('/api/projects/:projectId/requirements/:recordId/comments', async (request, response) => {
@@ -246,12 +341,20 @@ app.post('/api/projects/:projectId/bugs/:recordId/comments', async (request, res
   await handleWorkItemCommentCreate(request, response, 'bugs');
 });
 
+app.post('/api/projects/:projectId/feedback/:recordId/comments', async (request, response) => {
+  await handleWorkItemCommentCreate(request, response, 'feedback');
+});
+
 app.delete('/api/projects/:projectId/requirements/:recordId/comments/:commentId', async (request, response) => {
   await handleWorkItemCommentDelete(request, response, 'requirements');
 });
 
 app.delete('/api/projects/:projectId/bugs/:recordId/comments/:commentId', async (request, response) => {
   await handleWorkItemCommentDelete(request, response, 'bugs');
+});
+
+app.delete('/api/projects/:projectId/feedback/:recordId/comments/:commentId', async (request, response) => {
+  await handleWorkItemCommentDelete(request, response, 'feedback');
 });
 
 app.post('/api/projects/:projectId/requirements/:recordId/status', async (request, response) => {
@@ -262,6 +365,10 @@ app.post('/api/projects/:projectId/bugs/:recordId/status', async (request, respo
   await handleWorkItemStatusUpdate(request, response, 'bugs');
 });
 
+app.post('/api/projects/:projectId/feedback/:recordId/status', async (request, response) => {
+  await handleWorkItemStatusUpdate(request, response, 'feedback');
+});
+
 app.post('/api/projects/:projectId/requirements/:recordId/assignees', async (request, response) => {
   await handleWorkItemAssigneeChange(request, response, 'requirements');
 });
@@ -270,12 +377,20 @@ app.post('/api/projects/:projectId/bugs/:recordId/assignees', async (request, re
   await handleWorkItemAssigneeChange(request, response, 'bugs');
 });
 
+app.post('/api/projects/:projectId/feedback/:recordId/assignees', async (request, response) => {
+  await handleWorkItemAssigneeChange(request, response, 'feedback');
+});
+
 app.delete('/api/projects/:projectId/requirements/:recordId', async (request, response) => {
   await handleWorkItemDelete(request, response, 'requirements');
 });
 
 app.delete('/api/projects/:projectId/bugs/:recordId', async (request, response) => {
   await handleWorkItemDelete(request, response, 'bugs');
+});
+
+app.delete('/api/projects/:projectId/feedback/:recordId', async (request, response) => {
+  await handleWorkItemDelete(request, response, 'feedback');
 });
 
 async function handleWorkItemEnsure(request, response, toolId) {
@@ -315,6 +430,305 @@ async function handleWorkItemEnsure(request, response, toolId) {
   }
 }
 
+async function handleWorkItemRead(request, response, toolId) {
+  const toolConfig = getWorkItemToolConfig(toolId);
+  try {
+    validateProjectBaseConfig();
+    validateProjectPermissionConfig();
+    validateKnowledgeBaseConfig();
+
+    if (!appId || !appSecret) {
+      response.status(500).json({ message: '缺少飞书应用配置' });
+      return;
+    }
+
+    const session = getSession(request);
+    if (!session) {
+      response.status(401).json({ message: '请先登录飞书' });
+      return;
+    }
+
+    const projectId = String(request.params.projectId || '').trim();
+    const recordId = String(request.params.recordId || '').trim();
+    if (!projectId || !recordId) {
+      response.status(400).json({ message: `缺少${toolConfig.itemLabel}信息` });
+      return;
+    }
+
+    const token = await getTenantAccessToken();
+    const { project } = await getAuthorizedProjectAccess(token, projectId, session.user, toolId);
+    const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
+    const { appToken, tableId } = await fetchWorkItemTableContext(token, node, toolConfig);
+    const record = await fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig);
+    const item = normalizeWorkItemRecords([record], session.user, toolConfig)[0] || null;
+
+    if (!item) {
+      response.status(404).json({ message: toolConfig.missingRecordText });
+      return;
+    }
+
+    response.json({
+      item,
+      requirement: toolId === 'requirements' ? item : null,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : `获取${toolConfig.itemLabel}失败`;
+    const status = message.includes('缺少') ? 500 : message.includes('权限') ? 403 : message.includes('不存在') ? 404 : 502;
+    response.status(status).json({ message });
+  }
+}
+
+async function handleRelatedWorkItemCounts(request, response) {
+  try {
+    validateProjectBaseConfig();
+    validateProjectPermissionConfig();
+    validateToolPermissionConfig();
+    validateKnowledgeBaseConfig();
+
+    if (!appId || !appSecret) {
+      response.status(500).json({ message: '缺少飞书应用配置' });
+      return;
+    }
+
+    const session = getSession(request);
+    if (!session) {
+      response.status(401).json({ message: '请先登录飞书' });
+      return;
+    }
+
+    const requestedProjectId = String(request.query.projectId || '').trim();
+    const token = await getTenantAccessToken();
+    const accessibleProjects = await getAccessibleProjectsForUser(token, session.user);
+    const projects = requestedProjectId
+      ? accessibleProjects.filter((project) => project.projectId === requestedProjectId)
+      : accessibleProjects;
+
+    if (requestedProjectId && projects.length === 0) {
+      response.status(403).json({ message: '没有该项目权限' });
+      return;
+    }
+
+    const entries = await mapWithConcurrency(projects, 4, async (project) => {
+      const allowedToolIds = new Set((project.allowedTools || []).map((tool) => tool.id));
+      const requirements = allowedToolIds.has('requirements')
+        ? await getProjectWaitingWorkItemCount(token, project, session.user, getWorkItemToolConfig('requirements'))
+        : 0;
+      const bugs = allowedToolIds.has('bugs')
+        ? await getProjectWaitingWorkItemCount(token, project, session.user, getWorkItemToolConfig('bugs'))
+        : 0;
+
+      return [project.projectId, { requirements, bugs }];
+    });
+
+    response.json({
+      counts: Object.fromEntries(entries),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '获取项目待处理数量失败';
+    const status = message.includes('缺少') ? 500 : message.includes('权限') ? 403 : 502;
+    response.status(status).json({ message });
+  }
+}
+
+async function handleProjectOverview(request, response) {
+  try {
+    validateProjectBaseConfig();
+    validateProjectPermissionConfig();
+    validateToolPermissionConfig();
+    validateKnowledgeBaseConfig();
+
+    if (!appId || !appSecret) {
+      response.status(500).json({ message: '缺少飞书应用配置' });
+      return;
+    }
+
+    const session = getSession(request);
+    if (!session) {
+      response.status(401).json({ message: '请先登录飞书' });
+      return;
+    }
+
+    const projectId = String(request.params.projectId || '').trim();
+    const scope = String(request.query.scope || 'project').trim();
+    const trendDays = Number(request.query.trendDays || 30);
+    if (!projectId) {
+      response.status(400).json({ message: '缺少项目ID' });
+      return;
+    }
+    if (!['project', 'mine'].includes(scope)) {
+      response.status(400).json({ message: '总览范围不正确' });
+      return;
+    }
+    if (![14, 30, 90].includes(trendDays)) {
+      response.status(400).json({ message: '趋势周期只支持14天、30天或90天' });
+      return;
+    }
+
+    const token = await getTenantAccessToken();
+    const { project, projectAccess } = await getAuthorizedProjectAccess(
+      token,
+      projectId,
+      session.user,
+      'overview',
+    );
+    const allowedToolIds = PROJECT_OVERVIEW_TOOL_ORDER.filter(
+      (toolId) => projectAccess.allowedToolIds.has(toolId),
+    );
+    const cacheKey = buildProjectOverviewCacheKey({
+      projectId: project.projectId,
+      allowedToolIds,
+      scope,
+      trendDays,
+      user: session.user,
+    });
+    const result = await getCachedValue(
+      projectOverviewCache,
+      cacheKey,
+      runtimeConfig.dashboard.cacheTtlMs,
+      async () => {
+        const toolResults = await mapWithConcurrency(allowedToolIds, 3, async (toolId) => {
+          const toolConfig = getWorkItemToolConfig(toolId);
+          try {
+            const items = await fetchExistingProjectOverviewItems(
+              token,
+              project,
+              session.user,
+              toolConfig,
+            );
+            return { toolId, items, unavailable: null };
+          } catch (error) {
+            const message = error instanceof Error ? error.message : `读取${toolConfig.listLabel}失败`;
+            return {
+              toolId,
+              items: null,
+              unavailable: {
+                toolId,
+                label: toolConfig.listLabel,
+                reason: isMissingWorkItemListError(error, toolConfig) ? 'notConfigured' : 'unavailable',
+                message,
+              },
+            };
+          }
+        });
+        const toolItems = Object.fromEntries(
+          toolResults
+            .filter((item) => Array.isArray(item.items))
+            .map((item) => [item.toolId, item.items]),
+        );
+
+        return buildProjectOverviewData({
+          toolItems,
+          currentUser: session.user,
+          scope,
+          trendDays,
+          config: runtimeConfig.dashboard,
+          unavailableTools: toolResults.map((item) => item.unavailable).filter(Boolean),
+        });
+      },
+    );
+
+    response.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '获取项目总览失败';
+    const status = message.includes('缺少')
+      ? 500
+      : message.includes('权限')
+        ? 403
+        : message.includes('不存在')
+          ? 404
+          : 502;
+    response.status(status).json({ message });
+  }
+}
+
+async function fetchExistingProjectOverviewItems(token, project, currentUser, toolConfig) {
+  const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
+  const { appToken, tableId } = await getCachedWorkItemTableContext(token, node, toolConfig);
+  const records = await fetchBitableRecords(token, {
+    appToken,
+    tableId,
+    viewId: '',
+    fieldNames: {},
+  });
+  return normalizeWorkItemRecords(records, currentUser, toolConfig);
+}
+
+function buildProjectOverviewCacheKey({
+  projectId,
+  allowedToolIds,
+  scope,
+  trendDays,
+  user,
+}) {
+  const userKey = [...buildUserKeySet(user)].sort().join(',');
+  return [
+    String(projectId || '').trim(),
+    [...allowedToolIds].sort().join(','),
+    scope,
+    trendDays,
+    userKey,
+  ].join('|');
+}
+
+function invalidateProjectOverviewCache(projectId) {
+  const prefix = `${String(projectId || '').trim()}|`;
+  for (const key of projectOverviewCache.keys()) {
+    if (key.startsWith(prefix)) {
+      projectOverviewCache.delete(key);
+    }
+  }
+}
+
+async function handleRealtimeStream(request, response) {
+  try {
+    validateProjectBaseConfig();
+    validateProjectPermissionConfig();
+    validateToolPermissionConfig();
+
+    if (!appId || !appSecret) {
+      response.status(500).json({ message: '缺少飞书应用配置' });
+      return;
+    }
+
+    const session = getSession(request);
+    if (!session) {
+      response.status(401).json({ message: '请先登录飞书' });
+      return;
+    }
+
+    const token = await getTenantAccessToken();
+    const projects = await getAccessibleProjectsForUser(token, session.user);
+    const allowedToolsByProject = new Map(
+      projects.map((project) => [project.projectId, new Set((project.allowedTools || []).map((tool) => tool.id))]),
+    );
+    const subscriberId = crypto.randomUUID();
+
+    response.status(200);
+    response.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    response.setHeader('Cache-Control', 'no-cache, no-transform');
+    response.setHeader('Connection', 'keep-alive');
+    response.setHeader('X-Accel-Buffering', 'no');
+    response.flushHeaders();
+    writeRealtimeEvent(response, 'ready', { connectedAt: Date.now() });
+
+    const heartbeat = setInterval(() => {
+      response.write(': keepalive\n\n');
+    }, 20000);
+    realtimeSubscribers.set(subscriberId, { response, allowedToolsByProject, heartbeat });
+
+    request.on('close', () => {
+      const subscriber = realtimeSubscribers.get(subscriberId);
+      if (subscriber?.heartbeat) {
+        clearInterval(subscriber.heartbeat);
+      }
+      realtimeSubscribers.delete(subscriberId);
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '建立实时连接失败';
+    response.status(message.includes('权限') ? 403 : 502).json({ message });
+  }
+}
+
 async function handleWorkItemCreate(request, response, toolId) {
   const toolConfig = getWorkItemToolConfig(toolId);
   try {
@@ -344,7 +758,14 @@ async function handleWorkItemCreate(request, response, toolId) {
     const description = String(submitPayload.fields?.description || '').trim();
     const priority = String(submitPayload.fields?.priority || '').trim();
     const assignees = normalizeMentionedUsers(submitPayload.fields?.assignees || []);
+    const needsAssigneeAssignment = supportsUnassignedWorkItemRouting(toolId)
+      && parseBooleanValue(submitPayload.fields?.needsAssigneeAssignment);
+    const requiresSubmissionAttachment = toolId === 'requirements'
+      && parseBooleanValue(submitPayload.fields?.requiresSubmissionAttachment);
     const expectedDays = normalizeNumberValue(submitPayload.fields?.expectedDays);
+    const contactInfo = toolConfig.toolId === 'feedback'
+      ? normalizeFeedbackContactInfo(submitPayload.fields?.contactInfo, session.user)
+      : null;
     const attachments = submitPayload.files;
 
     if (!title) {
@@ -367,8 +788,22 @@ async function handleWorkItemCreate(request, response, toolId) {
       return;
     }
 
+    const assignmentError = validateWorkItemAssignmentChoice({
+      toolId,
+      assignees,
+      needsAssigneeAssignment,
+    });
+    if (assignmentError) {
+      response.status(400).json({ message: assignmentError });
+      return;
+    }
+
     const token = await getTenantAccessToken();
     const { project, projectAccess } = await getAuthorizedProjectAccess(token, projectId, session.user, toolId);
+    if (needsAssigneeAssignment && projectAccess.developmentSuperAdmins.length === 0) {
+      response.status(400).json({ message: '项目权限表未配置研发超级管理员，暂时无法提交未指定处理人的工作项' });
+      return;
+    }
     await ensureProjectWorkItemBitable(token, project, session.user, toolConfig);
     const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
     const { appToken, tableId } = await getCachedWorkItemTableContext(token, node, toolConfig);
@@ -381,6 +816,7 @@ async function handleWorkItemCreate(request, response, toolId) {
         fieldNames: {},
       }),
     ]);
+    validateWorkItemTableSchema(fields, toolConfig);
 
     const uploadedAttachments = attachments.length > 0
       ? await uploadWorkItemSubmitAttachments(token, appToken, tableId, fields, toolConfig, attachments)
@@ -390,6 +826,10 @@ async function handleWorkItemCreate(request, response, toolId) {
     }
 
     const allowedAssignees = filterMentionedUsersByCandidates(assignees, projectAccess.mentionableUsersByTool[toolId] || []);
+    if (allowedAssignees.length !== assignees.length) {
+      response.status(400).json({ message: '处理人员不在可选范围内' });
+      return;
+    }
     const createdRecord = await createWorkItemRecord(token, {
       appToken,
       tableId,
@@ -402,7 +842,9 @@ async function handleWorkItemCreate(request, response, toolId) {
         description,
         priority,
         assignees: allowedAssignees,
+        requiresSubmissionAttachment,
         expectedDays,
+        contactInfo,
         attachments: uploadedAttachments,
       },
     });
@@ -417,14 +859,26 @@ async function handleWorkItemCreate(request, response, toolId) {
     const createdRecordId = String(createdRecord?.record_id || createdRecord?.recordId || createdRecord?.id || '');
     const item = items.find((candidate) => candidate.recordId === createdRecordId) || normalizeWorkItemRecords([createdRecord], session.user, toolConfig)[0] || null;
     const notificationResults = item
-      ? await notifyWorkItemAssignees(token, allowedAssignees, {
-          project,
-          item,
-          submitter: session.user,
-          request,
-          toolConfig,
-        })
+      ? await notifyWorkItemCreationRecipients(
+          token,
+          needsAssigneeAssignment ? projectAccess.developmentSuperAdmins : allowedAssignees,
+          {
+            project,
+            item,
+            submitter: session.user,
+            request,
+            toolConfig,
+            needsAssigneeAssignment,
+          },
+        )
       : [];
+    if (createdRecordId) {
+      publishWorkItemUpdated({
+        projectId: project.projectId,
+        toolId,
+        recordId: createdRecordId,
+      });
+    }
 
     response.json({
       item,
@@ -438,6 +892,7 @@ async function handleWorkItemCreate(request, response, toolId) {
       mentionableUsers: projectAccess.mentionableUsersByTool[toolId] || [],
       editableFields: normalizeEditableWorkItemFields(fields, toolConfig),
       notificationResults,
+      assignmentEscalated: needsAssigneeAssignment,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : `提交${toolConfig.itemLabel}失败`;
@@ -518,7 +973,9 @@ async function handleWorkItemUpdate(request, response, toolId) {
       updates,
       existingAttachments,
       uploadedAttachmentsByField,
+      toolConfig,
     });
+    normalizeFeedbackContactInfoUpdate(updateFields, toolConfig, source, session.user);
     validateWorkItemUpdateFields(updateFields, toolConfig);
 
     if (Object.keys(updateFields).length === 0) {
@@ -529,6 +986,11 @@ async function handleWorkItemUpdate(request, response, toolId) {
     await updateBitableRecordFields(token, appToken, tableId, recordId, updateFields);
     const updatedRecord = await fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig);
     const normalizedItem = normalizeWorkItemRecords([updatedRecord], session.user, toolConfig)[0] || null;
+    publishWorkItemUpdated({
+      projectId: project.projectId,
+      toolId,
+      recordId,
+    });
     const allowedNotifyUsers = filterMentionedUsersByCandidates(notifyUsers, projectAccess.mentionableUsersByTool[toolId] || []);
     const notificationResults = shouldNotify && allowedNotifyUsers.length > 0
       ? await notifyWorkItemEditRecipients(token, allowedNotifyUsers, {
@@ -611,6 +1073,11 @@ async function handleWorkItemDelete(request, response, toolId) {
     });
     const fields = await fetchCachedBitableFields(token, appToken, tableId);
     const items = normalizeWorkItemRecords(nextRecords, session.user, toolConfig);
+    publishWorkItemUpdated({
+      projectId: project.projectId,
+      toolId,
+      recordId,
+    });
 
     response.json({
       deletedRecordId: recordId,
@@ -702,6 +1169,163 @@ async function handleWorkItemAttachment(request, response, toolId) {
   }
 }
 
+async function handleRequirementSubmissionAttachmentsUpdate(request, response) {
+  const toolConfig = getWorkItemToolConfig('requirements');
+  try {
+    validateProjectBaseConfig();
+    validateProjectPermissionConfig();
+    validateToolPermissionConfig();
+    validateKnowledgeBaseConfig();
+
+    if (!appId || !appSecret) {
+      response.status(500).json({ message: '缺少飞书应用配置' });
+      return;
+    }
+
+    const session = getSession(request);
+    if (!session) {
+      response.status(401).json({ message: '请先登录飞书' });
+      return;
+    }
+
+    const projectId = String(request.params.projectId || '').trim();
+    const recordId = String(request.params.recordId || '').trim();
+    if (!projectId || !recordId) {
+      response.status(400).json({ message: '缺少需求信息' });
+      return;
+    }
+
+    const updatePayload = await readWorkItemUpdatePayload(request);
+    const requestedExistingAttachments = parseJsonArrayValue(updatePayload.fields?.existingAttachments);
+    const notifyProposer = parseBooleanValue(updatePayload.fields?.notifyProposer);
+    const token = await getTenantAccessToken();
+    const { project } = await getAuthorizedProjectAccess(token, projectId, session.user, 'requirements');
+    const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
+    const { appToken, tableId } = await fetchWorkItemTableContext(token, node, toolConfig);
+    await ensureBitableTextField(token, appToken, tableId, toolConfig.fieldNames.comments);
+    const [fields, record] = await Promise.all([
+      fetchCachedBitableFields(token, appToken, tableId),
+      fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig),
+    ]);
+    validateWorkItemTableSchema(fields, toolConfig);
+
+    const fieldNames = toolConfig.fieldNames;
+    const source = record.fields || {};
+    const assignees = normalizeUserListValue(source[fieldNames.assignees]);
+    if (!assignees.some((assignee) => isSameUser(assignee, session.user))) {
+      response.status(403).json({ message: '只有处理人员可以变动提交附件' });
+      return;
+    }
+
+    if (!isRequirementSubmissionAttachmentRequired(source[fieldNames.requiresSubmissionAttachment])) {
+      response.status(400).json({ message: '当前需求不需要提交附件' });
+      return;
+    }
+
+    const commentsDocument = parseCommentsDocument(source[fieldNames.comments], true);
+    const currentAttachments = normalizeBitableAttachmentListValue(source[fieldNames.submittedAttachments]);
+    const requestedTokens = [...new Set(
+      requestedExistingAttachments.map(getSubmissionAttachmentToken).filter(Boolean),
+    )];
+    if (requestedTokens.length !== requestedExistingAttachments.length) {
+      response.status(400).json({ message: '已有附件数据格式不正确' });
+      return;
+    }
+
+    const currentByToken = new Map(
+      currentAttachments.map((attachment) => [getSubmissionAttachmentToken(attachment), attachment]),
+    );
+    const retainedAttachments = requestedTokens.map((fileToken) => currentByToken.get(fileToken)).filter(Boolean);
+    if (retainedAttachments.length !== requestedTokens.length) {
+      response.status(400).json({ message: '已有附件不属于当前需求' });
+      return;
+    }
+
+    const uploadedAttachments = [];
+    for (const file of updatePayload.files) {
+      uploadedAttachments.push(await uploadBitableAttachment(token, appToken, tableId, file));
+    }
+
+    const retainedTokens = new Set(retainedAttachments.map(getSubmissionAttachmentToken));
+    const removedAttachments = currentAttachments.filter(
+      (attachment) => !retainedTokens.has(getSubmissionAttachmentToken(attachment)),
+    );
+    if (uploadedAttachments.length === 0 && removedAttachments.length === 0) {
+      response.status(400).json({ message: '提交附件没有变化' });
+      return;
+    }
+
+    const nextAttachments = [...retainedAttachments, ...uploadedAttachments];
+    const rawChangeText = buildRequirementSubmissionAttachmentChangeText({
+      added: uploadedAttachments,
+      removed: removedAttachments,
+    });
+    const changeText = rawChangeText.length > 1800
+      ? `${rawChangeText.slice(0, 1797)}...`
+      : rawChangeText;
+    const comment = buildRecordComment(session.user, `${changeText}。`, []);
+    const nextCommentsDocument = {
+      version: 1,
+      items: [...commentsDocument.items, comment],
+    };
+
+    await updateBitableRecordFields(token, appToken, tableId, recordId, {
+      [fieldNames.submittedAttachments]: nextAttachments.map(toBitableAttachmentValue).filter(Boolean),
+      [fieldNames.comments]: JSON.stringify(nextCommentsDocument),
+    });
+
+    const updatedRecord = await fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig);
+    const normalizedItem = normalizeWorkItemRecords([updatedRecord], session.user, toolConfig)[0] || null;
+    publishWorkItemUpdated({
+      projectId: project.projectId,
+      toolId: 'requirements',
+      recordId,
+    });
+
+    const proposers = normalizeUserListValue(source[fieldNames.proposer]);
+    const notificationResults = notifyProposer
+      ? await notifyRequirementSubmissionAttachmentChangeRecipients(token, proposers, {
+          project,
+          record: updatedRecord,
+          item: normalizedItem,
+          operator: session.user,
+          addedAttachments: uploadedAttachments,
+          removedAttachments,
+          changeText,
+          request,
+          toolConfig,
+        })
+      : [];
+
+    response.json({
+      item: normalizedItem,
+      requirement: normalizedItem,
+      comment,
+      comments: normalizeCommentsForClient(nextCommentsDocument),
+      attachmentChange: {
+        added: uploadedAttachments,
+        removed: removedAttachments,
+        text: changeText,
+      },
+      notificationResults,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '变动提交附件失败';
+    const status = message.includes('缺少')
+      ? 500
+      : message.includes('权限') || message.includes('只有处理人员')
+        ? 403
+        : message.includes('不存在')
+          ? 404
+          : message.includes('JSON')
+            ? 409
+            : message.includes('不需要') || message.includes('格式') || message.includes('不属于') || message.includes('没有变化')
+              ? 400
+              : 502;
+    response.status(status).json({ message });
+  }
+}
+
 async function handleWorkItemCommentCreate(request, response, toolId) {
   const toolConfig = getWorkItemToolConfig(toolId);
   try {
@@ -760,6 +1384,11 @@ async function handleWorkItemCommentCreate(request, response, toolId) {
 
     await updateBitableRecordFields(token, appToken, tableId, recordId, {
       [commentsFieldName]: JSON.stringify(nextDocument),
+    });
+    publishWorkItemUpdated({
+      projectId: project.projectId,
+      toolId,
+      recordId,
     });
 
     const notificationResults = notifyMentioned
@@ -838,6 +1467,11 @@ async function handleWorkItemCommentDelete(request, response, toolId) {
 
     await updateBitableRecordFields(token, appToken, tableId, recordId, {
       [commentsFieldName]: JSON.stringify(nextDocument),
+    });
+    publishWorkItemUpdated({
+      projectId: project.projectId,
+      toolId,
+      recordId,
     });
 
     response.json({
@@ -934,6 +1568,11 @@ async function handleWorkItemStatusUpdate(request, response, toolId) {
 
     const updatedRecord = await fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig);
     const normalizedItem = normalizeWorkItemRecords([updatedRecord], session.user, toolConfig)[0] || null;
+    publishWorkItemUpdated({
+      projectId: project.projectId,
+      toolId,
+      recordId,
+    });
     const proposers = fieldNames.proposer ? normalizeUserListValue(source[fieldNames.proposer]) : [];
     const notificationResults = notifyProposer
       ? await notifyWorkItemProposers(token, proposers, {
@@ -1025,8 +1664,14 @@ async function handleWorkItemAssigneeChange(request, response, toolId) {
     const source = record.fields || {};
     const currentAssignees = normalizeUserListValue(source[fieldNames.assignees]);
     const isCurrentAssignee = currentAssignees.some((assignee) => isSameUser(assignee, session.user));
-    if (!projectAccess.isSuperAdmin && !isCurrentAssignee) {
-      response.status(403).json({ message: '只有当前处理人员或超级管理员可以变更处理人员' });
+    const canManageAssignees = canManageWorkItemAssignees({
+      toolId,
+      isSuperAdmin: projectAccess.isSuperAdmin,
+      isDevelopmentSuperAdmin: projectAccess.isDevelopmentSuperAdmin,
+      isCurrentAssignee,
+    });
+    if (!canManageAssignees) {
+      response.status(403).json({ message: '只有当前处理人员、研发超级管理员或超级管理员可以变更处理人员' });
       return;
     }
 
@@ -1050,6 +1695,11 @@ async function handleWorkItemAssigneeChange(request, response, toolId) {
 
     const updatedRecord = await fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig);
     const normalizedItem = normalizeWorkItemRecords([updatedRecord], session.user, toolConfig)[0] || null;
+    publishWorkItemUpdated({
+      projectId: project.projectId,
+      toolId,
+      recordId,
+    });
     const proposers = fieldNames.proposer ? normalizeUserListValue(source[fieldNames.proposer]) : [];
     const notificationResults = await notifyWorkItemAssigneeChangeRecipients(token, [...allowedAssignees, ...proposers], {
       project,
@@ -1627,6 +2277,61 @@ async function getAuthorizedProjectAccess(token, projectId, user, requiredToolId
   };
 }
 
+async function getAccessibleProjectsForUser(token, user) {
+  const { projectRecords, permissionRecords, toolPermissionRecords } = await fetchProjectAccessRecords(token);
+  const permissionContext = buildPermissionContext(permissionRecords, toolPermissionRecords, user);
+
+  return normalizeProjects(projectRecords)
+    .filter((project) => permissionContext.projectsById.has(project.projectId))
+    .map((project) => attachProjectAccess(project, permissionContext.projectsById.get(project.projectId)))
+    .sort(compareProjects);
+}
+
+async function getProjectWaitingWorkItemCount(token, project, user, toolConfig) {
+  try {
+    const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
+    const { appToken, tableId } = await getCachedWorkItemTableContext(token, node, toolConfig);
+    const records = await fetchBitableRecords(token, {
+      appToken,
+      tableId,
+      viewId: '',
+      fieldNames: {},
+    });
+    const items = normalizeWorkItemRecords(records, user, toolConfig);
+    return countWaitingAssignedWorkItems(toolConfig.toolId, items, user);
+  } catch (error) {
+    if (isMissingWorkItemListError(error, toolConfig)) {
+      return 0;
+    }
+    throw error;
+  }
+}
+
+function isMissingWorkItemListError(error, toolConfig) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return message.includes(toolConfig.missingNodeText)
+    || message.includes('找不到知识库节点')
+    || message.includes('不是多维表格节点');
+}
+
+async function mapWithConcurrency(items, maxConcurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(Math.max(Number(maxConcurrency) || 1, 1), items.length) },
+    async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(items[index], index);
+      }
+    },
+  );
+
+  await Promise.all(workers);
+  return results;
+}
+
 async function ensureUserHasPlatformAccess(token, user) {
   validateProjectPermissionConfig();
   const permissionRecords = await fetchProjectPermissionRecords(token);
@@ -1778,13 +2483,24 @@ function buildPermissionContext(permissionRecords, toolPermissionRecords, user) 
     }
 
     const isSuperAdmin = departments.includes(SUPER_ADMIN_DEPARTMENT);
-    const allowedToolIds = buildAllowedToolIds(departments, toolMatrix, isSuperAdmin);
+    const developmentSuperAdminField = getDevelopmentSuperAdminFieldName();
+    const isDevelopmentSuperAdmin = departments.includes(developmentSuperAdminField);
+    const allowedToolIds = buildAllowedToolIds(
+      departments,
+      toolMatrix,
+      isSuperAdmin,
+      isDevelopmentSuperAdmin,
+    );
     const allowedTools = PROJECT_TOOL_DEFINITIONS.filter((tool) => allowedToolIds.has(tool.id));
 
     projectsById.set(projectPermission.projectId, {
       projectId: projectPermission.projectId,
       departments,
       isSuperAdmin,
+      isDevelopmentSuperAdmin,
+      developmentSuperAdmins: uniqueUsers(
+        projectPermission.usersByDepartment[developmentSuperAdminField] || [],
+      ).map(toMentionableUser),
       allowedToolIds,
       allowedTools,
       mentionableUsersByTool: buildMentionableUsersByTool(projectPermission, toolMatrix),
@@ -1824,7 +2540,19 @@ function normalizeProjectPermissionRecords(records) {
 
 function getProjectPermissionDepartments() {
   const fields = runtimeConfig.bitable.projectPermission.fieldNames;
-  return [...new Set(fields.permissionUsers.map((fieldName) => String(fieldName || '').trim()).filter(Boolean))];
+  return [...new Set(
+    [
+      ...fields.permissionUsers,
+      fields.developmentSuperAdmins,
+    ].map((fieldName) => String(fieldName || '').trim()).filter(Boolean),
+  )];
+}
+
+function getDevelopmentSuperAdminFieldName() {
+  return String(
+    runtimeConfig.bitable.projectPermission.fieldNames.developmentSuperAdmins
+    || DEFAULT_DEVELOPMENT_SUPER_ADMIN_FIELD,
+  ).trim();
 }
 
 function getUserDepartments(projectPermission, userKeys) {
@@ -1837,13 +2565,15 @@ function isUserInKeySet(user, userKeys) {
   return Array.from(buildUserKeySet(user)).some((key) => userKeys.has(key));
 }
 
-function buildAllowedToolIds(departments, toolMatrix, isSuperAdmin) {
+function buildAllowedToolIds(departments, toolMatrix, isSuperAdmin, isDevelopmentSuperAdmin) {
   const allowedToolIds = new Set(['overview']);
-  if (isSuperAdmin) {
-    for (const tool of PERMISSION_TOOL_DEFINITIONS) {
-      allowedToolIds.add(tool.id);
-    }
-    return allowedToolIds;
+  const roleGrantedToolIds = getRoleGrantedWorkItemToolIds({
+    isSuperAdmin,
+    isDevelopmentSuperAdmin,
+    allToolIds: PERMISSION_TOOL_DEFINITIONS.map((tool) => tool.id),
+  });
+  for (const toolId of roleGrantedToolIds) {
+    allowedToolIds.add(toolId);
   }
 
   for (const department of departments) {
@@ -1893,15 +2623,20 @@ function isAllowedToolValue(value) {
 function buildMentionableUsersByTool(projectPermission, toolMatrix) {
   const result = Object.fromEntries(PERMISSION_TOOL_DEFINITIONS.map((tool) => [tool.id, []]));
   const admins = projectPermission.usersByDepartment[SUPER_ADMIN_DEPARTMENT] || [];
+  const developmentSuperAdminField = getDevelopmentSuperAdminFieldName();
+  const developmentSuperAdmins = projectPermission.usersByDepartment[developmentSuperAdminField] || [];
 
   for (const tool of PERMISSION_TOOL_DEFINITIONS) {
     const users = [];
     for (const admin of admins) {
       users.push(admin);
     }
+    if (supportsUnassignedWorkItemRouting(tool.id)) {
+      users.push(...developmentSuperAdmins);
+    }
 
     for (const [department, departmentUsers] of Object.entries(projectPermission.usersByDepartment)) {
-      if (department === SUPER_ADMIN_DEPARTMENT) {
+      if (department === SUPER_ADMIN_DEPARTMENT || department === developmentSuperAdminField) {
         continue;
       }
 
@@ -1950,6 +2685,7 @@ function attachProjectAccess(project, projectAccess) {
     ...project,
     departments: projectAccess.departments,
     isSuperAdmin: projectAccess.isSuperAdmin,
+    isDevelopmentSuperAdmin: projectAccess.isDevelopmentSuperAdmin,
     allowedTools: projectAccess.allowedTools,
     mentionableUsersByTool: projectAccess.mentionableUsersByTool,
   };
@@ -2281,7 +3017,7 @@ function parseAttachmentEditPartName(value) {
 }
 
 function buildWorkItemUpdateFields(context) {
-  const { selectedFields, updates, existingAttachments, uploadedAttachmentsByField } = context;
+  const { selectedFields, updates, existingAttachments, uploadedAttachmentsByField, toolConfig } = context;
   const result = {};
 
   for (const field of selectedFields) {
@@ -2289,6 +3025,11 @@ function buildWorkItemUpdateFields(context) {
       const existing = Array.isArray(existingAttachments[field.fieldName]) ? existingAttachments[field.fieldName] : [];
       const uploaded = uploadedAttachmentsByField.get(field.fieldName) || [];
       result[field.fieldName] = [...existing, ...uploaded].map(toBitableAttachmentValue).filter(Boolean);
+      continue;
+    }
+
+    if (toolConfig?.toolId === 'feedback' && field.fieldName === toolConfig.fieldNames.contactInfo) {
+      result[field.fieldName] = updates[field.fieldName];
       continue;
     }
 
@@ -2315,6 +3056,103 @@ function validateWorkItemUpdateFields(fields, toolConfig) {
     if (description.length > 5000) {
       throw new Error(`${toolConfig.itemLabel}描述不能超过5000字`);
     }
+  }
+}
+
+function normalizeFeedbackContactInfoUpdate(updateFields, toolConfig, source, user) {
+  if (toolConfig.toolId !== 'feedback') {
+    return;
+  }
+
+  const fieldName = toolConfig.fieldNames.contactInfo;
+  if (!fieldName || !Object.hasOwn(updateFields, fieldName)) {
+    return;
+  }
+
+  const existing = parseFeedbackContactInfo(source?.[fieldName]);
+  updateFields[fieldName] = JSON.stringify(normalizeFeedbackContactInfo(
+    updateFields[fieldName],
+    user,
+    existing.valid
+      ? {
+          isFeishuUser: existing.isFeishuUser,
+          feishuUserId: existing.feishuUserId,
+        }
+      : null,
+  ));
+}
+
+function normalizeFeedbackContactInfo(value, user, identity = null) {
+  const source = parseJsonObjectValue(value);
+  const contactIdentity = identity || {
+    isFeishuUser: true,
+    feishuUserId: getFeedbackContactFeishuUserId(user),
+  };
+  const phone = normalizeTextValue(source.phone).trim();
+  const email = normalizeTextValue(source.email).trim();
+
+  if (phone.length > 50 || (phone && !/^[0-9+()\-\s]+$/.test(phone))) {
+    throw new Error('联系电话格式不正确');
+  }
+
+  if (email.length > 200 || (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
+    throw new Error('联系邮箱格式不正确');
+  }
+
+  return {
+    isFeishuUser: Boolean(contactIdentity.isFeishuUser),
+    feishuUserId: String(contactIdentity.feishuUserId || '').trim(),
+    phone,
+    email,
+    allowDeveloperFollowUp: parseBooleanValue(source.allowDeveloperFollowUp),
+  };
+}
+
+function getFeedbackContactFeishuUserId(user) {
+  const userId = String(user?.openId || user?.unionId || user?.userId || '').trim();
+  if (!userId) {
+    throw new Error('无法识别当前飞书用户');
+  }
+
+  return userId;
+}
+
+function parseFeedbackContactInfo(value) {
+  const text = normalizeTextValue(value).trim();
+  if (!text) {
+    return {
+      valid: false,
+      isFeishuUser: false,
+      feishuUserId: '',
+      phone: '',
+      email: '',
+      allowDeveloperFollowUp: false,
+    };
+  }
+
+  try {
+    const source = JSON.parse(text);
+    if (!source || typeof source !== 'object' || Array.isArray(source)) {
+      throw new Error('invalid contact info');
+    }
+
+    return {
+      valid: true,
+      isFeishuUser: Boolean(source.isFeishuUser),
+      feishuUserId: String(source.feishuUserId || '').trim(),
+      phone: String(source.phone || '').trim(),
+      email: String(source.email || '').trim(),
+      allowDeveloperFollowUp: Boolean(source.allowDeveloperFollowUp),
+    };
+  } catch {
+    return {
+      valid: false,
+      isFeishuUser: false,
+      feishuUserId: '',
+      phone: '',
+      email: '',
+      allowDeveloperFollowUp: false,
+    };
   }
 }
 
@@ -2506,6 +3344,36 @@ function getWorkItemToolConfig(toolId) {
   const normalizedToolId = String(toolId || '').trim();
   const knowledgeBase = runtimeConfig.knowledgeBase;
 
+  if (normalizedToolId === 'feedback') {
+    return {
+      toolId: 'feedback',
+      routeSegment: 'feedback',
+      listLabel: '反馈列表',
+      itemLabel: '反馈',
+      itemNameLabel: '反馈标题',
+      itemsKey: 'feedbacks',
+      legacyItemsKey: 'feedbacks',
+      itemIdKey: 'feedbackId',
+      directDetailType: 'feedback-detail',
+      directCommentType: 'feedback-comment',
+      parentName: knowledgeBase.feedbackParentName,
+      templateName: knowledgeBase.feedbackTemplateName,
+      templateAppToken: knowledgeBase.feedbackTemplateAppToken,
+      idPrefix: knowledgeBase.feedbackIdPrefix,
+      idDigits: knowledgeBase.feedbackIdDigits,
+      fieldNames: knowledgeBase.feedbackFieldNames,
+      missingTemplatePrefix: '找不到反馈模板',
+      missingNodeText: '找不到项目反馈表',
+      notLinkedText: '反馈列表没有关联多维表格',
+      noTableText: '反馈列表没有可读取的数据表',
+      missingRecordText: '反馈记录不存在',
+      unnamedTitle: '未命名反馈',
+      noIdText: '无反馈ID',
+      supportsPriority: false,
+      channelValue: '内部开发平台',
+    };
+  }
+
   if (normalizedToolId === 'bugs') {
     return {
       toolId: 'bugs',
@@ -2531,6 +3399,7 @@ function getWorkItemToolConfig(toolId) {
       missingRecordText: 'Bug记录不存在',
       unnamedTitle: '未命名Bug',
       noIdText: '无BugID',
+      supportsPriority: true,
     };
   }
 
@@ -2558,6 +3427,7 @@ function getWorkItemToolConfig(toolId) {
     missingRecordText: '需求记录不存在',
     unnamedTitle: '未命名需求',
     noIdText: '无需求ID',
+    supportsPriority: true,
   };
 }
 
@@ -2578,18 +3448,27 @@ function normalizeWorkItemRecords(records, currentUser, toolConfig) {
       const remainingDays = expectedDays !== null && expectedDays > 0 && elapsedDays !== null ? expectedDays - elapsedDays : null;
       const assignees = sortCurrentUserFirst(normalizeUserListValue(source[fields.assignees]), currentUser);
       const proposers = normalizeUserListValue(source[fields.proposer]);
-      const itemId = normalizeTextValue(source[fields.itemId || fields.requirementId]);
+      const itemId = normalizeTextValue(source[fields.itemId || fields.requirementId || fields.bugId || fields.feedbackId]);
       const title = normalizeTextValue(source[fields.title]) || toolConfig.unnamedTitle;
       const status = normalizeTextValue(source[fields.status]) || '未设置状态';
+      const contactInfo = toolConfig.toolId === 'feedback'
+        ? parseFeedbackContactInfo(source[fields.contactInfo])
+        : null;
+      const requiresSubmissionAttachment = toolConfig.toolId === 'requirements'
+        && isRequirementSubmissionAttachmentRequired(source[fields.requiresSubmissionAttachment]);
+      const submittedAttachments = toolConfig.toolId === 'requirements'
+        ? normalizeBitableAttachmentListValue(source[fields.submittedAttachments])
+        : [];
 
       return {
         recordId: String(record.record_id || record.recordId || ''),
         itemId,
         [toolConfig.itemIdKey]: itemId,
         requirementId: itemId,
+        feedbackId: toolConfig.toolId === 'feedback' ? itemId : '',
         title,
         description: normalizeTextValue(source[fields.description]),
-        priority: normalizePriorityValue(source[fields.priority]),
+        priority: toolConfig.supportsPriority === false ? '' : normalizePriorityValue(source[fields.priority]),
         itemStatus: status,
         requirementStatus: status,
         assignees,
@@ -2597,6 +3476,16 @@ function normalizeWorkItemRecords(records, currentUser, toolConfig) {
         proposedAt,
         expectedDays,
         remainingDays: remainingDays === null ? null : Number(remainingDays.toFixed(1)),
+        channel: toolConfig.toolId === 'feedback' ? normalizeTextValue(source[fields.channel]) : '',
+        contactInfo,
+        requiresSubmissionAttachment,
+        submittedAttachments,
+        requiresSubmissionAttachmentFieldName: toolConfig.toolId === 'requirements'
+          ? fields.requiresSubmissionAttachment
+          : '',
+        submittedAttachmentsFieldName: toolConfig.toolId === 'requirements'
+          ? fields.submittedAttachments
+          : '',
         comments: normalizeCommentsForClient(parseCommentsDocument(source[fields.comments], false)),
         commentsParseError: getCommentsParseError(source[fields.comments]),
         statusChangeLog: normalizeStatusChangeLogForClient(parseStatusChangeLogDocument(source[fields.statusChangeLog], false)),
@@ -2604,7 +3493,7 @@ function normalizeWorkItemRecords(records, currentUser, toolConfig) {
         rawFields: source,
       };
     })
-    .sort(compareWorkItems);
+    .sort((left, right) => compareWorkItems(left, right, toolConfig));
 }
 
 async function createWorkItemRecord(token, context) {
@@ -2612,7 +3501,7 @@ async function createWorkItemRecord(token, context) {
   const fieldNames = toolConfig.fieldNames;
   const normalizedFields = normalizeBitableFields(fields);
   const values = {};
-  const itemIdFieldName = fieldNames.itemId || fieldNames.requirementId || fieldNames.bugId;
+  const itemIdFieldName = fieldNames.itemId || fieldNames.requirementId || fieldNames.bugId || fieldNames.feedbackId;
   const itemIdField = findNormalizedField(normalizedFields, itemIdFieldName);
 
   if (itemIdFieldName && !isAutoNumberField(itemIdField)) {
@@ -2623,8 +3512,11 @@ async function createWorkItemRecord(token, context) {
   if (fieldNames.description) {
     values[fieldNames.description] = payload.description || '';
   }
-  if (fieldNames.priority && payload.priority) {
+  if (toolConfig.supportsPriority !== false && fieldNames.priority && payload.priority) {
     values[fieldNames.priority] = payload.priority;
+  }
+  if (toolConfig.toolId === 'feedback' && fieldNames.channel) {
+    values[fieldNames.channel] = toolConfig.channelValue;
   }
   if (fieldNames.status) {
     const defaultStatus = getDefaultWorkItemStatus(fields, toolConfig);
@@ -2636,13 +3528,19 @@ async function createWorkItemRecord(token, context) {
     values[fieldNames.proposer] = [toBitableUserValue(user)];
   }
   if (fieldNames.assignees) {
-    values[fieldNames.assignees] = payload.assignees.map(toBitableUserValue).filter(Boolean);
+    values[fieldNames.assignees] = (payload.assignees || []).map(toBitableUserValue).filter(Boolean);
   }
   if (fieldNames.proposedAt) {
     values[fieldNames.proposedAt] = Date.now();
   }
   if (fieldNames.expectedDays && payload.expectedDays !== null && payload.expectedDays !== undefined) {
     values[fieldNames.expectedDays] = payload.expectedDays;
+  }
+  if (toolConfig.toolId === 'requirements' && fieldNames.requiresSubmissionAttachment) {
+    values[fieldNames.requiresSubmissionAttachment] = payload.requiresSubmissionAttachment ? '是' : '否';
+  }
+  if (toolConfig.toolId === 'feedback' && fieldNames.contactInfo && payload.contactInfo) {
+    values[fieldNames.contactInfo] = JSON.stringify(payload.contactInfo);
   }
   if (fieldNames.attachments && Array.isArray(payload.attachments) && payload.attachments.length > 0) {
     values[fieldNames.attachments] = payload.attachments.map(toBitableAttachmentValue).filter(Boolean);
@@ -2677,8 +3575,87 @@ function removeNonWritableCreateFields(values, fields) {
   return result;
 }
 
+function validateWorkItemTableSchema(fields, toolConfig) {
+  const fieldByName = new Map(normalizeBitableFields(fields).map((field) => [field.fieldName, field]));
+  const names = toolConfig.fieldNames;
+
+  if (toolConfig.toolId === 'requirements') {
+    const requiredField = fieldByName.get(names.requiresSubmissionAttachment);
+    if (!requiredField) {
+      throw new Error(`需求模板缺少“${names.requiresSubmissionAttachment}”字段`);
+    }
+    if (!isBitableSingleSelectField(requiredField)) {
+      throw new Error(`需求模板字段“${names.requiresSubmissionAttachment}”必须是单选类型`);
+    }
+
+    const requiredOptions = getFieldOptionNames(requiredField);
+    for (const option of ['是', '否']) {
+      if (!requiredOptions.includes(option)) {
+        throw new Error(`需求模板“${names.requiresSubmissionAttachment}”缺少“${option}”选项`);
+      }
+    }
+
+    const submittedAttachmentsField = fieldByName.get(names.submittedAttachments);
+    if (!submittedAttachmentsField) {
+      throw new Error(`需求模板缺少“${names.submittedAttachments}”字段`);
+    }
+    if (!isBitableAttachmentField(submittedAttachmentsField)) {
+      throw new Error(`需求模板字段“${names.submittedAttachments}”必须是附件类型`);
+    }
+    return;
+  }
+
+  if (toolConfig.toolId !== 'feedback') {
+    return;
+  }
+
+  const requirements = [
+    [names.itemId, '文本', (field) => getServerFieldTypeNumber(field) === 1],
+    [names.title, '文本', (field) => getServerFieldTypeNumber(field) === 1],
+    [names.description, '文本', (field) => getServerFieldTypeNumber(field) === 1],
+    [names.channel, '单选', isBitableSingleSelectField],
+    [names.proposer, '人员', isBitableUserField],
+    [names.assignees, '人员', isBitableUserField],
+    [names.status, '单选', isBitableSingleSelectField],
+    [names.proposedAt, '日期', isBitableDateField],
+    [names.expectedDays, '数字', isBitableNumberField],
+    [names.contactInfo, '文本', (field) => getServerFieldTypeNumber(field) === 1],
+    [names.attachments, '附件', isBitableAttachmentField],
+    [names.comments, '文本', (field) => getServerFieldTypeNumber(field) === 1],
+    [names.statusChangeLog, '文本', (field) => getServerFieldTypeNumber(field) === 1],
+  ];
+
+  for (const [fieldName, expectedType, matchesType] of requirements) {
+    const field = fieldByName.get(fieldName);
+    if (!field) {
+      throw new Error(`反馈模板缺少“${fieldName}”字段`);
+    }
+    if (!matchesType(field)) {
+      throw new Error(`反馈模板字段“${fieldName}”必须是${expectedType}类型`);
+    }
+  }
+
+  const statusOptions = getFieldOptionNames(fieldByName.get(names.status));
+  for (const status of ['待处理', '处理中', '已完成', '已搁置', '已拒绝']) {
+    if (!statusOptions.includes(status)) {
+      throw new Error(`反馈模板“${names.status}”缺少“${status}”选项`);
+    }
+  }
+
+  const channelOptions = getFieldOptionNames(fieldByName.get(names.channel));
+  if (!channelOptions.includes(toolConfig.channelValue)) {
+    throw new Error(`反馈模板“${names.channel}”缺少“${toolConfig.channelValue}”选项`);
+  }
+}
+
+function getFieldOptionNames(field) {
+  return (field?.property?.options || field?.property?.option || [])
+    .map((option) => normalizeTextValue(option.name || option.text || option.value))
+    .filter(Boolean);
+}
+
 function buildNextWorkItemId(records, fieldNames, toolConfig) {
-  const fieldName = fieldNames.itemId || fieldNames.requirementId || fieldNames.bugId;
+  const fieldName = fieldNames.itemId || fieldNames.requirementId || fieldNames.bugId || fieldNames.feedbackId;
   const prefix = toolConfig.idPrefix || '';
   const digits = toolConfig.idDigits || 4;
   let maxNumber = 0;
@@ -2742,6 +3719,30 @@ function toBitableAttachmentValue(file) {
     size: Number(file?.size || 0) || undefined,
     type: String(file?.mimeType || file?.mime_type || '').trim(),
   };
+}
+
+function normalizeBitableAttachmentListValue(value) {
+  const values = Array.isArray(value)
+    ? value
+    : value && typeof value === 'object' && Array.isArray(value.value)
+      ? value.value
+      : [];
+
+  return values
+    .map((file) => {
+      const fileToken = getSubmissionAttachmentToken(file);
+      if (!fileToken) {
+        return null;
+      }
+
+      return {
+        fileToken,
+        name: String(file?.name || file?.fileName || file?.file_name || fileToken).trim(),
+        size: Number(file?.size || file?.file_size || file?.fileSize || 0) || 0,
+        mimeType: String(file?.type || file?.mimeType || file?.mime_type || '').trim(),
+      };
+    })
+    .filter(Boolean);
 }
 
 function parseCommentsDocument(value, throwOnInvalid) {
@@ -2965,13 +3966,16 @@ function compareRequirements(a, b) {
   return compareWorkItems(a, b);
 }
 
-function compareWorkItems(a, b) {
-  const priorityDiff = REQUIREMENT_PRIORITIES.indexOf(a.priority) - REQUIREMENT_PRIORITIES.indexOf(b.priority);
-  if (priorityDiff !== 0) {
-    return priorityDiff;
+function compareWorkItems(a, b, toolConfig = getWorkItemToolConfig('requirements')) {
+  if (toolConfig.supportsPriority !== false) {
+    const priorityDiff = REQUIREMENT_PRIORITIES.indexOf(a.priority) - REQUIREMENT_PRIORITIES.indexOf(b.priority);
+    if (priorityDiff !== 0) {
+      return priorityDiff;
+    }
   }
 
-  const statusDiff = getRequirementStatusOrder(a.itemStatus || a.requirementStatus) - getRequirementStatusOrder(b.itemStatus || b.requirementStatus);
+  const statusDiff = getWorkItemStatusOrder(toolConfig.toolId, a.itemStatus || a.requirementStatus)
+    - getWorkItemStatusOrder(toolConfig.toolId, b.itemStatus || b.requirementStatus);
   if (statusDiff !== 0) {
     return statusDiff;
   }
@@ -2993,8 +3997,10 @@ function compareWorkItems(a, b) {
   });
 }
 
-function getRequirementStatusOrder(status) {
-  const order = ['待处理', '处理中', '已处理', '已完成', '关闭', '未设置状态'];
+function getWorkItemStatusOrder(toolId, status) {
+  const order = toolId === 'bugs'
+    ? ['未处理', '修复中', '已修复', '无法复现', '已搁置', '关闭', '未设置状态']
+    : ['待处理', '处理中', '已完成', '已搁置', '已拒绝', '已处理', '关闭', '未设置状态'];
   const index = order.indexOf(String(status || '').trim());
   return index === -1 ? order.length : index;
 }
@@ -3083,7 +4089,7 @@ function getAllowedProjectIds(records, user) {
       continue;
     }
 
-    if (fields.permissionUsers.some((fieldName) => userListContainsCurrentUser(source[fieldName], userKeys))) {
+    if (getProjectPermissionDepartments().some((fieldName) => userListContainsCurrentUser(source[fieldName], userKeys))) {
       allowedProjectIds.add(projectId);
     }
   }
@@ -3432,6 +4438,7 @@ async function fetchWorkItemItems(token, node, currentUser, toolConfig) {
   const { appToken, tableId } = await getCachedWorkItemTableContext(token, node, toolConfig);
 
   const fields = await ensureCachedBitableTextField(token, appToken, tableId, toolConfig.fieldNames.comments);
+  validateWorkItemTableSchema(fields, toolConfig);
   setCachedWorkItemTableContext(toolConfig, node, { appToken, tableId });
   const records = await fetchBitableRecords(token, {
     appToken,
@@ -3744,13 +4751,16 @@ async function notifyMentionedUsers(token, mentionedUsers, context) {
   return results;
 }
 
-async function notifyWorkItemAssignees(token, assignees, context) {
-  const uniqueUsers = normalizeMentionedUsers(assignees);
+async function notifyWorkItemCreationRecipients(token, recipients, context) {
+  const uniqueUsers = normalizeMentionedUsers(recipients);
   const results = [];
 
   for (const user of uniqueUsers) {
     try {
-      await sendFeishuInteractiveMessage(token, user.openId, buildWorkItemCreatedNotificationCard(user, context));
+      const card = context.needsAssigneeAssignment
+        ? buildWorkItemNeedsAssignmentNotificationCard(user, context)
+        : buildWorkItemCreatedNotificationCard(user, context);
+      await sendFeishuInteractiveMessage(token, user.openId, card);
       results.push({ openId: user.openId, name: user.name, ok: true, message: '' });
     } catch (error) {
       results.push({
@@ -3793,6 +4803,31 @@ async function notifyWorkItemAssigneeChangeRecipients(token, recipients, context
   for (const user of uniqueUsers) {
     try {
       await sendFeishuInteractiveMessage(token, user.openId, buildAssigneeChangeNotificationCard(user, context));
+      results.push({ openId: user.openId, name: user.name, ok: true, message: '' });
+    } catch (error) {
+      results.push({
+        openId: user.openId,
+        name: user.name,
+        ok: false,
+        message: error instanceof Error ? error.message : '通知失败',
+      });
+    }
+  }
+
+  return results;
+}
+
+async function notifyRequirementSubmissionAttachmentChangeRecipients(token, recipients, context) {
+  const uniqueUsers = normalizeMentionedUsers(recipients);
+  const results = [];
+
+  for (const user of uniqueUsers) {
+    try {
+      await sendFeishuInteractiveMessage(
+        token,
+        user.openId,
+        buildRequirementSubmissionAttachmentChangeCard(user, context),
+      );
       results.push({ openId: user.openId, name: user.name, ok: true, message: '' });
     } catch (error) {
       results.push({
@@ -3944,6 +4979,49 @@ function buildWorkItemCreatedNotificationCard(_user, context) {
   };
 }
 
+function buildWorkItemNeedsAssignmentNotificationCard(_user, context) {
+  const toolConfig = context.toolConfig || getWorkItemToolConfig('requirements');
+  const projectName = context.project?.projectName || '未命名项目';
+  const item = context.item || {};
+  const itemTitle = item.title || toolConfig.unnamedTitle;
+  const itemId = item.itemId || item[toolConfig.itemIdKey] || '';
+  const submitter = context.submitter || {};
+  const submitterName = submitter.name || submitter.openId || '未知用户';
+  const expectedDays = Number(item.expectedDays);
+  const link = buildPlatformExternalLink(toolConfig.directDetailType, {
+    projectId: context.project?.projectId || '',
+    tool: toolConfig.toolId,
+    recordId: item.recordId || '',
+  }, context.request);
+
+  return {
+    config: {
+      wide_screen_mode: true,
+    },
+    header: {
+      template: 'orange',
+      title: {
+        tag: 'plain_text',
+        content: `${submitterName}提交的${toolConfig.itemLabel}未指定处理人，需要手动分配`,
+      },
+    },
+    elements: [
+      buildCardLargeTextElement(`${toolConfig.itemLabel}描述`, item.description || '无'),
+      buildCardTextElement('项目名称', `${projectName} (${context.project?.projectId || '无ID'})`),
+      buildCardTextElement(toolConfig.itemNameLabel, itemId ? `${itemTitle} (${itemId})` : itemTitle),
+      buildCardPersonElement('提交人', submitter),
+      buildCardTextElement('优先级', item.priority || '未设置'),
+      buildCardTextElement('期望时限', Number.isFinite(expectedDays) && expectedDays > 0 ? `${expectedDays.toFixed(1)} 天` : '未设置'),
+      {
+        tag: 'action',
+        actions: [
+          buildCardLinkButton(`跳转至${toolConfig.itemLabel}`, link),
+        ],
+      },
+    ],
+  };
+}
+
 function buildWorkItemEditNotificationCard(_user, context) {
   const toolConfig = context.toolConfig || getWorkItemToolConfig('requirements');
   const projectName = context.project?.projectName || '未命名项目';
@@ -4020,6 +5098,47 @@ function buildAssigneeChangeNotificationCard(_user, context) {
         tag: 'action',
         actions: [
           buildCardLinkButton(`跳转至${toolConfig.itemLabel}`, link),
+        ],
+      },
+    ],
+  };
+}
+
+function buildRequirementSubmissionAttachmentChangeCard(_user, context) {
+  const toolConfig = context.toolConfig || getWorkItemToolConfig('requirements');
+  const projectName = context.project?.projectName || '未命名项目';
+  const item = context.item || {};
+  const itemTitle = item.title
+    || normalizeTextValue(context.record?.fields?.[toolConfig.fieldNames.title])
+    || toolConfig.unnamedTitle;
+  const operator = context.operator || {};
+  const operatorName = operator.name || operator.openId || '未知用户';
+  const link = buildPlatformExternalLink(toolConfig.directDetailType, {
+    projectId: context.project?.projectId || '',
+    tool: toolConfig.toolId,
+    recordId: item.recordId || context.record?.record_id || context.record?.recordId || '',
+  }, context.request);
+
+  return {
+    config: {
+      wide_screen_mode: true,
+    },
+    header: {
+      template: 'turquoise',
+      title: {
+        tag: 'plain_text',
+        content: `${operatorName}变动了需求“${itemTitle}”的提交附件`,
+      },
+    },
+    elements: [
+      buildCardLargeTextElement('附件变动', context.changeText || '无'),
+      buildCardTextElement('项目名称', `${projectName} (${context.project?.projectId || '无ID'})`),
+      buildCardTextElement(toolConfig.itemNameLabel, itemTitle),
+      buildCardPersonElement('操作人', operator),
+      {
+        tag: 'action',
+        actions: [
+          buildCardLinkButton('跳转至需求', link),
         ],
       },
     ],
@@ -4228,9 +5347,13 @@ function isEditableWorkItemField(field, toolConfig) {
     names.itemId,
     names.requirementId,
     names.bugId,
+    names.feedbackId,
     names.proposer,
     names.proposedAt,
+    names.channel,
     names.status,
+    names.requiresSubmissionAttachment,
+    names.submittedAttachments,
     names.comments,
     names.statusChangeLog,
   ].map((item) => String(item || '').trim()).filter(Boolean));
@@ -4773,6 +5896,41 @@ function buildClearSessionCookie() {
   ].join('; ');
 }
 
+function publishWorkItemUpdated(event) {
+  const payload = {
+    projectId: String(event?.projectId || '').trim(),
+    toolId: String(event?.toolId || '').trim(),
+    recordId: String(event?.recordId || '').trim(),
+    occurredAt: Date.now(),
+  };
+
+  if (!payload.projectId || !payload.toolId || !payload.recordId) {
+    return;
+  }
+
+  invalidateProjectOverviewCache(payload.projectId);
+
+  for (const [subscriberId, subscriber] of realtimeSubscribers.entries()) {
+    const allowedToolIds = subscriber.allowedToolsByProject.get(payload.projectId);
+    if (!allowedToolIds?.has(payload.toolId)) {
+      continue;
+    }
+
+    try {
+      writeRealtimeEvent(subscriber.response, 'work-item-updated', payload);
+    } catch {
+      if (subscriber.heartbeat) {
+        clearInterval(subscriber.heartbeat);
+      }
+      realtimeSubscribers.delete(subscriberId);
+    }
+  }
+}
+
+function writeRealtimeEvent(response, eventName, payload) {
+  response.write(`event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`);
+}
+
 function isPeopleSearchReauthorizationRequired(message) {
   return message.includes('登录授权已失效');
 }
@@ -4810,6 +5968,45 @@ function loadRuntimeConfig() {
   return normalizeConfig(parsedConfig);
 }
 
+function readCurrentAppVersion() {
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
+    return String(packageJson.version || '0.0.0').trim() || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+async function fetchUpdateManifest(manifestUrl) {
+  const parsedUrl = new URL(manifestUrl);
+  if (parsedUrl.protocol !== 'https:') {
+    throw new Error('更新日志地址必须使用 HTTPS');
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 6000);
+
+  try {
+    const response = await fetch(parsedUrl, {
+      headers: {
+        Accept: 'application/json',
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`更新日志服务响应异常（${response.status}）`);
+    }
+    return await response.json();
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error('获取更新日志超时');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function findConfigPath() {
   const configPaths = isProduction
     ? [path.join(rootDir, 'config.json'), path.join(rootDir, 'Publish/config.json'), path.join(rootDir, 'config/config.json')]
@@ -4826,8 +6023,10 @@ function findConfigPath() {
 
 function normalizeConfig(config) {
   const parsedPort = Number(config?.server?.port ?? 3000);
+  const dashboardConfig = config?.dashboard || {};
   const requirementsFieldNames = config?.knowledgeBase?.requirementsFieldNames || {};
   const bugsFieldNames = config?.knowledgeBase?.bugsFieldNames || {};
+  const feedbackFieldNames = config?.knowledgeBase?.feedbackFieldNames || {};
   const projectBaseFieldNames = config?.bitable?.projectBase?.fieldNames || {};
   const projectPermissionFieldNames = config?.bitable?.projectPermission?.fieldNames || {};
   const toolPermissionFieldNames = config?.bitable?.toolPermission?.fieldNames || {};
@@ -4846,6 +6045,10 @@ function normalizeConfig(config) {
       publicBaseUrl: String(config?.webApp?.publicBaseUrl || `http://127.0.0.1:${Number.isFinite(parsedPort) ? parsedPort : 3000}/`),
       openMode: String(config?.webApp?.openMode || 'appCenter'),
     },
+    updates: {
+      manifestUrl: String(config?.updates?.manifestUrl || '').trim(),
+    },
+    dashboard: normalizeProjectOverviewConfig(dashboardConfig),
     knowledgeBase: {
       spaceId: String(config?.knowledgeBase?.spaceId || ''),
       requirementsParentName: String(config?.knowledgeBase?.requirementsParentName || '需求列表'),
@@ -4865,6 +6068,8 @@ function normalizeConfig(config) {
         proposedAt: String(requirementsFieldNames.proposedAt || '提出时间'),
         expectedDays: String(requirementsFieldNames.expectedDays || '期望时限'),
         attachments: String(requirementsFieldNames.attachments || '附件'),
+        requiresSubmissionAttachment: String(requirementsFieldNames.requiresSubmissionAttachment || '需要提交附件'),
+        submittedAttachments: String(requirementsFieldNames.submittedAttachments || '提交附件'),
         comments: String(requirementsFieldNames.comments || '留言'),
         statusChangeLog: String(requirementsFieldNames.statusChangeLog || '处理状态变动记录'),
       },
@@ -4888,6 +6093,27 @@ function normalizeConfig(config) {
         comments: String(bugsFieldNames.comments || requirementsFieldNames.comments || '留言'),
         statusChangeLog: String(bugsFieldNames.statusChangeLog || requirementsFieldNames.statusChangeLog || '处理状态变动记录'),
       },
+      feedbackParentName: String(config?.knowledgeBase?.feedbackParentName || '反馈列表'),
+      feedbackTemplateName: String(config?.knowledgeBase?.feedbackTemplateName || '模板'),
+      feedbackTemplateAppToken: String(config?.knowledgeBase?.feedbackTemplateAppToken || ''),
+      feedbackIdPrefix: String(config?.knowledgeBase?.feedbackIdPrefix || 'F-'),
+      feedbackIdDigits: normalizePositiveInteger(config?.knowledgeBase?.feedbackIdDigits, 4),
+      feedbackFieldNames: {
+        feedbackId: String(feedbackFieldNames.feedbackId || feedbackFieldNames.itemId || '反馈ID'),
+        itemId: String(feedbackFieldNames.itemId || feedbackFieldNames.feedbackId || '反馈ID'),
+        title: String(feedbackFieldNames.title || '标题'),
+        description: String(feedbackFieldNames.description || '详细描述'),
+        channel: String(feedbackFieldNames.channel || '渠道'),
+        proposer: String(feedbackFieldNames.proposer || requirementsFieldNames.proposer || '提出人员'),
+        assignees: String(feedbackFieldNames.assignees || requirementsFieldNames.assignees || '处理人员'),
+        status: String(feedbackFieldNames.status || requirementsFieldNames.status || '处理状态'),
+        proposedAt: String(feedbackFieldNames.proposedAt || '反馈时间'),
+        expectedDays: String(feedbackFieldNames.expectedDays || requirementsFieldNames.expectedDays || '期望时限'),
+        contactInfo: String(feedbackFieldNames.contactInfo || '联系信息数据'),
+        attachments: String(feedbackFieldNames.attachments || requirementsFieldNames.attachments || '附件'),
+        comments: String(feedbackFieldNames.comments || requirementsFieldNames.comments || '留言'),
+        statusChangeLog: String(feedbackFieldNames.statusChangeLog || requirementsFieldNames.statusChangeLog || '处理状态变动记录'),
+      },
     },
     debug: {
       userName: String(config?.debug?.userName || '测试用户'),
@@ -4910,9 +6136,12 @@ function normalizeConfig(config) {
         viewId: String(config?.bitable?.projectPermission?.viewId || ''),
         fieldNames: {
           projectId: String(projectPermissionFieldNames.projectId || '项目ID'),
+          developmentSuperAdmins: String(
+            projectPermissionFieldNames.developmentSuperAdmins || DEFAULT_DEVELOPMENT_SUPER_ADMIN_FIELD,
+          ),
           permissionUsers: Array.isArray(projectPermissionFieldNames.permissionUsers)
             ? projectPermissionFieldNames.permissionUsers.map((item) => String(item)).filter(Boolean)
-            : ['超级管理员', '研发', '测试', '发行', '商务'],
+            : ['超级管理员', DEFAULT_DEVELOPMENT_SUPER_ADMIN_FIELD, '研发', '测试', '发行', '商务'],
         },
       },
       toolPermission: {
@@ -4926,6 +6155,7 @@ function normalizeConfig(config) {
             bugs: String(toolPermissionToolFields.bugs || 'Bug列表'),
             builds: String(toolPermissionToolFields.builds || '打包列表'),
             review: String(toolPermissionToolFields.review || '内容审查'),
+            feedback: String(toolPermissionToolFields.feedback || '反馈列表'),
           },
         },
       },

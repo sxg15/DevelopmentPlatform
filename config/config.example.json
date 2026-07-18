@@ -11,6 +11,34 @@
     "publicBaseUrl": "http://127.0.0.1:3000/",
     "openMode": "appCenter"
   },
+  "updates": {
+    "manifestUrl": ""
+  },
+  "dashboard": {
+    "cacheTtlMs": 45000,
+    "staleDays": 7,
+    "dueSoonDays": 1,
+    "statusGroups": {
+      "requirements": {
+        "waiting": ["待处理"],
+        "processing": ["处理中"],
+        "completed": ["已完成", "已处理", "关闭"],
+        "blocked": ["已搁置", "已拒绝"]
+      },
+      "bugs": {
+        "waiting": ["未处理"],
+        "processing": ["修复中"],
+        "completed": ["已修复", "关闭"],
+        "blocked": ["无法复现", "已搁置"]
+      },
+      "feedback": {
+        "waiting": ["待处理"],
+        "processing": ["处理中"],
+        "completed": ["已完成", "关闭"],
+        "blocked": ["已搁置", "已拒绝"]
+      }
+    }
+  },
   "knowledgeBase": {
     "spaceId": "",
     "requirementsParentName": "需求列表",
@@ -30,6 +58,8 @@
       "proposedAt": "提出时间",
       "expectedDays": "期望时限",
       "attachments": "附件",
+      "requiresSubmissionAttachment": "需要提交附件",
+      "submittedAttachments": "提交附件",
       "comments": "留言",
       "statusChangeLog": "处理状态变动记录"
     },
@@ -49,6 +79,27 @@
       "status": "处理状态",
       "proposedAt": "发现时间",
       "expectedDays": "期望时限",
+      "attachments": "附件",
+      "comments": "留言",
+      "statusChangeLog": "处理状态变动记录"
+    },
+    "feedbackParentName": "反馈列表",
+    "feedbackTemplateName": "模板",
+    "feedbackTemplateAppToken": "",
+    "feedbackIdPrefix": "F-",
+    "feedbackIdDigits": 4,
+    "feedbackFieldNames": {
+      "feedbackId": "反馈ID",
+      "itemId": "反馈ID",
+      "title": "标题",
+      "description": "详细描述",
+      "channel": "渠道",
+      "proposer": "提出人员",
+      "assignees": "处理人员",
+      "status": "处理状态",
+      "proposedAt": "反馈时间",
+      "expectedDays": "期望时限",
+      "contactInfo": "联系信息数据",
       "attachments": "附件",
       "comments": "留言",
       "statusChangeLog": "处理状态变动记录"
@@ -75,8 +126,10 @@
       "viewId": "",
       "fieldNames": {
         "projectId": "项目ID",
+        "developmentSuperAdmins": "研发超级管理员",
         "permissionUsers": [
           "超级管理员",
+          "研发超级管理员",
           "研发",
           "测试",
           "发行",
@@ -94,7 +147,8 @@
           "requirements": "需求列表",
           "bugs": "Bug列表",
           "builds": "打包列表",
-          "review": "内容审查"
+          "review": "内容审查",
+          "feedback": "反馈列表"
         }
       }
     },

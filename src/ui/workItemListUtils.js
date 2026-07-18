@@ -1,11 +1,13 @@
 const DEFAULT_EXPANDED_STATUSES = {
   requirements: new Set(['待处理', '处理中']),
   bugs: new Set(['未处理', '修复中']),
+  feedback: new Set(['待处理', '处理中']),
 };
 
 const STATUS_ORDERS = {
   requirements: ['待处理', '处理中', '已完成', '已搁置', '已拒绝', '已处理', '关闭', '未设置状态'],
   bugs: ['未处理', '修复中', '已修复', '无法复现', '已搁置', '关闭', '未设置状态'],
+  feedback: ['待处理', '处理中', '已完成', '已搁置', '已拒绝', '未设置状态'],
 };
 
 export const DEADLINE_FILTER_OPTIONS = [
@@ -165,7 +167,17 @@ export function hasActiveWorkItemFilters(filters) {
   };
   return Boolean(
     String(normalizedFilters.query || '').trim()
-    || (normalizedFilters.statuses || []).length
+    || hasActiveAdvancedWorkItemFilters(normalizedFilters),
+  );
+}
+
+export function hasActiveAdvancedWorkItemFilters(filters) {
+  const normalizedFilters = {
+    ...createEmptyWorkItemFilters(),
+    ...filters,
+  };
+  return Boolean(
+    (normalizedFilters.statuses || []).length
     || (normalizedFilters.priorities || []).length
     || (normalizedFilters.assigneeKeys || []).length
     || (normalizedFilters.proposerKeys || []).length
@@ -178,10 +190,12 @@ export function hasActiveWorkItemFilters(filters) {
 function buildSearchText(item) {
   return [
     item?.itemId,
+    item?.feedbackId,
     item?.bugId,
     item?.requirementId,
     item?.title,
     item?.description,
+    item?.channel,
   ]
     .map((value) => String(value || '').toLocaleLowerCase('zh-CN'))
     .join('\n');

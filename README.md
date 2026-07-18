@@ -10,17 +10,40 @@
 4. 在 `bitable.projectBase` 中填入“项目基础信息”多维表格的 `appToken`、`tableId`，需要固定视图时再填 `viewId`。
 5. 在 `bitable.projectPermission` 中填入“项目权限”多维表格配置；只有当前飞书用户出现在任意权限用户列里的项目才会显示。
 6. `bitable.projectBase.fieldNames` 默认读取 `项目ID`、`项目名称`、`项目图标` 三列，表格列名不同才需要修改。
-7. `bitable.projectPermission.fieldNames.permissionUsers` 默认读取 `超级管理员`、`研发`、`测试`、`发行`、`商务` 五列，权限列名不同才需要修改。
-8. 在 `bitable.toolPermission` 中填入“工具权限”多维表格配置；`tableId` 可留空，系统会默认读取第一张数据表。
-9. `bitable.toolPermission.fieldNames.department` 默认读取 `部门`；工具列默认读取 `需求列表`、`Bug列表`、`打包列表`、`内容审查`，值为 `允许` 才显示该工具。
-10. 在 `knowledgeBase.spaceId` 中填入知识库空间 ID；`requirementsParentName` 默认是 `需求列表`，`bugsParentName` 默认是 `Bug列表`，模板名默认都是 `模板`。
-11. `knowledgeBase.requirementsFieldNames` 用于配置需求表字段名；默认读取 `需求ID`、`需求标题`、`需求描述`、`优先级`、`处理人员`、`处理状态`、`提出时间`、`期望时限`、`留言`。
-12. `knowledgeBase.bugsFieldNames` 用于配置 Bug 表字段名；默认读取 `BugID`、`标题`、`详细描述`、`优先级`、`处理人员`、`处理状态`、`发现时间`、`期望时限`、`留言`。
-13. `requirementsIdPrefix` 和 `bugsIdPrefix` 用于配置提交时自动生成的编号前缀，默认分别是 `R-` 和 `B-`；编号位数默认是 4。
-14. 点击项目内的“需求列表”或“Bug列表”时，系统会在知识库中找到或创建对应节点，并按项目ID准备同名多维表格；不存在时会复制节点下的“模板”多维表格。
-15. `knowledgeBase.bugsTemplateAppToken` 默认填入当前 Bug 模板多维表格 token：`ZuHmbPMjzaDFCUsge7PcjkAsn4e`。
-16. 留言提及人员和提交时处理人员不再搜索通讯录，候选人来自当前项目中有权使用当前工具的人员。
-17. 在飞书开发者后台把网页应用主页地址配置为本机可访问地址，例如 `http://192.168.1.23:3000/`。
+7. `bitable.projectPermission.fieldNames.permissionUsers` 默认读取 `超级管理员`、`研发超级管理员`、`研发`、`测试`、`发行`、`商务` 六列，权限列名不同才需要修改。
+8. “项目权限”表必须新增人员列 `研发超级管理员`，并在每个项目行配置负责分配需求/Bug的人员；对应配置项是 `bitable.projectPermission.fieldNames.developmentSuperAdmins`。该角色可访问需求和 Bug、变更处理人，并会收到未指定处理人的分配卡片，但不继承删除或编辑内容等超级管理员权限。
+9. 在 `bitable.toolPermission` 中填入“工具权限”多维表格配置；`tableId` 可留空，系统会默认读取第一张数据表。
+10. `bitable.toolPermission.fieldNames.department` 默认读取 `部门`；工具列默认读取 `需求列表`、`Bug列表`、`反馈列表`、`打包列表`、`内容审查`，值为 `允许` 才显示该工具。
+11. 在 `knowledgeBase.spaceId` 中填入知识库空间 ID；`requirementsParentName`、`bugsParentName`、`feedbackParentName` 默认分别是 `需求列表`、`Bug列表`、`反馈列表`，模板名默认都是 `模板`。
+12. `knowledgeBase.requirementsFieldNames` 用于配置需求表字段名；除原有需求字段外，模板还必须包含单选字段 `需要提交附件`（选项为 `是`、`否`）和附件字段 `提交附件`，对应配置项为 `requiresSubmissionAttachment`、`submittedAttachments`。
+13. `knowledgeBase.bugsFieldNames` 用于配置 Bug 表字段名；默认读取 `BugID`、`标题`、`详细描述`、`优先级`、`处理人员`、`处理状态`、`发现时间`、`期望时限`、`留言`。
+14. `requirementsIdPrefix` 和 `bugsIdPrefix` 用于配置提交时自动生成的编号前缀，默认分别是 `R-` 和 `B-`；编号位数默认是 4。
+15. 点击项目内的“需求列表”或“Bug列表”时，系统会在知识库中找到或创建对应节点，并按项目ID准备同名多维表格；不存在时会复制节点下的“模板”多维表格。
+16. `knowledgeBase.bugsTemplateAppToken` 默认填入当前 Bug 模板多维表格 token：`ZuHmbPMjzaDFCUsge7PcjkAsn4e`。
+17. 留言提及人员和提交时处理人员不再搜索通讯录，候选人来自当前项目中有权使用当前工具的人员。
+18. 创建需求时可选择是否需要处理人提交附件，默认选择 `否`。选择 `是` 后，处理人可在详情页的“提交附件”操作中增删附件、记录留言并按需通知提出人；附件为空时更新处理状态会要求二次确认。
+19. `knowledgeBase.feedbackFieldNames` 用于配置反馈表字段名；提交反馈时服务端生成项目内 `F-0001` 编号，固定写入渠道“内部开发平台”和当前反馈时间，并将当前飞书身份、可选手机/邮箱及回访授权保存到 `联系信息数据` JSON。
+20. 在飞书开发者后台把网页应用主页地址配置为本机可访问地址，例如 `http://192.168.1.23:3000/`。
+21. 可选地在 `updates.manifestUrl` 填写 HTTPS 更新日志 JSON 地址。格式为 `schemaVersion`、`latestVersion` 和 `releases`，每条发布记录包含版本、发布时间和变更列表。
+22. `dashboard` 用于配置项目总览：`cacheTtlMs` 是服务端聚合缓存时间，`staleDays` 是“长期无进展”阈值，`dueSoonDays` 是“即将到期”阈值；`statusGroups` 可按需求、Bug、反馈配置待处理、处理中、已完成和阻塞状态名称。
+23. 项目总览只读取已存在的需求、Bug、反馈多维表格，不会因打开总览而创建或复制模板。页面默认显示项目全局数据，也可切换到“我的任务”，并通过实时事件或手动刷新更新。
+24. “本周完成”、完成趋势和最近动态基于平台记录的状态变动与留言统计；早于平台记录的数据可能不完整，页面会显示数据口径提示。
+
+更新日志示例：
+
+```json
+{
+  "schemaVersion": 1,
+  "latestVersion": "0.1.63",
+  "releases": [
+    {
+      "version": "0.1.63",
+      "publishedAt": "2026-07-16T08:00:00Z",
+      "changes": ["增加本地缓存和更新日志"]
+    }
+  ]
+}
+```
 
 打包时，所有产物都会生成到根目录 `Publish` 文件夹。每次构建都会把 `config/config.json` 覆盖到 `Publish/config.json`。服务端会读取这个文件，但不会把 App Secret 返回给浏览器。
 `Publish` 根目录会生成 `StartWebBackend.bat` 和 `StopWebBackend.bat`，用于一键启动和停止网页后端服务。

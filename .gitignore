@@ -3,6 +3,7 @@ dist/
 Publish/
 config/config.json
 .idea/
+.htybox/
 .env
 .DS_Store
 npm-debug.log*

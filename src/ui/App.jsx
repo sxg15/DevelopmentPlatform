@@ -8,10 +8,41 @@ import {
   getWorkItemProcessingStatus,
   getWorkItemStatus,
   getWorkItemWaitingStatus,
+  hasActiveAdvancedWorkItemFilters,
   hasActiveWorkItemFilters,
   isStatusGroupDefaultCollapsed,
   shouldShowWorkItemRemainingTime,
 } from './workItemListUtils.js';
+import {
+  clearLocalDraft,
+  createDraftKey,
+  createLocalCacheUserKey,
+  createProjectsSnapshotKey,
+  createWorkItemsSnapshotKey,
+  getCachedSnapshot,
+  getLocalDraft,
+  initializeLocalCache,
+  readLocalPreference,
+  saveCachedSnapshot,
+  saveLocalDraft,
+  writeLocalPreference,
+} from './localCache.js';
+import { compareSemanticVersions } from '../../shared/updateManifest.js';
+import {
+  countWaitingAssignedWorkItems,
+  replaceWorkItemByRecordId,
+} from '../../shared/workItemRealtimeUtils.js';
+import {
+  canManageWorkItemAssignees,
+  getAssignmentNotificationTargetLabel,
+  supportsUnassignedWorkItemRouting,
+  validateWorkItemAssignmentChoice,
+} from '../../shared/workItemAssignmentUtils.js';
+import {
+  getSubmissionAttachmentToken,
+  shouldConfirmStatusUpdateWithoutSubmissionAttachments,
+} from '../../shared/requirementSubmissionAttachmentUtils.js';
+import { ProjectOverview } from './ProjectOverview.jsx';
 
 const INITIAL_AUTH_STATE = {
   status: 'loading',
@@ -38,6 +69,7 @@ const PROJECT_TOOLS = [
   { id: 'overview', label: '项目总览' },
   { id: 'requirements', label: '需求列表' },
   { id: 'bugs', label: 'Bug列表' },
+  { id: 'feedback', label: '反馈列表' },
   { id: 'builds', label: '打包列表' },
   { id: 'review', label: '内容审查' },
 ];
@@ -56,6 +88,9 @@ const WORK_ITEM_TOOL_CONFIGS = {
     idleText: '点击需求列表后会准备项目对应的多维表格。',
     missingTargetText: '目标需求不存在或没有权限查看',
     detailAriaLabel: '需求详情',
+    supportsPriority: true,
+    supportsUnassignedRouting: true,
+    dateLabel: '提出时间',
   },
   bugs: {
     toolId: 'bugs',
@@ -70,6 +105,25 @@ const WORK_ITEM_TOOL_CONFIGS = {
     idleText: '点击Bug列表后会准备项目对应的多维表格。',
     missingTargetText: '目标Bug不存在或没有权限查看',
     detailAriaLabel: 'Bug详情',
+    supportsPriority: true,
+    supportsUnassignedRouting: true,
+    dateLabel: '发现时间',
+  },
+  feedback: {
+    toolId: 'feedback',
+    routeSegment: 'feedback',
+    listLabel: '反馈列表',
+    itemLabel: '反馈',
+    submitLabel: '提交反馈',
+    countLabel: '条反馈',
+    unnamedTitle: '未命名反馈',
+    noIdText: '无反馈ID',
+    loadingText: '正在准备反馈列表',
+    idleText: '点击反馈列表后会准备项目对应的多维表格。',
+    missingTargetText: '目标反馈不存在或没有权限查看',
+    detailAriaLabel: '反馈详情',
+    supportsPriority: false,
+    dateLabel: '反馈时间',
   },
 };
 
@@ -77,6 +131,7 @@ const REQUIREMENT_PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4'];
 
 export function App() {
   const [authState, setAuthState] = useState(INITIAL_AUTH_STATE);
+  const [updateDialog, setUpdateDialog] = useState(null);
 
   useEffect(() => {
     let isActive = true;
@@ -159,14 +214,68 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (authState.status !== 'ready' || !authState.user) {
+      return undefined;
+    }
+
+    let isActive = true;
+    const userKey = createLocalCacheUserKey(authState.user);
+
+    async function prepareLocalData() {
+      await initializeLocalCache(authState.user);
+      if (!isActive) {
+        return;
+      }
+
+      try {
+        const lastOpenedVersion = readLocalPreference(userKey, 'last-opened-update-version', '');
+        const payload = await fetchUpdates(lastOpenedVersion);
+        if (!isActive || !payload?.enabled || !payload.latestVersion) {
+          return;
+        }
+
+        if (!lastOpenedVersion) {
+          writeLocalPreference(userKey, 'last-opened-update-version', payload.latestVersion);
+          return;
+        }
+
+        if (
+          payload.updateAvailable
+          && compareSemanticVersions(payload.latestVersion, lastOpenedVersion) > 0
+        ) {
+          setUpdateDialog(payload);
+        }
+      } catch {
+        // Update checks must not delay login or project data loading.
+      }
+    }
+
+    prepareLocalData();
+
+    return () => {
+      isActive = false;
+    };
+  }, [authState.status, authState.user]);
+
+  const cacheUserKey = authState.user ? createLocalCacheUserKey(authState.user) : '';
+
+  function closeUpdateDialog() {
+    if (updateDialog?.latestVersion && cacheUserKey) {
+      writeLocalPreference(cacheUserKey, 'last-opened-update-version', updateDialog.latestVersion);
+    }
+    setUpdateDialog(null);
+  }
+
   return (
     <main className="app-shell" aria-label="开发平台">
       <TopToolbar state={authState} />
       {authState.status === 'ready' && authState.user ? (
-        <PlatformWorkspace user={authState.user} />
+        <PlatformWorkspace user={authState.user} cacheUserKey={cacheUserKey} />
       ) : (
         <AuthStatusPanel state={authState} />
       )}
+      {updateDialog ? <UpdateLogDialog update={updateDialog} onClose={closeUpdateDialog} /> : null}
     </main>
   );
 }
@@ -191,20 +300,37 @@ function TopToolbar({ state }) {
   );
 }
 
-function PlatformWorkspace({ user }) {
+function PlatformWorkspace({ user, cacheUserKey }) {
   const [activeView, setActiveView] = useState('home');
   const [selectedProject, setSelectedProject] = useState(null);
+  const [projectOpenSequence, setProjectOpenSequence] = useState(0);
   const [projectState, setProjectState] = useState(INITIAL_PROJECT_STATE);
+  const [relatedWorkItemCounts, setRelatedWorkItemCounts] = useState({});
+  const [realtimeEvent, setRealtimeEvent] = useState(null);
   const [directTarget] = useState(() => parseDirectTargetFromLocation());
   const [directNotice, setDirectNotice] = useState({ type: 'idle', message: '' });
   const processedDirectKeyRef = useRef('');
+  const projectCountKey = projectState.status === 'ready'
+    ? projectState.projects.map((project) => String(project.projectId || '').trim()).filter(Boolean).join('|')
+    : '';
 
   useEffect(() => {
     let isActive = true;
 
     async function loadProjects() {
+      let cachedSnapshot = null;
       try {
+        cachedSnapshot = await getCachedSnapshot(createProjectsSnapshotKey(cacheUserKey));
+        if (cachedSnapshot && isActive) {
+          setProjectState({
+            status: 'ready',
+            message: buildLocalCacheMessage(cachedSnapshot.savedAt, true),
+            projects: Array.isArray(cachedSnapshot.value?.projects) ? cachedSnapshot.value.projects : [],
+          });
+        }
+
         const payload = await fetchProjects();
+        await saveCachedSnapshot(cacheUserKey, createProjectsSnapshotKey(cacheUserKey), payload);
         if (isActive) {
           setProjectState({
             status: 'ready',
@@ -214,11 +340,19 @@ function PlatformWorkspace({ user }) {
         }
       } catch (error) {
         if (isActive) {
-          setProjectState({
-            status: 'error',
-            message: formatErrorMessage(error),
-            projects: [],
-          });
+          if (cachedSnapshot) {
+            setProjectState({
+              status: 'ready',
+              message: buildLocalCacheMessage(cachedSnapshot.savedAt, false, formatErrorMessage(error)),
+              projects: Array.isArray(cachedSnapshot.value?.projects) ? cachedSnapshot.value.projects : [],
+            });
+          } else {
+            setProjectState({
+              status: 'error',
+              message: formatErrorMessage(error),
+              projects: [],
+            });
+          }
         }
       }
     }
@@ -228,7 +362,87 @@ function PlatformWorkspace({ user }) {
     return () => {
       isActive = false;
     };
-  }, []);
+  }, [cacheUserKey]);
+
+  useEffect(() => {
+    if (!projectCountKey) {
+      setRelatedWorkItemCounts({});
+      return undefined;
+    }
+
+    let isActive = true;
+
+    async function loadRelatedWorkItemCounts() {
+      try {
+        const payload = await fetchRelatedWorkItemCounts();
+        if (isActive) {
+          setRelatedWorkItemCounts(normalizeRelatedWorkItemCounts(payload?.counts));
+        }
+      } catch {
+        // Counts are supplemental and must not hide an otherwise usable project list.
+      }
+    }
+
+    loadRelatedWorkItemCounts();
+
+    return () => {
+      isActive = false;
+    };
+  }, [projectCountKey]);
+
+  useEffect(() => {
+    if (typeof EventSource === 'undefined') {
+      return undefined;
+    }
+
+    const source = new EventSource('/api/realtime/stream');
+
+    function handleWorkItemUpdated(event) {
+      try {
+        const payload = JSON.parse(event.data || '{}');
+        const projectId = String(payload?.projectId || '').trim();
+        const toolId = String(payload?.toolId || '').trim();
+        const recordId = String(payload?.recordId || '').trim();
+        if (!projectId || !toolId || !recordId) {
+          return;
+        }
+
+        void refreshRelatedWorkItemCounts(projectId);
+        setRealtimeEvent({
+          id: `${projectId}:${toolId}:${recordId}:${payload.occurredAt || Date.now()}`,
+          projectId,
+          toolId,
+          recordId,
+        });
+      } catch {
+        // Ignore malformed realtime messages and let EventSource continue reconnecting.
+      }
+    }
+
+    source.addEventListener('work-item-updated', handleWorkItemUpdated);
+    return () => {
+      source.removeEventListener('work-item-updated', handleWorkItemUpdated);
+      source.close();
+    };
+  }, [cacheUserKey]);
+
+  useEffect(() => {
+    if (
+      directTarget
+      || projectState.status !== 'ready'
+      || selectedProject
+      || projectState.projects.length === 0
+    ) {
+      return;
+    }
+
+    const selectedRecordId = String(readLocalPreference(cacheUserKey, 'selected-project-record-id', '') || '').trim();
+    const savedProject = projectState.projects.find((project) => String(project.recordId || '') === selectedRecordId);
+    if (savedProject) {
+      setSelectedProject(savedProject);
+      setActiveView('project');
+    }
+  }, [cacheUserKey, directTarget, projectState, selectedProject]);
 
   useEffect(() => {
     if (!directTarget || processedDirectKeyRef.current === directTarget.key || projectState.status !== 'ready') {
@@ -263,18 +477,22 @@ function PlatformWorkspace({ user }) {
     setActiveView('home');
     setSelectedProject(null);
     setDirectNotice({ type: 'idle', message: '' });
+    writeLocalPreference(cacheUserKey, 'selected-project-record-id', '');
   }
 
   function handleProjectSelect(project) {
     setSelectedProject(project);
+    setProjectOpenSequence((current) => current + 1);
     setActiveView('project');
     setDirectNotice({ type: 'idle', message: '' });
+    writeLocalPreference(cacheUserKey, 'selected-project-record-id', project.recordId || '');
   }
 
   return (
     <section className="platform-body" aria-label="开发平台工作区">
       <ProjectSidebar
         projectState={projectState}
+        relatedWorkItemCounts={relatedWorkItemCounts}
         activeView={activeView}
         selectedProjectId={selectedProject?.recordId || ''}
         onHomeClick={handleHomeClick}
@@ -284,8 +502,12 @@ function PlatformWorkspace({ user }) {
         {directNotice.message ? <DirectStatusBanner notice={directNotice} /> : null}
         {activeView === 'project' && selectedProject ? (
           <ProjectWorkspace
+            key={`${selectedProject.recordId || selectedProject.projectId}:${projectOpenSequence}`}
             project={selectedProject}
             user={user}
+            cacheUserKey={cacheUserKey}
+            realtimeEvent={realtimeEvent}
+            onRelatedCountChange={handleRelatedCountChange}
             directTarget={directTarget}
             onDirectNotice={setDirectNotice}
           />
@@ -295,9 +517,43 @@ function PlatformWorkspace({ user }) {
       </div>
     </section>
   );
+
+  async function refreshRelatedWorkItemCounts(projectId = '') {
+    try {
+      const payload = await fetchRelatedWorkItemCounts(projectId);
+      const nextCounts = normalizeRelatedWorkItemCounts(payload?.counts);
+      setRelatedWorkItemCounts((current) => (
+        projectId
+          ? {
+              ...current,
+              [projectId]: nextCounts[projectId] || { requirements: 0, bugs: 0 },
+            }
+          : nextCounts
+      ));
+    } catch {
+      // Keep the last known values until the next successful realtime update.
+    }
+  }
+
+  function handleRelatedCountChange(projectId, toolId, count) {
+    const normalizedProjectId = String(projectId || '').trim();
+    const normalizedToolId = String(toolId || '').trim();
+    if (!normalizedProjectId || !['requirements', 'bugs'].includes(normalizedToolId)) {
+      return;
+    }
+
+    setRelatedWorkItemCounts((current) => ({
+      ...current,
+      [normalizedProjectId]: {
+        requirements: Number(current[normalizedProjectId]?.requirements || 0),
+        bugs: Number(current[normalizedProjectId]?.bugs || 0),
+        [normalizedToolId]: Math.max(0, Number(count) || 0),
+      },
+    }));
+  }
 }
 
-function ProjectSidebar({ projectState, activeView, selectedProjectId, onHomeClick, onProjectSelect }) {
+function ProjectSidebar({ projectState, relatedWorkItemCounts, activeView, selectedProjectId, onHomeClick, onProjectSelect }) {
   return (
     <aside className="project-sidebar" aria-label="项目列表">
       <nav className="sidebar-navigation" aria-label="主要导航">
@@ -313,7 +569,13 @@ function ProjectSidebar({ projectState, activeView, selectedProjectId, onHomeCli
 
       <section className="project-list-section" aria-label="项目基础信息">
         <div className="project-list-heading">项目列表</div>
-        <ProjectList state={projectState} selectedProjectId={selectedProjectId} onProjectSelect={onProjectSelect} />
+        <CacheStateNotice message={projectState.status === 'ready' ? projectState.message : ''} />
+        <ProjectList
+          state={projectState}
+          relatedWorkItemCounts={relatedWorkItemCounts}
+          selectedProjectId={selectedProjectId}
+          onProjectSelect={onProjectSelect}
+        />
       </section>
 
       <div className="add-project-area">
@@ -334,7 +596,53 @@ function DirectStatusBanner({ notice }) {
   );
 }
 
-function ProjectList({ state, selectedProjectId, onProjectSelect }) {
+function CacheStateNotice({ message }) {
+  if (!message) {
+    return null;
+  }
+
+  return <p className="cache-state-notice" role="status">{message}</p>;
+}
+
+function UpdateLogDialog({ update, onClose }) {
+  const releases = Array.isArray(update?.releases) ? update.releases : [];
+
+  return (
+    <div className="workitem-submit-backdrop" role="presentation">
+      <section className="update-log-dialog" role="dialog" aria-modal="true" aria-label="更新日志">
+        <div className="workitem-submit-header">
+          <div>
+            <h3>发现新版本 {update.latestVersion}</h3>
+            <span>当前版本 {update.currentVersion}</span>
+          </div>
+          <button type="button" className="workitem-submit-close" onClick={onClose}>
+            关闭
+          </button>
+        </div>
+        <div className="update-log-content">
+          {releases.length > 0 ? releases.map((release) => (
+            <section key={release.version} className="update-log-release">
+              <div>
+                <strong>{release.version}</strong>
+                <span>{formatUpdatePublishedAt(release.publishedAt)}</span>
+              </div>
+              <ul>
+                {release.changes.map((change, index) => <li key={`${release.version}-${index}`}>{change}</li>)}
+              </ul>
+            </section>
+          )) : (
+            <p className="update-log-empty">服务器已发布新版本，暂未提供可显示的变更记录。</p>
+          )}
+        </div>
+        <div className="update-log-actions">
+          <button type="button" className="workitem-submit-primary" onClick={onClose}>我知道了</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ProjectList({ state, relatedWorkItemCounts, selectedProjectId, onProjectSelect }) {
   if (state.status === 'loading') {
     return (
       <div className="project-list-status" aria-live="polite">
@@ -357,35 +665,70 @@ function ProjectList({ state, selectedProjectId, onProjectSelect }) {
 
   return (
     <div className="project-list" role="list">
-      {state.projects.map((project) => (
-        <button
-          key={project.recordId}
-          type="button"
-          className={`project-button ${selectedProjectId === project.recordId ? 'is-active' : ''}`}
-          title={formatProjectTitle(project)}
-          aria-pressed={selectedProjectId === project.recordId}
-          onClick={() => onProjectSelect(project)}
-        >
-          <ProjectIcon project={project} />
-          <span className="project-button-text">
-            <span className="project-name">{project.projectName || '未命名项目'}</span>
-            <span className="project-id">({project.projectId || '无ID'})</span>
-          </span>
-        </button>
-      ))}
+      {state.projects.map((project) => {
+        const relatedCounts = relatedWorkItemCounts?.[project.projectId];
+        const hasRelatedCounts = hasRelatedWorkItemCounts(relatedCounts);
+
+        return (
+          <button
+            key={project.recordId}
+            type="button"
+            className={`project-button ${hasRelatedCounts ? 'has-related-counts' : ''} ${selectedProjectId === project.recordId ? 'is-active' : ''}`}
+            title={formatProjectTitle(project)}
+            aria-pressed={selectedProjectId === project.recordId}
+            onClick={() => onProjectSelect(project)}
+          >
+            <ProjectRelatedWorkItemBadges counts={relatedCounts} />
+            <ProjectIcon project={project} />
+            <span className="project-button-text">
+              <span className="project-name">{project.projectName || '未命名项目'}</span>
+              <span className="project-id">({project.projectId || '无ID'})</span>
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
 
-function ProjectWorkspace({ project, user, directTarget, onDirectNotice }) {
-  const [activeToolId, setActiveToolId] = useState(PROJECT_TOOLS[0].id);
+function hasRelatedWorkItemCounts(counts) {
+  return Number(counts?.requirements) > 0 || Number(counts?.bugs) > 0;
+}
+
+function ProjectRelatedWorkItemBadges({ counts }) {
+  const requirements = Math.max(0, Number(counts?.requirements) || 0);
+  const bugs = Math.max(0, Number(counts?.bugs) || 0);
+
+  if (requirements === 0 && bugs === 0) {
+    return null;
+  }
+
+  return (
+    <span className="project-related-badges" aria-label={`与我相关：${requirements}个待处理需求，${bugs}个未处理Bug`}>
+      {requirements > 0 ? <span className="project-related-badge project-related-badge-requirements">{requirements}需求</span> : null}
+      {bugs > 0 ? <span className="project-related-badge project-related-badge-bugs">{bugs}Bug</span> : null}
+    </span>
+  );
+}
+
+function ProjectWorkspace({
+  project,
+  user,
+  cacheUserKey,
+  realtimeEvent,
+  onRelatedCountChange,
+  directTarget,
+  onDirectNotice,
+}) {
+  const [activeToolId, setActiveToolId] = useState(() => getInitialWorkspacePreferences(cacheUserKey, project).activeToolId);
   const [workItemStates, setWorkItemStates] = useState(() => createInitialWorkItemStates());
-  const [collapsedPriorities, setCollapsedPriorities] = useState(() => new Set());
-  const [statusCollapseOverrides, setStatusCollapseOverrides] = useState({});
-  const [workItemFilters, setWorkItemFilters] = useState(() => createInitialWorkItemFilters());
+  const [collapsedPriorities, setCollapsedPriorities] = useState(() => new Set(getInitialWorkspacePreferences(cacheUserKey, project).collapsedPriorities));
+  const [statusCollapseOverrides, setStatusCollapseOverrides] = useState(() => getInitialWorkspacePreferences(cacheUserKey, project).statusCollapseOverrides);
+  const [workItemFilters, setWorkItemFilters] = useState(() => getInitialWorkspacePreferences(cacheUserKey, project).workItemFilters);
   const [selectedWorkItemId, setSelectedWorkItemId] = useState('');
   const [highlightCommentId, setHighlightCommentId] = useState('');
   const processedDirectKeyRef = useRef('');
+  const processedRealtimeEventRef = useRef('');
   const visibleTools = getProjectTools(project);
   const activeTool = visibleTools.find((tool) => tool.id === activeToolId) || visibleTools[0];
   const activeWorkItemConfig = getWorkItemToolConfig(activeToolId);
@@ -396,15 +739,26 @@ function ProjectWorkspace({ project, user, directTarget, onDirectNotice }) {
     : {};
 
   useEffect(() => {
-    setActiveToolId(getProjectTools(project)[0].id);
+    const preferences = getInitialWorkspacePreferences(cacheUserKey, project);
+    setActiveToolId(preferences.activeToolId);
     setWorkItemStates(createInitialWorkItemStates());
-    setCollapsedPriorities(new Set());
-    setStatusCollapseOverrides({});
-    setWorkItemFilters(createInitialWorkItemFilters());
+    setCollapsedPriorities(new Set(preferences.collapsedPriorities));
+    setStatusCollapseOverrides(preferences.statusCollapseOverrides);
+    setWorkItemFilters(preferences.workItemFilters);
     setSelectedWorkItemId('');
     setHighlightCommentId('');
     processedDirectKeyRef.current = '';
-  }, [project.recordId]);
+    processedRealtimeEventRef.current = '';
+  }, [cacheUserKey, project.recordId]);
+
+  useEffect(() => {
+    writeLocalPreference(cacheUserKey, getWorkspacePreferenceName(project), {
+      activeToolId,
+      collapsedPriorities: [...collapsedPriorities],
+      statusCollapseOverrides,
+      workItemFilters,
+    });
+  }, [activeToolId, cacheUserKey, collapsedPriorities, project, statusCollapseOverrides, workItemFilters]);
 
   useEffect(() => {
     if (!directTarget || directTarget.projectId !== String(project.projectId || '') || processedDirectKeyRef.current === directTarget.key) {
@@ -414,6 +768,30 @@ function ProjectWorkspace({ project, user, directTarget, onDirectNotice }) {
     processedDirectKeyRef.current = directTarget.key;
     openDirectTarget(directTarget);
   }, [directTarget, project.recordId]);
+
+  useEffect(() => {
+    if (
+      !realtimeEvent
+      || realtimeEvent.projectId !== String(project.projectId || '')
+      || processedRealtimeEventRef.current === realtimeEvent.id
+    ) {
+      return;
+    }
+
+    const toolConfig = getWorkItemToolConfig(realtimeEvent.toolId);
+    const targetState = toolConfig ? workItemStates[toolConfig.toolId] : null;
+    if (!toolConfig || targetState?.status !== 'ready') {
+      return;
+    }
+
+    processedRealtimeEventRef.current = realtimeEvent.id;
+
+    async function refreshChangedWorkItem() {
+      await refreshWorkItemFromServer(toolConfig, realtimeEvent.recordId);
+    }
+
+    refreshChangedWorkItem();
+  }, [project.projectId, realtimeEvent, workItemStates]);
 
   function handleWorkItemGroupToggle(toolId, priority) {
     const groupId = `${toolId}:${priority}`;
@@ -480,6 +858,7 @@ function ProjectWorkspace({ project, user, directTarget, onDirectNotice }) {
   async function loadWorkItems(toolConfig, options = {}) {
     const targetRecordId = String(options.recordId || '').trim();
     const targetCommentId = String(options.commentId || '').trim();
+    let cachedSnapshot = null;
     setSelectedWorkItemId('');
     setHighlightCommentId('');
     setWorkItemState(toolConfig.toolId, {
@@ -489,14 +868,36 @@ function ProjectWorkspace({ project, user, directTarget, onDirectNotice }) {
     });
 
     try {
+      cachedSnapshot = await getCachedSnapshot(createWorkItemsSnapshotKey(cacheUserKey, project.projectId, toolConfig.toolId));
+      if (cachedSnapshot) {
+        const cachedPayload = cachedSnapshot.value;
+        const cachedTargetItem = targetRecordId
+          ? getPayloadWorkItems(cachedPayload, toolConfig).find((item) => isRequirementTarget(item, targetRecordId))
+          : null;
+        setWorkItemState(toolConfig.toolId, {
+          status: 'ready',
+          message: buildLocalCacheMessage(cachedSnapshot.savedAt, true),
+          result: cachedPayload,
+        });
+        if (cachedTargetItem) {
+          setSelectedWorkItemId(getRequirementStableId(cachedTargetItem));
+          setHighlightCommentId(targetCommentId);
+        }
+      }
+    } catch {
+      cachedSnapshot = null;
+    }
+
+    try {
       const payload = await ensureProjectWorkItems(project.projectId, toolConfig);
       const items = getPayloadWorkItems(payload, toolConfig);
       const targetItem = targetRecordId
         ? items.find((item) => isRequirementTarget(item, targetRecordId))
         : null;
+      await saveCachedSnapshot(cacheUserKey, createWorkItemsSnapshotKey(cacheUserKey, project.projectId, toolConfig.toolId), payload);
       setWorkItemState(toolConfig.toolId, {
         status: 'ready',
-        message: buildWorkItemsReadyMessage(payload, toolConfig),
+        message: '',
         result: payload,
       });
 
@@ -514,11 +915,19 @@ function ProjectWorkspace({ project, user, directTarget, onDirectNotice }) {
 
       onDirectNotice?.({ type: 'idle', message: '' });
     } catch (error) {
-      setWorkItemState(toolConfig.toolId, {
-        status: 'error',
-        message: formatErrorMessage(error),
-        result: error.payload?.result || null,
-      });
+      if (cachedSnapshot) {
+        setWorkItemState(toolConfig.toolId, {
+          status: 'ready',
+          message: buildLocalCacheMessage(cachedSnapshot.savedAt, false, formatErrorMessage(error)),
+          result: cachedSnapshot.value,
+        });
+      } else {
+        setWorkItemState(toolConfig.toolId, {
+          status: 'error',
+          message: formatErrorMessage(error),
+          result: error.payload?.result || null,
+        });
+      }
       if (options.fromDirect) {
         onDirectNotice?.({ type: 'error', message: formatErrorMessage(error) });
       }
@@ -526,10 +935,96 @@ function ProjectWorkspace({ project, user, directTarget, onDirectNotice }) {
   }
 
   function setWorkItemState(toolId, state) {
+    notifyRelatedCount(toolId, state);
     setWorkItemStates((current) => ({
       ...current,
       [toolId]: state,
     }));
+  }
+
+  function updateWorkItemState(toolId, update) {
+    setWorkItemStates((current) => {
+      const nextState = update(current[toolId]);
+      if (nextState?.status === 'ready' && nextState.result) {
+        void saveCachedSnapshot(
+          cacheUserKey,
+          createWorkItemsSnapshotKey(cacheUserKey, project.projectId, toolId),
+          nextState.result,
+        );
+        notifyRelatedCount(toolId, nextState);
+      }
+      return {
+        ...current,
+        [toolId]: nextState,
+      };
+    });
+  }
+
+  function notifyRelatedCount(toolId, state) {
+    if (state?.status !== 'ready' || !state.result) {
+      return;
+    }
+
+    onRelatedCountChange?.(
+      project.projectId,
+      toolId,
+      countWaitingAssignedWorkItems(toolId, getPayloadWorkItems(state.result, getWorkItemToolConfig(toolId)), user),
+    );
+  }
+
+  async function refreshWorkItemFromServer(toolConfig, recordId) {
+    try {
+      const payload = await fetchWorkItemRecord(project.projectId, toolConfig, recordId);
+      if (payload.item) {
+        updateWorkItemState(
+          toolConfig.toolId,
+          (currentState) => updateRequirementInState(currentState, payload.item, toolConfig),
+        );
+      }
+    } catch {
+      // The next list refresh will reconcile records that were deleted or made unavailable.
+    }
+  }
+
+  function handleWorkItemUpdated(toolConfig, requirement) {
+    updateWorkItemState(
+      toolConfig.toolId,
+      (currentState) => updateRequirementInState(currentState, requirement, toolConfig),
+    );
+    setSelectedWorkItemId(getRequirementStableId(requirement));
+    void refreshWorkItemFromServer(toolConfig, requirement.recordId);
+  }
+
+  async function handleOverviewItemOpen(item) {
+    const toolConfig = getWorkItemToolConfig(item?.toolId);
+    if (!toolConfig || !visibleTools.some((tool) => tool.id === toolConfig.toolId)) {
+      onDirectNotice?.({ type: 'error', message: '没有权限查看该工作项' });
+      return;
+    }
+
+    setActiveToolId(toolConfig.toolId);
+    await loadWorkItems(toolConfig, {
+      recordId: item?.recordId,
+      commentId: item?.commentId,
+    });
+  }
+
+  async function handleOverviewStatusOpen(toolId, statuses) {
+    const toolConfig = getWorkItemToolConfig(toolId);
+    if (!toolConfig || !visibleTools.some((tool) => tool.id === toolConfig.toolId)) {
+      onDirectNotice?.({ type: 'error', message: '没有权限查看该列表' });
+      return;
+    }
+
+    setWorkItemFilters((current) => ({
+      ...current,
+      [toolConfig.toolId]: {
+        ...createEmptyWorkItemFilters(),
+        statuses: [...new Set((statuses || []).map((status) => String(status || '').trim()).filter(Boolean))],
+      },
+    }));
+    setActiveToolId(toolConfig.toolId);
+    await loadWorkItems(toolConfig);
   }
 
   return (
@@ -562,19 +1057,33 @@ function ProjectWorkspace({ project, user, directTarget, onDirectNotice }) {
         </aside>
 
         <section className="project-detail-panel" aria-label={`${activeTool.label}内容`}>
-          <div className={`project-detail-surface ${activeWorkItemConfig ? 'project-detail-surface-requirements' : ''}`}>
-            {activeWorkItemConfig ? null : (
+          <div className={[
+            'project-detail-surface',
+            activeWorkItemConfig ? 'project-detail-surface-requirements' : '',
+            activeToolId === 'overview' ? 'project-detail-surface-overview' : '',
+          ].filter(Boolean).join(' ')}>
+            {!activeWorkItemConfig && activeToolId !== 'overview' ? (
               <>
                 <p className="project-detail-eyebrow">{activeTool.label}</p>
                 <h1>{projectName}</h1>
                 <p className="project-detail-summary">当前项目 {formatProjectTitle(project)}</p>
               </>
-            )}
+            ) : null}
+            {activeToolId === 'overview' ? (
+              <ProjectOverview
+                project={project}
+                cacheUserKey={cacheUserKey}
+                realtimeEvent={realtimeEvent}
+                onOpenItem={handleOverviewItemOpen}
+                onOpenStatus={handleOverviewStatusOpen}
+              />
+            ) : null}
             {activeWorkItemConfig ? (
-      <RequirementsStatus
+              <RequirementsStatus
                 toolConfig={activeWorkItemConfig}
                 state={activeWorkItemState}
                 user={user}
+                cacheUserKey={cacheUserKey}
                 collapsedPriorities={collapsedPriorities}
                 statusCollapseOverrides={statusCollapseOverrides}
                 onGroupToggle={handleWorkItemGroupToggle}
@@ -599,12 +1108,13 @@ function ProjectWorkspace({ project, user, directTarget, onDirectNotice }) {
                 projectId={project.projectId}
                 mentionableUsers={mentionableUsersByTool[activeWorkItemConfig.toolId] || activeWorkItemState.result?.mentionableUsers || []}
                 isSuperAdmin={Boolean(project.isSuperAdmin)}
+                isDevelopmentSuperAdmin={Boolean(project.isDevelopmentSuperAdmin)}
                 onWorkItemCreated={(payload) => {
                   const createdItem = payload.item || payload.requirement;
-                  setWorkItemStates((current) => ({
-                    ...current,
-                    [activeWorkItemConfig.toolId]: mergeCreatedWorkItemsIntoState(current[activeWorkItemConfig.toolId], payload, activeWorkItemConfig),
-                  }));
+                  updateWorkItemState(
+                    activeWorkItemConfig.toolId,
+                    (currentState) => mergeCreatedWorkItemsIntoState(currentState, payload, activeWorkItemConfig),
+                  );
                   if (createdItem) {
                     setSelectedWorkItemId(getRequirementStableId(createdItem));
                   }
@@ -615,24 +1125,19 @@ function ProjectWorkspace({ project, user, directTarget, onDirectNotice }) {
 
                   const notificationCount = (payload.notificationResults || []).filter((item) => item.ok).length;
                   if (notificationCount > 0) {
+                    const targetLabel = getAssignmentNotificationTargetLabel(payload.assignmentEscalated);
                     onDirectNotice?.({
                       type: 'success',
-                      message: `${activeWorkItemConfig.itemLabel}已提交，已通知 ${notificationCount} 个处理人`,
+                      message: `${activeWorkItemConfig.itemLabel}已提交，已通知 ${notificationCount} 个${targetLabel}`,
                     });
                   }
                 }}
-                onRequirementUpdated={(requirement) => {
-                  setWorkItemStates((current) => ({
-                    ...current,
-                    [activeWorkItemConfig.toolId]: updateRequirementInState(current[activeWorkItemConfig.toolId], requirement, activeWorkItemConfig),
-                  }));
-                  setSelectedWorkItemId(getRequirementStableId(requirement));
-                }}
+                onRequirementUpdated={(requirement) => handleWorkItemUpdated(activeWorkItemConfig, requirement)}
                 onRequirementDeleted={(payload) => {
-                  setWorkItemStates((current) => ({
-                    ...current,
-                    [activeWorkItemConfig.toolId]: mergeCreatedWorkItemsIntoState(current[activeWorkItemConfig.toolId], payload, activeWorkItemConfig),
-                  }));
+                  updateWorkItemState(
+                    activeWorkItemConfig.toolId,
+                    (currentState) => mergeCreatedWorkItemsIntoState(currentState, payload, activeWorkItemConfig),
+                  );
                   setHighlightCommentId('');
                   setSelectedWorkItemId('');
                 }}
@@ -649,6 +1154,7 @@ function RequirementsStatus({
   toolConfig,
   state,
   user,
+  cacheUserKey,
   collapsedPriorities,
   statusCollapseOverrides,
   onGroupToggle,
@@ -662,11 +1168,17 @@ function RequirementsStatus({
   projectId,
   mentionableUsers,
   isSuperAdmin,
+  isDevelopmentSuperAdmin,
   onWorkItemCreated,
   onRequirementUpdated,
   onRequirementDeleted,
 }) {
   const [submitOpen, setSubmitOpen] = useState(false);
+  const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
+
+  useEffect(() => {
+    setAdvancedFiltersOpen(false);
+  }, [toolConfig.toolId]);
 
   if (state.status === 'idle') {
     return <p className="requirements-status">{toolConfig.idleText}</p>;
@@ -695,6 +1207,32 @@ function RequirementsStatus({
   const fields = Array.isArray(state.result?.fields) ? state.result.fields : [];
   const selectedRequirement = requirements.find((requirement) => isRequirementTarget(requirement, selectedRequirementId)) || null;
 
+  function handleRelatedSummaryView(view) {
+    const userKey = getWorkItemPersonKey(user);
+    const assigneeKeys = getRelatedAssigneeFilterKeys(requirements, user);
+    if (!userKey && assigneeKeys.length === 0) {
+      return;
+    }
+
+    const nextFilters = {
+      ...createEmptyWorkItemFilters(),
+      assigneeKeys: assigneeKeys.length > 0 ? assigneeKeys : [userKey],
+    };
+
+    if (view === 'processing') {
+      nextFilters.statuses = [getWorkItemProcessingStatus(toolConfig.toolId)];
+    } else {
+      nextFilters.statuses = [getWorkItemWaitingStatus(toolConfig.toolId)];
+    }
+
+    if (view === 'urgent') {
+      nextFilters.deadline = 'urgent';
+    }
+
+    onFiltersChange?.(nextFilters);
+    setAdvancedFiltersOpen(true);
+  }
+
   if (selectedRequirement) {
     return (
       <BitableRecordDetail
@@ -702,6 +1240,7 @@ function RequirementsStatus({
         record={selectedRequirement}
         fields={fields}
         user={user}
+        cacheUserKey={cacheUserKey}
         projectId={projectId}
         mentionableUsers={mentionableUsers}
         commentsFieldName={state.result?.commentsFieldName || '留言'}
@@ -713,6 +1252,7 @@ function RequirementsStatus({
         onRequirementDeleted={onRequirementDeleted}
         canDelete={isSuperAdmin}
         isSuperAdmin={isSuperAdmin}
+        isDevelopmentSuperAdmin={isDevelopmentSuperAdmin}
         onBack={onRequirementBack}
       />
     );
@@ -720,6 +1260,7 @@ function RequirementsStatus({
 
   return (
     <section className="requirements-board" aria-live="polite" aria-label={toolConfig.listLabel}>
+      <CacheStateNotice message={state.message} />
       <div className="requirements-board-header">
         <div className="requirements-board-title">
           <h2>{toolConfig.listLabel}</h2>
@@ -735,6 +1276,7 @@ function RequirementsStatus({
         <WorkItemSubmitDialog
           toolConfig={toolConfig}
           projectId={projectId}
+          cacheUserKey={cacheUserKey}
           statusOptions={state.result?.statusOptions || []}
           priorityColors={state.result?.priorityColors || {}}
           mentionableUsers={mentionableUsers}
@@ -751,8 +1293,17 @@ function RequirementsStatus({
         statusOptions={state.result?.statusOptions || []}
         filters={filters}
         onChange={onFiltersChange}
+        advancedOpen={advancedFiltersOpen}
+        onAdvancedOpenChange={setAdvancedFiltersOpen}
       />
-      <RelatedRequirementsSummary toolConfig={toolConfig} requirements={filteredRequirements} user={user} />
+      {toolConfig.supportsPriority !== false ? (
+        <RelatedRequirementsSummary
+          toolConfig={toolConfig}
+          requirements={requirements}
+          user={user}
+          onView={handleRelatedSummaryView}
+        />
+      ) : null}
       <RequirementGroups
         toolConfig={toolConfig}
         requirements={filteredRequirements}
@@ -768,17 +1319,33 @@ function RequirementsStatus({
   );
 }
 
-function WorkItemFilterBar({ toolConfig, requirements, statusOptions, filters, onChange }) {
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+function WorkItemFilterBar({
+  toolConfig,
+  requirements,
+  statusOptions,
+  filters,
+  onChange,
+  advancedOpen,
+  onAdvancedOpenChange,
+}) {
   const statusNames = getAvailableWorkItemStatuses(toolConfig, requirements, statusOptions);
   const assignees = getWorkItemFilterPeople(requirements, 'assignees');
   const proposers = getWorkItemFilterPeople(requirements, 'proposers');
-  const activeFilters = hasActiveWorkItemFilters(filters);
-  const dateLabel = toolConfig.toolId === 'bugs' ? '发现时间' : '提出时间';
+  const [draftFilters, setDraftFilters] = useState(() => ({
+    ...createEmptyWorkItemFilters(),
+    ...filters,
+  }));
+  const hasAdvancedFilters = hasActiveAdvancedWorkItemFilters(filters);
+  const dateLabel = toolConfig.dateLabel || '提出时间';
 
   useEffect(() => {
-    setAdvancedOpen(false);
-  }, [toolConfig.toolId]);
+    if (advancedOpen) {
+      setDraftFilters({
+        ...createEmptyWorkItemFilters(),
+        ...filters,
+      });
+    }
+  }, [advancedOpen, filters]);
 
   function updateFilter(nextValues) {
     onChange?.({
@@ -787,12 +1354,35 @@ function WorkItemFilterBar({ toolConfig, requirements, statusOptions, filters, o
     });
   }
 
-  function toggleListFilter(key, value) {
-    const currentValues = Array.isArray(filters?.[key]) ? filters[key] : [];
-    updateFilter({
+  function updateDraftFilters(nextValues) {
+    setDraftFilters((current) => ({
+      ...current,
+      ...nextValues,
+    }));
+  }
+
+  function toggleDraftListFilter(key, value) {
+    const currentValues = Array.isArray(draftFilters?.[key]) ? draftFilters[key] : [];
+    updateDraftFilters({
       [key]: currentValues.includes(value)
         ? currentValues.filter((item) => item !== value)
         : [...currentValues, value],
+    });
+  }
+
+  function applyAdvancedFilters() {
+    onChange?.({
+      ...createEmptyWorkItemFilters(),
+      ...draftFilters,
+      query: filters?.query || '',
+    });
+    onAdvancedOpenChange?.(false);
+  }
+
+  function clearAdvancedFilters() {
+    onChange?.({
+      ...createEmptyWorkItemFilters(),
+      query: filters?.query || '',
     });
   }
 
@@ -811,126 +1401,149 @@ function WorkItemFilterBar({ toolConfig, requirements, statusOptions, filters, o
         </label>
         <button
           type="button"
-          className={`workitem-filter-toggle ${advancedOpen ? 'is-active' : ''}`}
+          className={`workitem-filter-toggle ${hasAdvancedFilters ? 'is-applied' : ''}`}
           aria-expanded={advancedOpen}
-          onClick={() => setAdvancedOpen((current) => !current)}
+          onClick={() => onAdvancedOpenChange?.(true)}
         >
           高级筛选
         </button>
-        {activeFilters ? (
+        {hasAdvancedFilters ? (
           <button
             type="button"
             className="workitem-filter-clear"
-            title="清空搜索和筛选条件"
-            aria-label="清空搜索和筛选条件"
-            onClick={() => onChange?.(createEmptyWorkItemFilters())}
+            onClick={clearAdvancedFilters}
           >
-            ×
+            清空筛选
           </button>
         ) : null}
       </div>
       {advancedOpen ? (
-        <div className="workitem-filter-panel">
-          <fieldset className="workitem-filter-group">
-            <legend>处理状态</legend>
-            <div className="workitem-filter-options">
-              {statusNames.map((status) => (
-                <label key={status} className="workitem-filter-option">
-                  <input
-                    type="checkbox"
-                    checked={(filters?.statuses || []).includes(status)}
-                    onChange={() => toggleListFilter('statuses', status)}
-                  />
-                  <span>{status}</span>
-                </label>
-              ))}
+        <div className="workitem-submit-backdrop" role="presentation">
+          <section className="workitem-filter-dialog" role="dialog" aria-modal="true" aria-label={`高级筛选${toolConfig.listLabel}`}>
+            <div className="workitem-submit-header">
+              <div>
+                <h3>高级筛选</h3>
+              </div>
+              <button type="button" className="workitem-submit-close" onClick={() => onAdvancedOpenChange?.(false)}>
+                关闭
+              </button>
             </div>
-          </fieldset>
-          <fieldset className="workitem-filter-group">
-            <legend>优先级</legend>
-            <div className="workitem-filter-options">
-              {REQUIREMENT_PRIORITIES.map((priority) => (
-                <label key={priority} className="workitem-filter-option">
-                  <input
-                    type="checkbox"
-                    checked={(filters?.priorities || []).includes(priority)}
-                    onChange={() => toggleListFilter('priorities', priority)}
-                  />
-                  <span>{priority}</span>
+            <div className="workitem-filter-dialog-content">
+              <div className="workitem-filter-panel">
+                <fieldset className="workitem-filter-group">
+                  <legend>处理状态</legend>
+                  <div className="workitem-filter-options">
+                    {statusNames.map((status) => (
+                      <label key={status} className="workitem-filter-option">
+                        <input
+                          type="checkbox"
+                          checked={(draftFilters?.statuses || []).includes(status)}
+                          onChange={() => toggleDraftListFilter('statuses', status)}
+                        />
+                        <span>{status}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                {toolConfig.supportsPriority !== false ? (
+                  <fieldset className="workitem-filter-group">
+                    <legend>优先级</legend>
+                    <div className="workitem-filter-options">
+                      {REQUIREMENT_PRIORITIES.map((priority) => (
+                        <label key={priority} className="workitem-filter-option">
+                          <input
+                            type="checkbox"
+                            checked={(draftFilters?.priorities || []).includes(priority)}
+                            onChange={() => toggleDraftListFilter('priorities', priority)}
+                          />
+                          <span>{priority}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                ) : null}
+                <fieldset className="workitem-filter-group">
+                  <legend>处理人</legend>
+                  <div className="workitem-filter-options">
+                    {assignees.length > 0 ? assignees.map((person) => (
+                      <label key={person.key} className="workitem-filter-option">
+                        <input
+                          type="checkbox"
+                          checked={(draftFilters?.assigneeKeys || []).includes(person.key)}
+                          onChange={() => toggleDraftListFilter('assigneeKeys', person.key)}
+                        />
+                        <span>{person.name}</span>
+                      </label>
+                    )) : <span className="workitem-filter-empty">暂无处理人</span>}
+                  </div>
+                </fieldset>
+                <fieldset className="workitem-filter-group">
+                  <legend>提出人</legend>
+                  <div className="workitem-filter-options">
+                    {proposers.length > 0 ? proposers.map((person) => (
+                      <label key={person.key} className="workitem-filter-option">
+                        <input
+                          type="checkbox"
+                          checked={(draftFilters?.proposerKeys || []).includes(person.key)}
+                          onChange={() => toggleDraftListFilter('proposerKeys', person.key)}
+                        />
+                        <span>{person.name}</span>
+                      </label>
+                    )) : <span className="workitem-filter-empty">暂无提出人</span>}
+                  </div>
+                </fieldset>
+                <label className="workitem-filter-select">
+                  <span>时限状态</span>
+                  <select
+                    className="allow-text-select"
+                    value={draftFilters?.deadline || 'all'}
+                    onChange={(event) => updateDraftFilters({ deadline: event.target.value })}
+                  >
+                    {DEADLINE_FILTER_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
                 </label>
-              ))}
+                <div className="workitem-filter-date-range">
+                  <label className="workitem-filter-select">
+                    <span>{dateLabel}开始</span>
+                    <input
+                      className="allow-text-select"
+                      type="date"
+                      value={draftFilters?.dateFrom || ''}
+                      onChange={(event) => updateDraftFilters({ dateFrom: event.target.value })}
+                    />
+                  </label>
+                  <label className="workitem-filter-select">
+                    <span>{dateLabel}结束</span>
+                    <input
+                      className="allow-text-select"
+                      type="date"
+                      value={draftFilters?.dateTo || ''}
+                      onChange={(event) => updateDraftFilters({ dateTo: event.target.value })}
+                    />
+                  </label>
+                </div>
+              </div>
             </div>
-          </fieldset>
-          <fieldset className="workitem-filter-group">
-            <legend>处理人</legend>
-            <div className="workitem-filter-options">
-              {assignees.length > 0 ? assignees.map((person) => (
-                <label key={person.key} className="workitem-filter-option">
-                  <input
-                    type="checkbox"
-                    checked={(filters?.assigneeKeys || []).includes(person.key)}
-                    onChange={() => toggleListFilter('assigneeKeys', person.key)}
-                  />
-                  <span>{person.name}</span>
-                </label>
-              )) : <span className="workitem-filter-empty">暂无处理人</span>}
+            <div className="workitem-submit-actions">
+              <button type="button" className="workitem-submit-secondary" onClick={() => onAdvancedOpenChange?.(false)}>
+                取消
+              </button>
+              <button type="button" className="workitem-submit-primary" onClick={applyAdvancedFilters}>
+                应用筛选
+              </button>
             </div>
-          </fieldset>
-          <fieldset className="workitem-filter-group">
-            <legend>提出人</legend>
-            <div className="workitem-filter-options">
-              {proposers.length > 0 ? proposers.map((person) => (
-                <label key={person.key} className="workitem-filter-option">
-                  <input
-                    type="checkbox"
-                    checked={(filters?.proposerKeys || []).includes(person.key)}
-                    onChange={() => toggleListFilter('proposerKeys', person.key)}
-                  />
-                  <span>{person.name}</span>
-                </label>
-              )) : <span className="workitem-filter-empty">暂无提出人</span>}
-            </div>
-          </fieldset>
-          <label className="workitem-filter-select">
-            <span>时限状态</span>
-            <select
-              className="allow-text-select"
-              value={filters?.deadline || 'all'}
-              onChange={(event) => updateFilter({ deadline: event.target.value })}
-            >
-              {DEADLINE_FILTER_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-          <div className="workitem-filter-date-range">
-            <label className="workitem-filter-select">
-              <span>{dateLabel}开始</span>
-              <input
-                className="allow-text-select"
-                type="date"
-                value={filters?.dateFrom || ''}
-                onChange={(event) => updateFilter({ dateFrom: event.target.value })}
-              />
-            </label>
-            <label className="workitem-filter-select">
-              <span>{dateLabel}结束</span>
-              <input
-                className="allow-text-select"
-                type="date"
-                value={filters?.dateTo || ''}
-                onChange={(event) => updateFilter({ dateTo: event.target.value })}
-              />
-            </label>
-          </div>
+          </section>
         </div>
       ) : null}
     </section>
   );
 }
 
-function RelatedRequirementsSummary({ toolConfig, requirements, user }) {
+function RelatedRequirementsSummary({ toolConfig, requirements, user, onView }) {
   const mine = requirements.filter((requirement) => isRequirementRelatedToUser(requirement, user));
+  const canView = Boolean(getWorkItemPersonKey(user));
   const pendingStatus = getWorkItemWaitingStatus(toolConfig.toolId);
   const processingStatus = getWorkItemProcessingStatus(toolConfig.toolId);
   const pendingCount = mine.filter((requirement) => getWorkItemStatus(requirement) === pendingStatus).length;
@@ -944,15 +1557,15 @@ function RelatedRequirementsSummary({ toolConfig, requirements, user }) {
     <section className="related-summary" aria-label="与我有关">
       <div className="related-summary-title">与我有关</div>
       <div className="related-summary-items">
-        <RelatedSummaryItem label={pendingStatus} value={pendingCount} tone="pending" />
-        <RelatedSummaryItem label={processingStatus} value={processingCount} tone="processing" />
-        <RelatedSummaryItem label="快逾期" value={almostOverdueCount} tone="urgent" />
+        <RelatedSummaryItem label={pendingStatus} value={pendingCount} tone="pending" onView={() => onView?.('pending')} disabled={!canView} />
+        <RelatedSummaryItem label={processingStatus} value={processingCount} tone="processing" onView={() => onView?.('processing')} disabled={!canView} />
+        <RelatedSummaryItem label="快逾期" value={almostOverdueCount} tone="urgent" onView={() => onView?.('urgent')} disabled={!canView} />
       </div>
     </section>
   );
 }
 
-function WorkItemSubmitDialog({ toolConfig, projectId, statusOptions, priorityColors, mentionableUsers, onClose, onCreated }) {
+function WorkItemSubmitDialog({ toolConfig, projectId, cacheUserKey, statusOptions, priorityColors, mentionableUsers, onClose, onCreated }) {
   const dialogRef = useRef(null);
   const priorityOptions = REQUIREMENT_PRIORITIES.map((priority) => ({
     name: priority,
@@ -963,11 +1576,63 @@ function WorkItemSubmitDialog({ toolConfig, projectId, statusOptions, priorityCo
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState(defaultPriority);
   const [assignees, setAssignees] = useState([]);
+  const [needsAssigneeAssignment, setNeedsAssigneeAssignment] = useState(false);
+  const [requiresSubmissionAttachment, setRequiresSubmissionAttachment] = useState(false);
   const [expectedDays, setExpectedDays] = useState('');
+  const [contactPhone, setContactPhone] = useState('');
+  const [contactEmail, setContactEmail] = useState('');
+  const [allowDeveloperFollowUp, setAllowDeveloperFollowUp] = useState(false);
   const [attachments, setAttachments] = useState([]);
   const [status, setStatus] = useState({ type: 'idle', message: '' });
   const mentionCandidates = normalizeMentionCandidates(mentionableUsers);
   const statusPreview = normalizeRequirementStatusOptionsForClient(statusOptions)[0]?.name || '自动使用第一个状态';
+  const draftKey = createDraftKey(cacheUserKey, 'submit', projectId, toolConfig.toolId);
+
+  useLocalDraft(
+    cacheUserKey,
+    draftKey,
+    {
+      title,
+      description,
+      priority,
+      assignees,
+      needsAssigneeAssignment,
+      requiresSubmissionAttachment,
+      expectedDays,
+      contactPhone,
+      contactEmail,
+      allowDeveloperFollowUp,
+      attachments,
+    },
+    (draft) => {
+      setTitle(String(draft?.title || ''));
+      setDescription(String(draft?.description || ''));
+      setPriority(String(draft?.priority || defaultPriority));
+      setAssignees(Array.isArray(draft?.assignees) ? draft.assignees : []);
+      setNeedsAssigneeAssignment(Boolean(draft?.needsAssigneeAssignment));
+      setRequiresSubmissionAttachment(Boolean(draft?.requiresSubmissionAttachment));
+      setExpectedDays(String(draft?.expectedDays || ''));
+      setContactPhone(String(draft?.contactPhone || ''));
+      setContactEmail(String(draft?.contactEmail || ''));
+      setAllowDeveloperFollowUp(Boolean(draft?.allowDeveloperFollowUp));
+    },
+    (draft) => (
+      !draft.title
+      && !draft.description
+      && !draft.expectedDays
+      && !draft.contactPhone
+      && !draft.contactEmail
+      && !draft.allowDeveloperFollowUp
+      && !draft.needsAssigneeAssignment
+      && !draft.requiresSubmissionAttachment
+      && !(draft.assignees || []).length
+    ),
+  );
+
+  function closeAndDiscardDraft() {
+    void clearLocalDraft(draftKey);
+    onClose?.();
+  }
 
   function addAttachments(files) {
     const nextFiles = Array.from(files || []).filter((file) => isPasteSupportedAttachment(file));
@@ -1004,6 +1669,12 @@ function WorkItemSubmitDialog({ toolConfig, projectId, statusOptions, priorityCo
   }, [mentionableUsers]);
 
   useEffect(() => {
+    if (needsAssigneeAssignment && assignees.length > 0) {
+      setAssignees([]);
+    }
+  }, [needsAssigneeAssignment, assignees.length]);
+
+  useEffect(() => {
     function handleDocumentPaste(event) {
       if (status.type === 'loading') {
         return;
@@ -1034,8 +1705,18 @@ function WorkItemSubmitDialog({ toolConfig, projectId, statusOptions, priorityCo
       return;
     }
 
+    const assignmentError = validateWorkItemAssignmentChoice({
+      toolId: toolConfig.toolId,
+      assignees,
+      needsAssigneeAssignment,
+    });
+    if (assignmentError) {
+      setStatus({ type: 'error', message: assignmentError });
+      return;
+    }
+
     const parsedExpectedDays = trimmedExpectedDays ? Number(trimmedExpectedDays) : null;
-    if (trimmedExpectedDays && (!Number.isFinite(parsedExpectedDays) || parsedExpectedDays < 0)) {
+    if (toolConfig.supportsPriority !== false && trimmedExpectedDays && (!Number.isFinite(parsedExpectedDays) || parsedExpectedDays < 0)) {
       setStatus({ type: 'error', message: '期望时限必须是大于等于0的数字' });
       return;
     }
@@ -1048,21 +1729,33 @@ function WorkItemSubmitDialog({ toolConfig, projectId, statusOptions, priorityCo
         description: trimmedDescription,
         priority,
         assignees,
+        needsAssigneeAssignment,
+        requiresSubmissionAttachment,
         expectedDays: parsedExpectedDays,
+        contactInfo: toolConfig.toolId === 'feedback'
+          ? {
+              phone: contactPhone.trim(),
+              email: contactEmail.trim(),
+              allowDeveloperFollowUp,
+            }
+          : null,
         attachments,
       });
       const failedNotifications = (payload.notificationResults || []).filter((item) => !item.ok);
       if (failedNotifications.length > 0) {
+        const targetLabel = getAssignmentNotificationTargetLabel(payload.assignmentEscalated);
+        void clearLocalDraft(draftKey);
         onCreated?.({
           ...payload,
           submitNotice: {
             type: 'warning',
-            message: `${toolConfig.itemLabel}已提交，${failedNotifications.length} 个处理人通知发送失败`,
+            message: `${toolConfig.itemLabel}已提交，${failedNotifications.length} 个${targetLabel}通知发送失败`,
           },
         });
         return;
       }
 
+      void clearLocalDraft(draftKey);
       onCreated?.(payload);
     } catch (error) {
       setStatus({ type: 'error', message: formatErrorMessage(error) });
@@ -1077,7 +1770,7 @@ function WorkItemSubmitDialog({ toolConfig, projectId, statusOptions, priorityCo
             <h3>{toolConfig.submitLabel}</h3>
             <span>默认状态：{statusPreview}</span>
           </div>
-          <button type="button" className="workitem-submit-close" disabled={status.type === 'loading'} onClick={onClose}>
+          <button type="button" className="workitem-submit-close" disabled={status.type === 'loading'} onClick={closeAndDiscardDraft}>
             关闭
           </button>
         </div>
@@ -1108,42 +1801,127 @@ function WorkItemSubmitDialog({ toolConfig, projectId, statusOptions, priorityCo
             />
           </label>
 
-          <div className="workitem-submit-grid">
-            <label className="workitem-submit-field">
-              <span>优先级</span>
-              <select className="allow-text-select" value={priority} disabled={status.type === 'loading'} onChange={(event) => setPriority(event.target.value)}>
-                {priorityOptions.map((option) => (
-                  <option key={option.name} value={option.name}>
-                    {option.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+          {toolConfig.supportsPriority !== false ? (
+            <>
+              <div className="workitem-submit-grid">
+                <label className="workitem-submit-field">
+                  <span>优先级</span>
+                  <select className="allow-text-select" value={priority} disabled={status.type === 'loading'} onChange={(event) => setPriority(event.target.value)}>
+                    {priorityOptions.map((option) => (
+                      <option key={option.name} value={option.name}>
+                        {option.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-            <label className="workitem-submit-field">
-              <span>期望时限（天）</span>
-              <input
-                className="allow-text-select"
-                type="number"
-                min="0"
-                step="0.1"
-                value={expectedDays}
-                disabled={status.type === 'loading'}
-                placeholder="可不填"
-                onChange={(event) => setExpectedDays(event.target.value)}
-              />
-            </label>
-          </div>
+                <label className="workitem-submit-field">
+                  <span>期望时限（天）</span>
+                  <input
+                    className="allow-text-select"
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value={expectedDays}
+                    disabled={status.type === 'loading'}
+                    placeholder="可不填"
+                    onChange={(event) => setExpectedDays(event.target.value)}
+                  />
+                </label>
+                {toolConfig.toolId === 'requirements' ? (
+                  <label className="workitem-submit-field workitem-submit-field-wide">
+                    <span>需要提交附件</span>
+                    <select
+                      className="allow-text-select"
+                      value={requiresSubmissionAttachment ? '是' : '否'}
+                      disabled={status.type === 'loading'}
+                      onChange={(event) => setRequiresSubmissionAttachment(event.target.value === '是')}
+                    >
+                      <option value="否">否</option>
+                      <option value="是">是</option>
+                    </select>
+                  </label>
+                ) : null}
+              </div>
 
-          <MentionUserMultiSelect
-            selectedPeople={assignees}
-            candidates={mentionCandidates}
-            onChange={setAssignees}
-            disabled={status.type === 'loading'}
-            label="处理人员"
-            emptyText="暂无可选处理人员"
-            selectedLabel="已选择处理人员"
-          />
+              <section
+                className={`workitem-assignee-choice ${needsAssigneeAssignment ? 'is-undetermined' : ''}`}
+                aria-label="处理人员选择"
+              >
+                {toolConfig.supportsUnassignedRouting && supportsUnassignedWorkItemRouting(toolConfig.toolId) ? (
+                  <button
+                    type="button"
+                    className="workitem-assignee-undetermined"
+                    aria-pressed={needsAssigneeAssignment}
+                    disabled={status.type === 'loading'}
+                    onClick={() => {
+                      setNeedsAssigneeAssignment((current) => {
+                        const next = !current;
+                        if (next) {
+                          setAssignees([]);
+                        }
+                        return next;
+                      });
+                      setStatus({ type: 'idle', message: '' });
+                    }}
+                  >
+                    不知道该由谁处理
+                  </button>
+                ) : null}
+                <MentionUserMultiSelect
+                  selectedPeople={assignees}
+                  candidates={mentionCandidates}
+                  onChange={setAssignees}
+                  disabled={status.type === 'loading' || needsAssigneeAssignment}
+                  label="处理人员"
+                  emptyText="暂无可选处理人员"
+                  selectedLabel="已选择处理人员"
+                />
+              </section>
+            </>
+          ) : (
+            <section className="feedback-contact-fields" aria-label="联系信息">
+              <div className="feedback-contact-heading">
+                <strong>联系信息</strong>
+                <span>当前飞书身份将自动关联</span>
+              </div>
+              <div className="workitem-submit-grid">
+                <label className="workitem-submit-field">
+                  <span>联系电话</span>
+                  <input
+                    className="allow-text-select"
+                    type="tel"
+                    value={contactPhone}
+                    maxLength={50}
+                    disabled={status.type === 'loading'}
+                    placeholder="可不填"
+                    onChange={(event) => setContactPhone(event.target.value)}
+                  />
+                </label>
+                <label className="workitem-submit-field">
+                  <span>联系邮箱</span>
+                  <input
+                    className="allow-text-select"
+                    type="email"
+                    value={contactEmail}
+                    maxLength={200}
+                    disabled={status.type === 'loading'}
+                    placeholder="可不填"
+                    onChange={(event) => setContactEmail(event.target.value)}
+                  />
+                </label>
+              </div>
+              <label className="feedback-contact-follow-up">
+                <input
+                  type="checkbox"
+                  checked={allowDeveloperFollowUp}
+                  disabled={status.type === 'loading'}
+                  onChange={(event) => setAllowDeveloperFollowUp(event.target.checked)}
+                />
+                <span>允许开发者回访</span>
+              </label>
+            </section>
+          )}
 
           <div className="workitem-submit-field">
             <span>附件</span>
@@ -1187,7 +1965,7 @@ function WorkItemSubmitDialog({ toolConfig, projectId, statusOptions, priorityCo
           ) : null}
 
           <div className="workitem-submit-actions">
-            <button type="button" className="workitem-submit-secondary" disabled={status.type === 'loading'} onClick={onClose}>
+            <button type="button" className="workitem-submit-secondary" disabled={status.type === 'loading'} onClick={closeAndDiscardDraft}>
               取消
             </button>
             <button type="submit" className="workitem-submit-primary" disabled={!title.trim() || status.type === 'loading'}>
@@ -1201,7 +1979,7 @@ function WorkItemSubmitDialog({ toolConfig, projectId, statusOptions, priorityCo
   );
 }
 
-function WorkItemEditDialog({ toolConfig, projectId, record, fields, mentionableUsers, onClose, onSaved }) {
+function WorkItemEditDialog({ toolConfig, projectId, cacheUserKey, record, fields, mentionableUsers, onClose, onSaved }) {
   const dialogRef = useRef(null);
   const rawFields = record?.rawFields && typeof record.rawFields === 'object' ? record.rawFields : {};
   const editableFields = (Array.isArray(fields) ? fields : []).filter((field) => field?.fieldName);
@@ -1213,6 +1991,28 @@ function WorkItemEditDialog({ toolConfig, projectId, record, fields, mentionable
   const [status, setStatus] = useState({ type: 'idle', message: '' });
   const selectedFieldSet = new Set(selectedFieldNames);
   const selectedFields = editableFields.filter((field) => selectedFieldSet.has(field.fieldName));
+  const draftKey = createDraftKey(cacheUserKey, 'edit', projectId, toolConfig.toolId, record.recordId);
+
+  useLocalDraft(
+    cacheUserKey,
+    draftKey,
+    { selectedFieldNames, fieldValues, notifyRelated, notifyUsers },
+    (draft) => {
+      setSelectedFieldNames(Array.isArray(draft?.selectedFieldNames) ? draft.selectedFieldNames.filter((item) => typeof item === 'string') : []);
+      setFieldValues((current) => ({
+        ...current,
+        ...(draft?.fieldValues && typeof draft.fieldValues === 'object' ? draft.fieldValues : {}),
+      }));
+      setNotifyRelated(Boolean(draft?.notifyRelated));
+      setNotifyUsers(Array.isArray(draft?.notifyUsers) ? draft.notifyUsers : []);
+    },
+    (draft) => !(draft.selectedFieldNames || []).length,
+  );
+
+  function closeAndDiscardDraft() {
+    void clearLocalDraft(draftKey);
+    onClose?.();
+  }
 
   useEffect(() => {
     setNotifyUsers((current) => filterSelectedMentionedUsers(current, mentionCandidates));
@@ -1309,6 +2109,7 @@ function WorkItemEditDialog({ toolConfig, projectId, record, fields, mentionable
         notifyRelated,
         notifyUsers,
       });
+      void clearLocalDraft(draftKey);
       onSaved?.(payload);
     } catch (error) {
       setStatus({ type: 'error', message: formatErrorMessage(error) });
@@ -1323,7 +2124,7 @@ function WorkItemEditDialog({ toolConfig, projectId, record, fields, mentionable
             <h3>编辑{toolConfig.itemLabel}</h3>
             <span>先勾选字段，再修改内容</span>
           </div>
-          <button type="button" className="workitem-submit-close" disabled={status.type === 'loading'} onClick={onClose}>
+          <button type="button" className="workitem-submit-close" disabled={status.type === 'loading'} onClick={closeAndDiscardDraft}>
             关闭
           </button>
         </div>
@@ -1394,7 +2195,7 @@ function WorkItemEditDialog({ toolConfig, projectId, record, fields, mentionable
           </div>
 
           <div className="workitem-submit-actions">
-            <button type="button" className="workitem-submit-secondary" disabled={status.type === 'loading'} onClick={onClose}>
+            <button type="button" className="workitem-submit-secondary" disabled={status.type === 'loading'} onClick={closeAndDiscardDraft}>
               取消
             </button>
             <button type="submit" className="workitem-submit-primary" disabled={selectedFields.length === 0 || status.type === 'loading'}>
@@ -1420,6 +2221,17 @@ function EditableFieldControl({
   onAttachmentFiles,
   onAttachmentPaste,
 }) {
+  if (isFeedbackContactInfoField(field, toolConfig)) {
+    const contact = normalizeEditableFeedbackContactInfo(value);
+    return (
+      <FeedbackContactInfoEditor
+        value={contact}
+        disabled={disabled}
+        onChange={onChange}
+      />
+    );
+  }
+
   if (isAttachmentField(field, value)) {
     const attachmentValue = value || { existing: [], newFiles: [] };
     return (
@@ -1593,11 +2405,71 @@ function EditableFieldControl({
   );
 }
 
-function RelatedSummaryItem({ label, value, tone }) {
+function FeedbackContactInfoEditor({ value, disabled, onChange }) {
+  function update(nextValues) {
+    onChange({
+      ...value,
+      ...nextValues,
+    });
+  }
+
+  return (
+    <section className="feedback-contact-fields feedback-contact-fields-edit" aria-label="联系信息数据">
+      <div className="feedback-contact-heading">
+        <strong>联系信息数据</strong>
+        <span>飞书身份由系统保留</span>
+      </div>
+      <div className="feedback-contact-readonly">
+        <span>飞书用户：{value.isFeishuUser ? '是' : '否'}</span>
+        <span>飞书用户ID：{value.feishuUserId || '未填写'}</span>
+      </div>
+      <div className="workitem-submit-grid">
+        <label className="workitem-edit-control">
+          <span>联系电话</span>
+          <input
+            className="allow-text-select"
+            type="tel"
+            maxLength={50}
+            value={value.phone}
+            disabled={disabled}
+            onChange={(event) => update({ phone: event.target.value })}
+          />
+        </label>
+        <label className="workitem-edit-control">
+          <span>联系邮箱</span>
+          <input
+            className="allow-text-select"
+            type="email"
+            maxLength={200}
+            value={value.email}
+            disabled={disabled}
+            onChange={(event) => update({ email: event.target.value })}
+          />
+        </label>
+      </div>
+      <label className="feedback-contact-follow-up">
+        <input
+          type="checkbox"
+          checked={value.allowDeveloperFollowUp}
+          disabled={disabled}
+          onChange={(event) => update({ allowDeveloperFollowUp: event.target.checked })}
+        />
+        <span>允许开发者回访</span>
+      </label>
+    </section>
+  );
+}
+
+function RelatedSummaryItem({ label, value, tone, onView, disabled }) {
   return (
     <div className={`related-summary-item related-summary-item-${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
+      <div className="related-summary-item-data">
+        <span>{label}</span>
+        <strong>{value}</strong>
+      </div>
+      <button type="button" className="related-summary-view" onClick={onView} disabled={disabled}>
+        查看
+      </button>
     </div>
   );
 }
@@ -1613,6 +2485,26 @@ function RequirementGroups({
   onStatusToggle,
   onRequirementSelect,
 }) {
+  if (toolConfig.supportsPriority === false) {
+    return (
+      <div className="requirement-groups feedback-groups">
+        {requirements.length > 0 ? (
+          <RequirementStatusGroups
+            toolConfig={toolConfig}
+            priority=""
+            requirements={requirements}
+            user={user}
+            statusCollapseOverrides={statusCollapseOverrides}
+            onStatusToggle={onStatusToggle}
+            onRequirementSelect={onRequirementSelect}
+          />
+        ) : (
+          <div className="requirement-empty">暂无{toolConfig.itemLabel}</div>
+        )}
+      </div>
+    );
+  }
+
   const groupedRequirements = groupRequirementsByPriority(requirements);
 
   return (
@@ -1674,7 +2566,7 @@ function RequirementStatusGroups({ toolConfig, priority, requirements, user, sta
   return (
     <div className="requirement-status-groups">
       {groupedStatuses.map((group) => {
-        const groupId = `${toolConfig.toolId}:${priority}:${group.status}`;
+        const groupId = [toolConfig.toolId, priority, group.status].filter(Boolean).join(':');
         const override = statusCollapseOverrides?.[groupId];
         const isCollapsed = typeof override === 'boolean'
           ? override
@@ -1736,9 +2628,14 @@ function RequirementItem({ toolConfig, requirement, user, onSelect }) {
       <p className="requirement-description" title={requirement.description || '暂无描述'}>
         {requirement.description || '暂无描述'}
       </p>
-      <span className="requirement-state" title={requirement.requirementStatus || '未设置状态'}>
-        {requirement.requirementStatus || '未设置状态'}
-      </span>
+      <div className="requirement-state-row">
+        <span className="requirement-state" title={requirement.requirementStatus || '未设置状态'}>
+          {requirement.requirementStatus || '未设置状态'}
+        </span>
+        {toolConfig.toolId === 'feedback' && requirement.channel ? (
+          <span className="feedback-channel" title={requirement.channel}>{requirement.channel}</span>
+        ) : null}
+      </div>
       <AssigneeList assignees={assignees} user={user} />
       {shouldShowWorkItemRemainingTime(toolConfig.toolId, requirement) ? (
         <span className={`requirement-remaining ${Number(requirement.remainingDays) < 0 ? 'is-overdue' : ''}`}>
@@ -1756,6 +2653,7 @@ function BitableRecordDetail({
   record,
   fields,
   user,
+  cacheUserKey,
   projectId,
   mentionableUsers,
   commentsFieldName,
@@ -1765,15 +2663,31 @@ function BitableRecordDetail({
   editableFields,
   canDelete,
   isSuperAdmin,
+  isDevelopmentSuperAdmin,
   onRequirementUpdated,
   onRequirementDeleted,
   onBack,
 }) {
   const rawFields = record?.rawFields && typeof record.rawFields === 'object' ? record.rawFields : {};
-  const displayFields = buildDisplayFields(fields, rawFields, [commentsFieldName, statusChangeLogFieldName]);
+  const hiddenFieldNames = [
+    commentsFieldName,
+    statusChangeLogFieldName,
+    record.submittedAttachmentsFieldName,
+  ].filter(Boolean);
+  const displayFields = buildDisplayFields(fields, rawFields, hiddenFieldNames);
   const showRemainingTime = shouldShowWorkItemRemainingTime(toolConfig.toolId, record);
   const canUpdateStatus = isRequirementRelatedToUser(record, user);
-  const canChangeAssignees = Boolean(isSuperAdmin || canUpdateStatus);
+  const canSubmitRequirementAttachments = Boolean(
+    toolConfig.toolId === 'requirements'
+    && canUpdateStatus
+    && record.requiresSubmissionAttachment,
+  );
+  const canChangeAssignees = canManageWorkItemAssignees({
+    toolId: toolConfig.toolId,
+    isSuperAdmin,
+    isDevelopmentSuperAdmin,
+    isCurrentAssignee: canUpdateStatus,
+  });
   const canEditContent = Boolean(isSuperAdmin || isWorkItemSubmitter(record, user));
   const [deleteStatus, setDeleteStatus] = useState({ type: 'idle', message: '' });
   const [editOpen, setEditOpen] = useState(false);
@@ -1868,6 +2782,7 @@ function BitableRecordDetail({
         <WorkItemEditDialog
           toolConfig={toolConfig}
           projectId={projectId}
+          cacheUserKey={cacheUserKey}
           record={record}
           fields={editableFields}
           mentionableUsers={mentionableUsers}
@@ -1910,8 +2825,27 @@ function BitableRecordDetail({
                 <RequirementStatusUpdatePanel
                   toolConfig={toolConfig}
                   projectId={projectId}
+                  cacheUserKey={cacheUserKey}
                   record={record}
                   statusOptions={statusOptions}
+                  onRequestSubmissionAttachments={() => setActiveAction('submission-attachments')}
+                  onUpdated={onRequirementUpdated}
+                  embedded
+                />
+              </DetailActionSection>
+            ) : null}
+            {canSubmitRequirementAttachments ? (
+              <DetailActionSection
+                actionId="submission-attachments"
+                title="提交附件"
+                isOpen={activeAction === 'submission-attachments'}
+                onToggle={setActiveAction}
+              >
+                <RequirementSubmissionAttachmentsPanel
+                  toolConfig={toolConfig}
+                  projectId={projectId}
+                  record={record}
+                  commentsParseError={record.commentsParseError || ''}
                   onUpdated={onRequirementUpdated}
                   embedded
                 />
@@ -1927,6 +2861,7 @@ function BitableRecordDetail({
                 <WorkItemAssigneeChangePanel
                   toolConfig={toolConfig}
                   projectId={projectId}
+                  cacheUserKey={cacheUserKey}
                   record={record}
                   user={user}
                   mentionableUsers={mentionableUsers}
@@ -1945,10 +2880,12 @@ function BitableRecordDetail({
               <RecordCommentsPanel
                 toolConfig={toolConfig}
                 projectId={projectId}
+                cacheUserKey={cacheUserKey}
                 record={record}
                 user={user}
                 mentionableUsers={mentionableUsers}
                 highlightCommentId={highlightCommentId}
+                onCommentsUpdated={(comments) => onRequirementUpdated?.({ ...record, comments })}
                 embedded
               />
             </DetailActionSection>
@@ -1977,6 +2914,10 @@ function DetailActionSection({ actionId, title, isOpen, onToggle, children }) {
 }
 
 function isWideBitableDetailField(field, value) {
+  if (isFeedbackContactInfoField(field)) {
+    return true;
+  }
+
   if (isAttachmentField(field, value)) {
     return true;
   }
@@ -2022,11 +2963,47 @@ function BitableFieldValue({ field, value, user, projectId, toolConfig }) {
     return <RatingFieldValue value={value} />;
   }
 
+  if (isFeedbackContactInfoField(field, toolConfig)) {
+    return <FeedbackContactInfoValue value={value} />;
+  }
+
   if (isCurrencyField(field, value)) {
     return <span>{formatCurrencyValue(value)}</span>;
   }
 
   return <GenericFieldValue value={value} />;
+}
+
+function FeedbackContactInfoValue({ value }) {
+  const contact = parseFeedbackContactInfoForClient(value);
+  if (!contact.valid) {
+    return <span className="bitable-empty-value">联系信息数据格式异常</span>;
+  }
+
+  return (
+    <dl className="feedback-contact-info">
+      <div>
+        <dt>飞书用户</dt>
+        <dd>{contact.isFeishuUser ? '是' : '否'}</dd>
+      </div>
+      <div>
+        <dt>飞书用户ID</dt>
+        <dd>{contact.feishuUserId || '未填写'}</dd>
+      </div>
+      <div>
+        <dt>联系电话</dt>
+        <dd>{contact.phone || '未填写'}</dd>
+      </div>
+      <div>
+        <dt>联系邮箱</dt>
+        <dd>{contact.email || '未填写'}</dd>
+      </div>
+      <div>
+        <dt>允许开发者回访</dt>
+        <dd>{contact.allowDeveloperFollowUp ? '是' : '否'}</dd>
+      </div>
+    </dl>
+  );
 }
 
 function SelectFieldValue({ field, value }) {
@@ -2190,7 +3167,16 @@ function GenericFieldValue({ value }) {
   return <span className="bitable-generic-value">{text}</span>;
 }
 
-function RequirementStatusUpdatePanel({ toolConfig, projectId, record, statusOptions, onUpdated, embedded = false }) {
+function RequirementStatusUpdatePanel({
+  toolConfig,
+  projectId,
+  cacheUserKey,
+  record,
+  statusOptions,
+  onRequestSubmissionAttachments,
+  onUpdated,
+  embedded = false,
+}) {
   const options = normalizeRequirementStatusOptionsForClient(statusOptions);
   const currentStatus = String(record.requirementStatus || '未设置状态').trim();
   const selectableOptions = ensureStatusOptionExists(options, currentStatus);
@@ -2199,6 +3185,24 @@ function RequirementStatusUpdatePanel({ toolConfig, projectId, record, statusOpt
   const [message, setMessage] = useState('');
   const [notifyProposer, setNotifyProposer] = useState(true);
   const [status, setStatus] = useState({ type: 'idle', message: '' });
+  const [pendingConfirmation, setPendingConfirmation] = useState(null);
+  const draftKey = createDraftKey(cacheUserKey, 'status', projectId, toolConfig.toolId, record.recordId);
+
+  useLocalDraft(
+    cacheUserKey,
+    draftKey,
+    { newStatus, message, notifyProposer },
+    (draft) => {
+      setNewStatus(String(draft?.newStatus || firstDifferentStatus));
+      setMessage(String(draft?.message || ''));
+      setNotifyProposer(draft?.notifyProposer !== false);
+    },
+    (draft) => (
+      !draft.message
+      && draft.newStatus === firstDifferentStatus
+      && draft.notifyProposer !== false
+    ),
+  );
 
   useEffect(() => {
     const nextOptions = ensureStatusOptionExists(normalizeRequirementStatusOptionsForClient(statusOptions), currentStatus);
@@ -2206,12 +3210,12 @@ function RequirementStatusUpdatePanel({ toolConfig, projectId, record, statusOpt
     setMessage('');
     setNotifyProposer(true);
     setStatus({ type: 'idle', message: '' });
+    setPendingConfirmation(null);
   }, [record.recordId, currentStatus, statusOptions]);
 
-  async function handleSubmit(event) {
-    event.preventDefault();
-    const trimmedStatus = newStatus.trim();
-    const trimmedMessage = message.trim();
+  async function applyStatusUpdate(values, skipAttachmentCheck = false) {
+    const trimmedStatus = String(values.newStatus || '').trim();
+    const trimmedMessage = String(values.message || '').trim();
     if (!trimmedStatus || status.type === 'loading') {
       setStatus({ type: 'error', message: '请选择处理状态' });
       return;
@@ -2222,18 +3226,35 @@ function RequirementStatusUpdatePanel({ toolConfig, projectId, record, statusOpt
       return;
     }
 
+    if (
+      !skipAttachmentCheck
+      && shouldConfirmStatusUpdateWithoutSubmissionAttachments({
+        toolId: toolConfig.toolId,
+        requiresSubmissionAttachment: record.requiresSubmissionAttachment,
+        submittedAttachments: record.submittedAttachments,
+      })
+    ) {
+      setPendingConfirmation({
+        newStatus: trimmedStatus,
+        message: trimmedMessage,
+        notifyProposer: values.notifyProposer,
+      });
+      return;
+    }
+
     setStatus({ type: 'loading', message: '正在更新处理状态' });
 
     try {
       const payload = await updateRequirementStatus(toolConfig, projectId, record.recordId, {
         newStatus: trimmedStatus,
         message: trimmedMessage,
-        notifyProposer,
+        notifyProposer: values.notifyProposer,
       });
       const updatedItem = payload.item || payload.requirement;
       if (updatedItem) {
         onUpdated?.(updatedItem);
       }
+      void clearLocalDraft(draftKey);
 
       const failedNotifications = (payload.notificationResults || []).filter((item) => !item.ok);
       if (failedNotifications.length > 0) {
@@ -2247,55 +3268,285 @@ function RequirementStatusUpdatePanel({ toolConfig, projectId, record, statusOpt
     }
   }
 
+  function handleSubmit(event) {
+    event.preventDefault();
+    void applyStatusUpdate({ newStatus, message, notifyProposer });
+  }
+
   return (
-    <section className="requirement-status-update" aria-label="更新处理状态">
-      {embedded ? <p className="detail-action-context">当前：{currentStatus}</p> : (
-        <div className="requirement-status-update-header">
-          <h3>更新处理状态</h3>
-          <span>当前：{currentStatus}</span>
+    <>
+      <section className="requirement-status-update" aria-label="更新处理状态">
+        {embedded ? <p className="detail-action-context">当前：{currentStatus}</p> : (
+          <div className="requirement-status-update-header">
+            <h3>更新处理状态</h3>
+            <span>当前：{currentStatus}</span>
+          </div>
+        )}
+        <form className="requirement-status-update-form" onSubmit={handleSubmit}>
+          <label className="requirement-status-update-field">
+            <span>新的处理状态</span>
+            <select
+              className="allow-text-select"
+              value={newStatus}
+              disabled={status.type === 'loading'}
+              onChange={(event) => setNewStatus(event.target.value)}
+            >
+              <option value="">请选择处理状态</option>
+              {selectableOptions.map((option) => (
+                <option key={option.name} value={option.name} disabled={option.name === currentStatus}>
+                  {option.name}{option.name === currentStatus ? '（当前）' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="requirement-status-update-field">
+            <span>留言</span>
+            <textarea
+              className="allow-text-select"
+              rows={3}
+              maxLength={2000}
+              placeholder="可选填写处理状态变动说明"
+              value={message}
+              disabled={status.type === 'loading'}
+              onChange={(event) => setMessage(event.target.value)}
+            />
+          </label>
+          <div className="requirement-status-update-actions">
+            <label className="requirement-status-update-notify">
+              <input
+                type="checkbox"
+                checked={notifyProposer}
+                disabled={status.type === 'loading'}
+                onChange={(event) => setNotifyProposer(event.target.checked)}
+              />
+              <span>是否通知提出人员</span>
+            </label>
+            <button type="submit" disabled={!newStatus || newStatus === currentStatus || status.type === 'loading'}>
+              {status.type === 'loading' ? '更新中' : '更新'}
+            </button>
+          </div>
+          {status.message ? <p className={`record-comment-status record-comment-status-${status.type}`}>{status.message}</p> : null}
+        </form>
+      </section>
+      {pendingConfirmation ? (
+        <div className="workitem-submit-backdrop requirement-attachment-confirm-backdrop" role="presentation">
+          <section className="requirement-attachment-confirm-dialog" role="dialog" aria-modal="true" aria-label="确认更新处理状态">
+            <h3>还未提交任何附件</h3>
+            <p>当前需求要求提交附件，但还没有提交过任何附件，是否继续更新处理状态？</p>
+            <div className="requirement-attachment-confirm-actions">
+              <button
+                type="button"
+                className="workitem-submit-secondary"
+                onClick={() => {
+                  setPendingConfirmation(null);
+                  onRequestSubmissionAttachments?.();
+                }}
+              >
+                提交附件
+              </button>
+              <button
+                type="button"
+                className="workitem-submit-primary"
+                onClick={() => {
+                  const values = pendingConfirmation;
+                  setPendingConfirmation(null);
+                  void applyStatusUpdate(values, true);
+                }}
+              >
+                继续更新
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function RequirementSubmissionAttachmentsPanel({
+  toolConfig,
+  projectId,
+  record,
+  commentsParseError,
+  onUpdated,
+  embedded = false,
+}) {
+  const rawFields = record?.rawFields && typeof record.rawFields === 'object' ? record.rawFields : {};
+  const fieldName = record.submittedAttachmentsFieldName || '提交附件';
+  const recordAttachments = normalizeAttachmentItems(rawFields[fieldName], projectId, toolConfig);
+  const recordAttachmentKey = buildAttachmentTokenSetKey(recordAttachments);
+  const [existingAttachments, setExistingAttachments] = useState(recordAttachments);
+  const [newFiles, setNewFiles] = useState([]);
+  const [notifyProposer, setNotifyProposer] = useState(true);
+  const [status, setStatus] = useState({ type: 'idle', message: '' });
+  const isDisabled = status.type === 'loading' || Boolean(commentsParseError);
+  const hasChanges = newFiles.length > 0
+    || buildAttachmentTokenSetKey(existingAttachments) !== recordAttachmentKey;
+
+  useEffect(() => {
+    setExistingAttachments(recordAttachments);
+    setNewFiles([]);
+  }, [record.recordId, recordAttachmentKey]);
+
+  useEffect(() => {
+    setNotifyProposer(true);
+    setStatus({ type: 'idle', message: '' });
+  }, [record.recordId]);
+
+  function addFiles(files) {
+    const nextFiles = Array.from(files || []);
+    if (nextFiles.length === 0) {
+      return;
+    }
+
+    setNewFiles((current) => mergeAttachmentFiles(current, nextFiles));
+    setStatus({ type: 'idle', message: '' });
+  }
+
+  function handlePaste(event) {
+    if (isDisabled) {
+      return;
+    }
+
+    const files = extractSupportedAttachmentsFromClipboard(event.clipboardData);
+    if (files.length === 0) {
+      setStatus({ type: 'error', message: '剪贴板中没有可粘贴的图片或视频' });
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    addFiles(files);
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    if (isDisabled) {
+      return;
+    }
+    if (!hasChanges) {
+      setStatus({ type: 'error', message: '提交附件没有变化' });
+      return;
+    }
+
+    setStatus({ type: 'loading', message: '正在应用附件变动' });
+    try {
+      const payload = await updateRequirementSubmissionAttachments(projectId, record.recordId, {
+        existingAttachments,
+        newFiles,
+        notifyProposer,
+      });
+      const updatedItem = payload.item || payload.requirement;
+      if (updatedItem) {
+        onUpdated?.(updatedItem);
+      }
+
+      const failedNotifications = (payload.notificationResults || []).filter((item) => !item.ok);
+      if (failedNotifications.length > 0) {
+        setStatus({
+          type: 'warning',
+          message: `附件变动已应用，${failedNotifications.length} 个提出人通知发送失败`,
+        });
+        return;
+      }
+
+      setStatus({ type: 'success', message: '附件变动已应用' });
+    } catch (error) {
+      setStatus({ type: 'error', message: formatErrorMessage(error) });
+    }
+  }
+
+  return (
+    <section className="requirement-submission-attachments" aria-label="提交附件">
+      {embedded ? (
+        <p className="detail-action-context">已提交 {recordAttachments.length} 个附件</p>
+      ) : (
+        <div className="requirement-submission-attachments-header">
+          <h3>提交附件</h3>
+          <span>{recordAttachments.length} 个</span>
         </div>
       )}
-      <form className="requirement-status-update-form" onSubmit={handleSubmit}>
-        <label className="requirement-status-update-field">
-          <span>新的处理状态</span>
-          <select
+      <form className="requirement-submission-attachments-form" onSubmit={handleSubmit}>
+        <div className="requirement-submission-attachment-list" aria-label="已经提交的附件">
+          {existingAttachments.length === 0 ? (
+            <p className="requirement-submission-attachment-empty">还没有提交附件</p>
+          ) : existingAttachments.map((attachment, index) => (
+            <div key={`${attachment.fileToken || attachment.name}-${index}`} className="requirement-submission-attachment-row">
+              <div>
+                {attachment.url ? (
+                  <a href={attachment.url} target="_blank" rel="noreferrer">
+                    {attachment.name || '附件'}
+                  </a>
+                ) : (
+                  <strong>{attachment.name || '附件'}</strong>
+                )}
+                <small>{formatFileSize(attachment.size)}</small>
+              </div>
+              <button
+                type="button"
+                disabled={isDisabled}
+                onClick={() => setExistingAttachments((current) => current.filter((_, currentIndex) => currentIndex !== index))}
+              >
+                删除
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div
+          className="workitem-attachment-dropzone allow-text-select"
+          tabIndex={isDisabled ? -1 : 0}
+          role="region"
+          aria-label="提交附件粘贴区域"
+          onPaste={handlePaste}
+        >
+          <strong>添加附件</strong>
+          <small>可选择文件，图片或视频也可直接粘贴</small>
+          <input
             className="allow-text-select"
-            value={newStatus}
-            disabled={status.type === 'loading'}
-            onChange={(event) => setNewStatus(event.target.value)}
-          >
-            <option value="">请选择处理状态</option>
-            {selectableOptions.map((option) => (
-              <option key={option.name} value={option.name} disabled={option.name === currentStatus}>
-                {option.name}{option.name === currentStatus ? '（当前）' : ''}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="requirement-status-update-field">
-          <span>留言</span>
-          <textarea
-            className="allow-text-select"
-            rows={3}
-            maxLength={2000}
-            placeholder="可选填写处理状态变动说明"
-            value={message}
-            disabled={status.type === 'loading'}
-            onChange={(event) => setMessage(event.target.value)}
+            type="file"
+            multiple
+            disabled={isDisabled}
+            onChange={(event) => {
+              addFiles(event.target.files || []);
+              event.target.value = '';
+            }}
           />
-        </label>
-        <div className="requirement-status-update-actions">
+        </div>
+
+        {newFiles.length > 0 ? (
+          <div className="workitem-submit-attachments" aria-label="待新增附件">
+            {newFiles.map((file, index) => (
+              <button
+                key={`${file.name}-${file.size}-${file.lastModified}-${index}`}
+                type="button"
+                disabled={isDisabled}
+                onClick={() => setNewFiles((current) => current.filter((_, currentIndex) => currentIndex !== index))}
+                title="点击移除待新增附件"
+              >
+                <span>{file.name}</span>
+                <small>{formatFileSize(file.size)}</small>
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        {commentsParseError ? (
+          <p className="record-comments-error">{commentsParseError}，请先修复多维表格中的留言字段。</p>
+        ) : null}
+
+        <div className="requirement-submission-attachment-actions">
           <label className="requirement-status-update-notify">
             <input
               type="checkbox"
               checked={notifyProposer}
-              disabled={status.type === 'loading'}
+              disabled={isDisabled}
               onChange={(event) => setNotifyProposer(event.target.checked)}
             />
             <span>是否通知提出人员</span>
           </label>
-          <button type="submit" disabled={!newStatus || newStatus === currentStatus || status.type === 'loading'}>
-            {status.type === 'loading' ? '更新中' : '更新'}
+          <button type="submit" disabled={isDisabled || !hasChanges}>
+            {status.type === 'loading' ? '变动中' : '变动'}
           </button>
         </div>
         {status.message ? <p className={`record-comment-status record-comment-status-${status.type}`}>{status.message}</p> : null}
@@ -2304,7 +3555,7 @@ function RequirementStatusUpdatePanel({ toolConfig, projectId, record, statusOpt
   );
 }
 
-function WorkItemAssigneeChangePanel({ toolConfig, projectId, record, user, mentionableUsers, commentsParseError, onUpdated, embedded = false }) {
+function WorkItemAssigneeChangePanel({ toolConfig, projectId, cacheUserKey, record, user, mentionableUsers, commentsParseError, onUpdated, embedded = false }) {
   const currentAssignees = Array.isArray(record.assignees) ? record.assignees : [];
   const mentionCandidates = normalizeMentionCandidates(mentionableUsers);
   const currentAssigneeKey = buildDisplayUserSetKey(currentAssignees);
@@ -2315,6 +3566,21 @@ function WorkItemAssigneeChangePanel({ toolConfig, projectId, record, user, ment
   const hasInvalidAssignee = selectedAssignees.some((assignee) => !mentionCandidates.some((candidate) => isSameDisplayUser(candidate, assignee)));
   const isUnchanged = Boolean(selectedAssigneeKey && selectedAssigneeKey === currentAssigneeKey);
   const isDisabled = status.type === 'loading' || Boolean(commentsParseError);
+  const draftKey = createDraftKey(cacheUserKey, 'assignees', projectId, toolConfig.toolId, record.recordId);
+
+  useLocalDraft(
+    cacheUserKey,
+    draftKey,
+    { selectedAssignees, reason },
+    (draft) => {
+      setSelectedAssignees(Array.isArray(draft?.selectedAssignees) ? draft.selectedAssignees : currentAssignees);
+      setReason(String(draft?.reason || ''));
+    },
+    (draft) => (
+      !draft.reason
+      && buildDisplayUserSetKey(draft.selectedAssignees || currentAssignees) === currentAssigneeKey
+    ),
+  );
 
   useEffect(() => {
     setSelectedAssignees(currentAssignees);
@@ -2363,6 +3629,7 @@ function WorkItemAssigneeChangePanel({ toolConfig, projectId, record, user, ment
         setSelectedAssignees(Array.isArray(updatedItem.assignees) ? updatedItem.assignees : selectedAssignees);
       }
       setReason('');
+      void clearLocalDraft(draftKey);
 
       const failedNotifications = (payload.notificationResults || []).filter((item) => !item.ok);
       if (failedNotifications.length > 0) {
@@ -2385,6 +3652,11 @@ function WorkItemAssigneeChangePanel({ toolConfig, projectId, record, user, ment
         </div>
       )}
       <form className="workitem-assignee-change-form" onSubmit={handleSubmit}>
+        {supportsUnassignedWorkItemRouting(toolConfig.toolId) && currentAssignees.length === 0 ? (
+          <div className="workitem-assignee-unassigned-warning" role="alert">
+            当前还没有分配处理人，请选择新的处理人员。
+          </div>
+        ) : null}
         <div className="workitem-assignee-current">
           <span>当前处理人员</span>
           <UserFieldValue value={currentAssignees} user={user} />
@@ -2427,7 +3699,7 @@ function WorkItemAssigneeChangePanel({ toolConfig, projectId, record, user, ment
   );
 }
 
-function RecordCommentsPanel({ toolConfig, projectId, record, user, mentionableUsers, highlightCommentId, embedded = false }) {
+function RecordCommentsPanel({ toolConfig, projectId, cacheUserKey, record, user, mentionableUsers, highlightCommentId, onCommentsUpdated, embedded = false }) {
   const recordComments = normalizeClientComments(record.comments);
   const recordCommentsKey = recordComments.map((comment) => comment.id).join('|');
   const [comments, setComments] = useState(() => recordComments);
@@ -2441,6 +3713,19 @@ function RecordCommentsPanel({ toolConfig, projectId, record, user, mentionableU
   const commentsParseError = record.commentsParseError || '';
   const mentionCandidates = normalizeMentionCandidates(mentionableUsers);
   const highlightedCommentExists = Boolean(highlightCommentId && comments.some((comment) => comment.id === highlightCommentId));
+  const draftKey = createDraftKey(cacheUserKey, 'comment', projectId, toolConfig.toolId, record.recordId);
+
+  useLocalDraft(
+    cacheUserKey,
+    draftKey,
+    { content, mentionedUsers, notifyMentioned },
+    (draft) => {
+      setContent(String(draft?.content || ''));
+      setMentionedUsers(Array.isArray(draft?.mentionedUsers) ? draft.mentionedUsers : []);
+      setNotifyMentioned(Boolean(draft?.notifyMentioned));
+    },
+    (draft) => !draft.content && !(draft.mentionedUsers || []).length && !draft.notifyMentioned,
+  );
 
   useEffect(() => {
     setComments(recordComments);
@@ -2479,9 +3764,12 @@ function RecordCommentsPanel({ toolConfig, projectId, record, user, mentionableU
         mentionedUsers,
         notifyMentioned,
       });
-      setComments(normalizeClientComments(payload.comments));
+      const nextComments = normalizeClientComments(payload.comments);
+      setComments(nextComments);
+      onCommentsUpdated?.(nextComments);
       setContent('');
       setMentionedUsers([]);
+      void clearLocalDraft(draftKey);
 
       const failedNotifications = (payload.notificationResults || []).filter((item) => !item.ok);
       if (failedNotifications.length > 0) {
@@ -2508,7 +3796,9 @@ function RecordCommentsPanel({ toolConfig, projectId, record, user, mentionableU
 
     try {
       const payload = await deleteRecordComment(toolConfig, projectId, record.recordId, comment.id);
-      setComments(normalizeClientComments(payload.comments));
+      const nextComments = normalizeClientComments(payload.comments);
+      setComments(nextComments);
+      onCommentsUpdated?.(nextComments);
       setStatus({ type: 'success', message: '留言已删除' });
     } catch (error) {
       setStatus({ type: 'error', message: formatErrorMessage(error) });
@@ -2863,11 +4153,15 @@ function getDefaultDirectToolId(targetType) {
     return 'bugs';
   }
 
+  if (direct === 'feedback-detail' || direct === 'feedback-comment') {
+    return 'feedback';
+  }
+
   return 'overview';
 }
 
 function getRequirementStableId(requirement) {
-  return String(requirement?.recordId || requirement?.requirementId || requirement?.title || '').trim();
+  return String(requirement?.recordId || requirement?.feedbackId || requirement?.requirementId || requirement?.title || '').trim();
 }
 
 function isRequirementTarget(requirement, targetId) {
@@ -2878,9 +4172,118 @@ function isRequirementTarget(requirement, targetId) {
 
   return [
     requirement?.recordId,
+    requirement?.feedbackId,
     requirement?.requirementId,
     requirement?.title,
   ].some((item) => String(item || '').trim() === target);
+}
+
+function useLocalDraft(cacheUserKey, draftKey, draft, restoreDraft, isEmptyDraft = () => false) {
+  const restoredRef = useRef(false);
+  const restoreDraftRef = useRef(restoreDraft);
+  const isEmptyDraftRef = useRef(isEmptyDraft);
+  restoreDraftRef.current = restoreDraft;
+  isEmptyDraftRef.current = isEmptyDraft;
+
+  useEffect(() => {
+    let isActive = true;
+    restoredRef.current = false;
+
+    async function restore() {
+      const storedDraft = await getLocalDraft(draftKey);
+      if (!isActive) {
+        return;
+      }
+
+      if (storedDraft?.value) {
+        restoreDraftRef.current(storedDraft.value);
+      }
+      restoredRef.current = true;
+    }
+
+    restore();
+
+    return () => {
+      isActive = false;
+    };
+  }, [cacheUserKey, draftKey]);
+
+  useEffect(() => {
+    if (!restoredRef.current || !cacheUserKey || !draftKey) {
+      return;
+    }
+
+    if (isEmptyDraftRef.current(draft)) {
+      void clearLocalDraft(draftKey);
+      return;
+    }
+
+    void saveLocalDraft(cacheUserKey, draftKey, draft);
+  }, [cacheUserKey, draft, draftKey]);
+}
+
+function getWorkspacePreferenceName(project) {
+  return `workspace:${String(project?.recordId || project?.projectId || '').trim() || 'unknown'}`;
+}
+
+function getInitialWorkspacePreferences(cacheUserKey, project) {
+  const visibleTools = getProjectTools(project);
+  const stored = readLocalPreference(cacheUserKey, getWorkspacePreferenceName(project), {}) || {};
+  const defaultToolId = visibleTools.some((tool) => tool.id === 'overview')
+    ? 'overview'
+    : visibleTools[0]?.id || PROJECT_TOOLS[0].id;
+  const filters = createInitialWorkItemFilters();
+
+  for (const toolId of Object.keys(filters)) {
+    if (stored.workItemFilters?.[toolId] && typeof stored.workItemFilters[toolId] === 'object') {
+      filters[toolId] = {
+        ...createEmptyWorkItemFilters(),
+        ...stored.workItemFilters[toolId],
+      };
+    }
+  }
+
+  return {
+    activeToolId: defaultToolId,
+    collapsedPriorities: Array.isArray(stored.collapsedPriorities)
+      ? stored.collapsedPriorities.filter((item) => typeof item === 'string')
+      : [],
+    statusCollapseOverrides: stored.statusCollapseOverrides && typeof stored.statusCollapseOverrides === 'object'
+      ? Object.fromEntries(Object.entries(stored.statusCollapseOverrides).filter(([, value]) => typeof value === 'boolean'))
+      : {},
+    workItemFilters: filters,
+  };
+}
+
+function buildLocalCacheMessage(savedAt, isRefreshing, errorMessage = '') {
+  const timestamp = formatLocalCacheTime(savedAt);
+  if (isRefreshing) {
+    return `已加载本地缓存（最后同步：${timestamp}），正在后台更新`;
+  }
+
+  return `已显示本地缓存（最后同步：${timestamp}）。服务器更新失败：${errorMessage || '请求失败'}`;
+}
+
+function formatLocalCacheTime(value) {
+  const date = new Date(Number(value));
+  if (!Number.isFinite(date.getTime())) {
+    return '未知时间';
+  }
+
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-') + ` ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+function formatUpdatePublishedAt(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
+    return String(value || '');
+  }
+
+  return formatLocalCacheTime(date.getTime());
 }
 
 async function fetchCurrentUser() {
@@ -2910,6 +4313,25 @@ async function fetchProjects() {
   return parseJsonResponse(response);
 }
 
+async function fetchRelatedWorkItemCounts(projectId = '') {
+  const normalizedProjectId = String(projectId || '').trim();
+  const response = await fetch(
+    `/api/projects/related-counts${normalizedProjectId ? `?projectId=${encodeURIComponent(normalizedProjectId)}` : ''}`,
+    {
+      credentials: 'same-origin',
+    },
+  );
+  return parseJsonResponse(response);
+}
+
+async function fetchUpdates(sinceVersion) {
+  const query = String(sinceVersion || '').trim();
+  const response = await fetch(`/api/updates${query ? `?since=${encodeURIComponent(query)}` : ''}`, {
+    credentials: 'same-origin',
+  });
+  return parseJsonResponse(response);
+}
+
 async function ensureProjectRequirements(projectId) {
   return ensureProjectWorkItems(projectId, getWorkItemToolConfig('requirements'));
 }
@@ -2923,6 +4345,17 @@ async function ensureProjectWorkItems(projectId, toolConfig) {
   return parseJsonResponse(response);
 }
 
+async function fetchWorkItemRecord(projectId, toolConfig, recordId) {
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(toolConfig.routeSegment)}/${encodeURIComponent(recordId)}`,
+    {
+      credentials: 'same-origin',
+    },
+  );
+
+  return parseJsonResponse(response);
+}
+
 async function createWorkItem(toolConfig, projectId, payload) {
   const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
   const formData = new FormData();
@@ -2931,6 +4364,9 @@ async function createWorkItem(toolConfig, projectId, payload) {
   formData.set('priority', payload.priority || '');
   formData.set('expectedDays', payload.expectedDays === null || payload.expectedDays === undefined ? '' : String(payload.expectedDays));
   formData.set('assignees', JSON.stringify(payload.assignees || []));
+  formData.set('needsAssigneeAssignment', payload.needsAssigneeAssignment ? 'true' : 'false');
+  formData.set('requiresSubmissionAttachment', payload.requiresSubmissionAttachment ? 'true' : 'false');
+  formData.set('contactInfo', JSON.stringify(payload.contactInfo || {}));
   for (const file of attachments) {
     formData.append('attachments', file);
   }
@@ -2976,6 +4412,29 @@ async function updateWorkItem(toolConfig, projectId, recordId, payload) {
     credentials: 'same-origin',
     body: formData,
   });
+
+  return parseJsonResponse(response);
+}
+
+async function updateRequirementSubmissionAttachments(projectId, recordId, payload) {
+  const formData = new FormData();
+  formData.set(
+    'existingAttachments',
+    JSON.stringify((payload.existingAttachments || []).map(toEditableAttachmentPayload)),
+  );
+  formData.set('notifyProposer', payload.notifyProposer ? 'true' : 'false');
+  for (const file of payload.newFiles || []) {
+    formData.append('attachments', file);
+  }
+
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/requirements/${encodeURIComponent(recordId)}/submission-attachments`,
+    {
+      method: 'POST',
+      credentials: 'same-origin',
+      body: formData,
+    },
+  );
 
   return parseJsonResponse(response);
 }
@@ -3082,6 +4541,12 @@ function mergeAttachmentFiles(currentFiles, newFiles) {
 
 function getAttachmentFileKey(file) {
   return [file?.name || '', file?.size || 0, file?.type || '', file?.lastModified || 0].join('|');
+}
+
+function buildAttachmentTokenSetKey(attachments) {
+  return [...new Set(
+    (attachments || []).map(getSubmissionAttachmentToken).filter(Boolean),
+  )].sort((left, right) => left.localeCompare(right)).join('|');
 }
 
 function getAttachmentDuplicateKey(file) {
@@ -3228,8 +4693,7 @@ function updateRequirementInState(state, requirement, toolConfig = getWorkItemTo
   }
 
   const requirements = getPayloadWorkItems(state.result, toolConfig);
-  const nextRequirements = requirements
-    .map((item) => (isRequirementTarget(item, requirement.recordId) ? requirement : item))
+  const nextRequirements = replaceWorkItemByRecordId(requirements, requirement)
     .sort((left, right) => compareRequirementsForClient(left, right, toolConfig.toolId));
 
   return {
@@ -3237,10 +4701,26 @@ function updateRequirementInState(state, requirement, toolConfig = getWorkItemTo
     result: {
       ...state.result,
       items: nextRequirements,
-      [toolConfig.toolId === 'bugs' ? 'bugs' : 'requirements']: nextRequirements,
+      [toolConfig.toolId === 'bugs' ? 'bugs' : toolConfig.toolId === 'feedback' ? 'feedbacks' : 'requirements']: nextRequirements,
       requirements: toolConfig.toolId === 'requirements' ? nextRequirements : state.result.requirements,
     },
   };
+}
+
+function normalizeRelatedWorkItemCounts(counts) {
+  if (!counts || typeof counts !== 'object') {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(counts).map(([projectId, value]) => [
+      String(projectId || '').trim(),
+      {
+        requirements: Math.max(0, Number(value?.requirements) || 0),
+        bugs: Math.max(0, Number(value?.bugs) || 0),
+      },
+    ]).filter(([projectId]) => Boolean(projectId)),
+  );
 }
 
 function mergeCreatedWorkItemsIntoState(state, payload, toolConfig) {
@@ -3267,7 +4747,7 @@ function mergeCreatedWorkItemsIntoState(state, payload, toolConfig) {
       statusOptions: Array.isArray(payload.statusOptions) ? payload.statusOptions : state.result.statusOptions,
       mentionableUsers: Array.isArray(payload.mentionableUsers) ? payload.mentionableUsers : state.result.mentionableUsers,
       items: mergedItems,
-      [toolConfig.toolId === 'bugs' ? 'bugs' : 'requirements']: mergedItems,
+      [toolConfig.toolId === 'bugs' ? 'bugs' : toolConfig.toolId === 'feedback' ? 'feedbacks' : 'requirements']: mergedItems,
       requirements: toolConfig.toolId === 'requirements' ? mergedItems : state.result.requirements,
     },
   };
@@ -3296,6 +4776,10 @@ function getPayloadWorkItems(payload, toolConfig) {
 
   if (toolConfig.toolId === 'bugs' && Array.isArray(payload.bugs)) {
     return payload.bugs;
+  }
+
+  if (toolConfig.toolId === 'feedback' && Array.isArray(payload.feedbacks)) {
+    return payload.feedbacks;
   }
 
   if (Array.isArray(payload.requirements)) {
@@ -3342,8 +4826,25 @@ function getWorkItemFilterPeople(requirements, fieldName) {
   }));
 }
 
+function getRelatedAssigneeFilterKeys(requirements, user) {
+  const keys = new Set();
+
+  for (const requirement of requirements || []) {
+    for (const assignee of Array.isArray(requirement?.assignees) ? requirement.assignees : []) {
+      if (isSameDisplayUser(assignee, user)) {
+        const key = getWorkItemPersonKey(assignee);
+        if (key) {
+          keys.add(key);
+        }
+      }
+    }
+  }
+
+  return [...keys];
+}
+
 function getWorkItemDisplayId(item) {
-  return String(item?.itemId || item?.bugId || item?.requirementId || '').trim();
+  return String(item?.itemId || item?.feedbackId || item?.bugId || item?.requirementId || '').trim();
 }
 
 function groupRequirementsByPriority(requirements) {
@@ -3601,6 +5102,10 @@ function buildEditableFieldInitialValues(fields, rawFields, projectId, toolConfi
 }
 
 function normalizeEditableFieldInitialValue(field, value, projectId, toolConfig) {
+  if (isFeedbackContactInfoField(field, toolConfig)) {
+    return normalizeEditableFeedbackContactInfo(parseFeedbackContactInfoForClient(value));
+  }
+
   if (isAttachmentField(field, value)) {
     return {
       existing: normalizeAttachmentItems(value, projectId, toolConfig),
@@ -3639,6 +5144,60 @@ function normalizeEditableFieldInitialValue(field, value, projectId, toolConfig)
   }
 
   return normalizeDisplayText(value);
+}
+
+function isFeedbackContactInfoField(field, toolConfig) {
+  return toolConfig?.toolId === 'feedback'
+    && String(field?.fieldName || '').trim() === '联系信息数据';
+}
+
+function parseFeedbackContactInfoForClient(value) {
+  const text = normalizeDisplayText(value).trim();
+  if (!text) {
+    return {
+      valid: false,
+      isFeishuUser: false,
+      feishuUserId: '',
+      phone: '',
+      email: '',
+      allowDeveloperFollowUp: false,
+    };
+  }
+
+  try {
+    const source = JSON.parse(text);
+    if (!source || typeof source !== 'object' || Array.isArray(source)) {
+      throw new Error('invalid contact info');
+    }
+
+    return {
+      valid: true,
+      isFeishuUser: Boolean(source.isFeishuUser),
+      feishuUserId: String(source.feishuUserId || '').trim(),
+      phone: String(source.phone || '').trim(),
+      email: String(source.email || '').trim(),
+      allowDeveloperFollowUp: Boolean(source.allowDeveloperFollowUp),
+    };
+  } catch {
+    return {
+      valid: false,
+      isFeishuUser: false,
+      feishuUserId: '',
+      phone: '',
+      email: '',
+      allowDeveloperFollowUp: false,
+    };
+  }
+}
+
+function normalizeEditableFeedbackContactInfo(value) {
+  return {
+    isFeishuUser: Boolean(value?.isFeishuUser),
+    feishuUserId: String(value?.feishuUserId || '').trim(),
+    phone: String(value?.phone || '').trim(),
+    email: String(value?.email || '').trim(),
+    allowDeveloperFollowUp: Boolean(value?.allowDeveloperFollowUp),
+  };
 }
 
 function toEditableAttachmentPayload(attachment) {
