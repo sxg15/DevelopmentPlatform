@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ChevronDown,
-  ChevronUp,
   CirclePlus,
   MessageSquare,
   Paperclip,
@@ -39,7 +38,6 @@ const TIMELINE_THEME = {
 export default function WorkItemTimeline({ toolConfig, record }) {
   const [activeFilter, setActiveFilter] = useState('all');
   const [visibleCount, setVisibleCount] = useState(WORK_ITEM_TIMELINE_PAGE_SIZE);
-  const [selectedEventIndex, setSelectedEventIndex] = useState(0);
   const events = useMemo(
     () => buildWorkItemTimelineEvents(toolConfig, record),
     [toolConfig, record],
@@ -65,12 +63,7 @@ export default function WorkItemTimeline({ toolConfig, record }) {
   useEffect(() => {
     setActiveFilter('all');
     setVisibleCount(WORK_ITEM_TIMELINE_PAGE_SIZE);
-    setSelectedEventIndex(0);
   }, [record?.recordId]);
-
-  useEffect(() => {
-    setSelectedEventIndex(newestEventIndex);
-  }, [activeFilter, visibleCount, newestEventIndex]);
 
   function handleFilterChange(filterId) {
     setActiveFilter(filterId);
@@ -115,26 +108,26 @@ export default function WorkItemTimeline({ toolConfig, record }) {
                 id: event.id,
                 title: formatWorkItemTimelineTrackDate(event.occurredAt),
               }))}
-              mode="horizontal"
+              mode="horizontal-all"
               activeItemIndex={newestEventIndex}
               allowDynamicUpdate
               theme={TIMELINE_THEME}
               layout={{
-                cardWidth: 960,
-                cardHeight: 'auto',
-                itemWidth: 166,
+                cardWidth: 216,
+                cardHeight: 164,
+                itemWidth: 232,
                 lineWidth: 3,
-                pointSize: 34,
-                timelineHeight: 360,
+                pointSize: 32,
+                timelineHeight: 'auto',
                 responsive: {
                   enabled: false,
                 },
                 positioning: {
-                  cardPosition: 'bottom',
+                  cardPosition: 'top',
                 },
               }}
               interaction={{
-                autoScroll: true,
+                autoScroll: false,
                 cardHover: false,
                 focusOnLoad: false,
                 keyboardNavigation: true,
@@ -151,6 +144,7 @@ export default function WorkItemTimeline({ toolConfig, record }) {
               }}
               display={{
                 borderless: true,
+                allCardsVisible: true,
                 pointShape: 'circle',
                 scrollable: {
                   scrollbar: true,
@@ -168,7 +162,6 @@ export default function WorkItemTimeline({ toolConfig, record }) {
                 enabled: false,
                 showToggle: false,
               }}
-              onItemSelected={({ index }) => setSelectedEventIndex(index)}
             >
               {timelineEvents.map((event) => (
                 <TimelineEventContent key={event.id} event={event} />
@@ -181,9 +174,7 @@ export default function WorkItemTimeline({ toolConfig, record }) {
             </Chrono>
           </div>
           <footer className="work-item-timeline-footer">
-            <span>
-              当前第 {Math.min(selectedEventIndex + 1, timelineEvents.length)} 条，共显示 {timelineEvents.length} / {filteredEvents.length} 条
-            </span>
+            <span>已显示 {timelineEvents.length} / {filteredEvents.length} 条</span>
             {visibleEvents.length < filteredEvents.length ? (
               <button
                 type="button"
@@ -203,9 +194,7 @@ export default function WorkItemTimeline({ toolConfig, record }) {
 }
 
 function TimelineEventContent({ event }) {
-  const [expanded, setExpanded] = useState(false);
   const occurredAtText = formatWorkItemTimelineDateTime(event.occurredAt);
-  const shouldCollapse = event.detail.length > 120 || event.detail.split(/\r?\n/).length > 3;
 
   return (
     <article className={`work-item-timeline-event is-${event.type}`}>
@@ -228,13 +217,7 @@ function TimelineEventContent({ event }) {
       ) : null}
       {event.detail ? (
         <div className="work-item-timeline-detail">
-          <p className={!expanded && shouldCollapse ? 'is-collapsed' : ''}>{event.detail}</p>
-          {shouldCollapse ? (
-            <button type="button" onClick={() => setExpanded((value) => !value)}>
-              {expanded ? <ChevronUp aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
-              {expanded ? '收起' : '展开'}
-            </button>
-          ) : null}
+          <p className="is-collapsed" title={event.detail}>{event.detail}</p>
         </div>
       ) : null}
     </article>

@@ -42,9 +42,9 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - Keep React Chrono lazy-loaded behind `WorkItemTimelinePanel`; a timeline load or
   render failure must not replace the work-item detail page.
 - Keep work-item detail timelines horizontal on desktop and mobile. Present the
-  currently loaded events from oldest to newest, select the newest event by
-  default, and preserve horizontal scrolling instead of switching to a vertical
-  layout at narrow widths.
+  currently loaded events from oldest to newest, show each compact event card
+  directly above its corresponding node, and preserve horizontal scrolling
+  instead of switching to a vertical layout at narrow widths.
 - Load React Chrono's global stylesheet before project styles so local base and
   work-item rules retain cascade ownership.
 - Preserve local snapshot and draft keys when changing workspace state.
