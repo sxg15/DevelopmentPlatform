@@ -42,6 +42,34 @@ import {
   getSubmissionAttachmentToken,
   shouldConfirmStatusUpdateWithoutSubmissionAttachments,
 } from '../../shared/requirementSubmissionAttachmentUtils.js';
+import {
+  PROJECT_TOOL_DEFINITIONS as PROJECT_TOOLS,
+  REQUIREMENT_PRIORITIES,
+  WORK_ITEM_TOOL_DEFINITIONS as WORK_ITEM_TOOL_CONFIGS,
+} from '../../shared/workItemDefinitions.js';
+import {
+  createDebugSession,
+  exchangeCodeForUser,
+  fetchAppConfig,
+  fetchCurrentUser,
+} from '../api/auth.js';
+import {
+  fetchProjects,
+  fetchRelatedWorkItemCounts,
+  fetchUpdates,
+} from '../api/projects.js';
+import {
+  appendRecordComment,
+  changeWorkItemAssignees,
+  createWorkItem,
+  deleteRecordComment,
+  deleteWorkItem,
+  ensureProjectWorkItems,
+  fetchWorkItemRecord,
+  updateRequirementSubmissionAttachments,
+  updateWorkItem,
+  updateWorkItemStatus as updateRequirementStatus,
+} from '../api/workItems.js';
 import { ProjectOverview } from './ProjectOverview.jsx';
 
 const INITIAL_AUTH_STATE = {
@@ -64,70 +92,6 @@ const INITIAL_REQUIREMENTS_STATE = {
 
 const FEISHU_H5_SDK_URL = 'https://lf-scm-cn.feishucdn.com/lark/op/h5-js-sdk-1.5.44.js';
 const FEISHU_USER_SCOPES = [];
-
-const PROJECT_TOOLS = [
-  { id: 'overview', label: '项目总览' },
-  { id: 'requirements', label: '需求列表' },
-  { id: 'bugs', label: 'Bug列表' },
-  { id: 'feedback', label: '反馈列表' },
-  { id: 'builds', label: '打包列表' },
-  { id: 'review', label: '内容审查' },
-];
-
-const WORK_ITEM_TOOL_CONFIGS = {
-  requirements: {
-    toolId: 'requirements',
-    routeSegment: 'requirements',
-    listLabel: '需求列表',
-    itemLabel: '需求',
-    submitLabel: '提交需求',
-    countLabel: '项需求',
-    unnamedTitle: '未命名需求',
-    noIdText: '无需求ID',
-    loadingText: '正在准备需求列表',
-    idleText: '点击需求列表后会准备项目对应的多维表格。',
-    missingTargetText: '目标需求不存在或没有权限查看',
-    detailAriaLabel: '需求详情',
-    supportsPriority: true,
-    supportsUnassignedRouting: true,
-    dateLabel: '提出时间',
-  },
-  bugs: {
-    toolId: 'bugs',
-    routeSegment: 'bugs',
-    listLabel: 'Bug列表',
-    itemLabel: 'Bug',
-    submitLabel: '提交Bug',
-    countLabel: '个Bug',
-    unnamedTitle: '未命名Bug',
-    noIdText: '无BugID',
-    loadingText: '正在准备Bug列表',
-    idleText: '点击Bug列表后会准备项目对应的多维表格。',
-    missingTargetText: '目标Bug不存在或没有权限查看',
-    detailAriaLabel: 'Bug详情',
-    supportsPriority: true,
-    supportsUnassignedRouting: true,
-    dateLabel: '发现时间',
-  },
-  feedback: {
-    toolId: 'feedback',
-    routeSegment: 'feedback',
-    listLabel: '反馈列表',
-    itemLabel: '反馈',
-    submitLabel: '提交反馈',
-    countLabel: '条反馈',
-    unnamedTitle: '未命名反馈',
-    noIdText: '无反馈ID',
-    loadingText: '正在准备反馈列表',
-    idleText: '点击反馈列表后会准备项目对应的多维表格。',
-    missingTargetText: '目标反馈不存在或没有权限查看',
-    detailAriaLabel: '反馈详情',
-    supportsPriority: false,
-    dateLabel: '反馈时间',
-  },
-};
-
-const REQUIREMENT_PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4'];
 
 export function App() {
   const [authState, setAuthState] = useState(INITIAL_AUTH_STATE);
@@ -4286,159 +4250,6 @@ function formatUpdatePublishedAt(value) {
   return formatLocalCacheTime(date.getTime());
 }
 
-async function fetchCurrentUser() {
-  const response = await fetch('/api/me', {
-    credentials: 'same-origin',
-  });
-
-  if (response.status === 401) {
-    return null;
-  }
-
-  const payload = await parseJsonResponse(response);
-  return payload.user || null;
-}
-
-async function fetchAppConfig() {
-  const response = await fetch('/api/config', {
-    credentials: 'same-origin',
-  });
-  return parseJsonResponse(response);
-}
-
-async function fetchProjects() {
-  const response = await fetch('/api/projects', {
-    credentials: 'same-origin',
-  });
-  return parseJsonResponse(response);
-}
-
-async function fetchRelatedWorkItemCounts(projectId = '') {
-  const normalizedProjectId = String(projectId || '').trim();
-  const response = await fetch(
-    `/api/projects/related-counts${normalizedProjectId ? `?projectId=${encodeURIComponent(normalizedProjectId)}` : ''}`,
-    {
-      credentials: 'same-origin',
-    },
-  );
-  return parseJsonResponse(response);
-}
-
-async function fetchUpdates(sinceVersion) {
-  const query = String(sinceVersion || '').trim();
-  const response = await fetch(`/api/updates${query ? `?since=${encodeURIComponent(query)}` : ''}`, {
-    credentials: 'same-origin',
-  });
-  return parseJsonResponse(response);
-}
-
-async function ensureProjectRequirements(projectId) {
-  return ensureProjectWorkItems(projectId, getWorkItemToolConfig('requirements'));
-}
-
-async function ensureProjectWorkItems(projectId, toolConfig) {
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(toolConfig.routeSegment)}/ensure`, {
-    method: 'POST',
-    credentials: 'same-origin',
-  });
-
-  return parseJsonResponse(response);
-}
-
-async function fetchWorkItemRecord(projectId, toolConfig, recordId) {
-  const response = await fetch(
-    `/api/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(toolConfig.routeSegment)}/${encodeURIComponent(recordId)}`,
-    {
-      credentials: 'same-origin',
-    },
-  );
-
-  return parseJsonResponse(response);
-}
-
-async function createWorkItem(toolConfig, projectId, payload) {
-  const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
-  const formData = new FormData();
-  formData.set('title', payload.title || '');
-  formData.set('description', payload.description || '');
-  formData.set('priority', payload.priority || '');
-  formData.set('expectedDays', payload.expectedDays === null || payload.expectedDays === undefined ? '' : String(payload.expectedDays));
-  formData.set('assignees', JSON.stringify(payload.assignees || []));
-  formData.set('needsAssigneeAssignment', payload.needsAssigneeAssignment ? 'true' : 'false');
-  formData.set('requiresSubmissionAttachment', payload.requiresSubmissionAttachment ? 'true' : 'false');
-  formData.set('contactInfo', JSON.stringify(payload.contactInfo || {}));
-  for (const file of attachments) {
-    formData.append('attachments', file);
-  }
-
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(toolConfig.routeSegment)}`, {
-    method: 'POST',
-    credentials: 'same-origin',
-    body: formData,
-  });
-
-  return parseJsonResponse(response);
-}
-
-async function updateWorkItem(toolConfig, projectId, recordId, payload) {
-  const formData = new FormData();
-  const selectedFields = (Array.isArray(payload.selectedFields) ? payload.selectedFields : []).map((field) => field.fieldName).filter(Boolean);
-  const updates = {};
-  const existingAttachments = {};
-
-  for (const field of payload.selectedFields || []) {
-    const fieldName = field.fieldName;
-    const value = payload.fieldValues?.[fieldName];
-    if (isAttachmentField(field, value)) {
-      const attachmentValue = value || { existing: [], newFiles: [] };
-      existingAttachments[fieldName] = (attachmentValue.existing || []).map(toEditableAttachmentPayload);
-      for (const file of attachmentValue.newFiles || []) {
-        formData.append(`attachment:${encodeURIComponent(fieldName)}`, file);
-      }
-      continue;
-    }
-
-    updates[fieldName] = value;
-  }
-
-  formData.set('selectedFields', JSON.stringify(selectedFields));
-  formData.set('updates', JSON.stringify(updates));
-  formData.set('existingAttachments', JSON.stringify(existingAttachments));
-  formData.set('notifyRelated', payload.notifyRelated ? 'true' : 'false');
-  formData.set('notifyUsers', JSON.stringify(payload.notifyUsers || []));
-
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(toolConfig.routeSegment)}/${encodeURIComponent(recordId)}`, {
-    method: 'PUT',
-    credentials: 'same-origin',
-    body: formData,
-  });
-
-  return parseJsonResponse(response);
-}
-
-async function updateRequirementSubmissionAttachments(projectId, recordId, payload) {
-  const formData = new FormData();
-  formData.set(
-    'existingAttachments',
-    JSON.stringify((payload.existingAttachments || []).map(toEditableAttachmentPayload)),
-  );
-  formData.set('notifyProposer', payload.notifyProposer ? 'true' : 'false');
-  for (const file of payload.newFiles || []) {
-    formData.append('attachments', file);
-  }
-
-  const response = await fetch(
-    `/api/projects/${encodeURIComponent(projectId)}/requirements/${encodeURIComponent(recordId)}/submission-attachments`,
-    {
-      method: 'POST',
-      credentials: 'same-origin',
-      body: formData,
-    },
-  );
-
-  return parseJsonResponse(response);
-}
-
 function extractFilesFromClipboard(clipboardData) {
   const files = [];
   const seen = new Set();
@@ -4555,120 +4366,6 @@ function getAttachmentDuplicateKey(file) {
     Number(file?.size || 0),
     String(file?.type || '').trim().toLowerCase(),
   ].join('|');
-}
-
-async function deleteWorkItem(toolConfig, projectId, recordId) {
-  const response = await fetch(
-    `/api/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(toolConfig.routeSegment)}/${encodeURIComponent(recordId)}`,
-    {
-      method: 'DELETE',
-      credentials: 'same-origin',
-    },
-  );
-
-  return parseJsonResponse(response);
-}
-
-async function appendRecordComment(toolConfig, projectId, recordId, payload) {
-  const response = await fetch(
-    `/api/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(toolConfig.routeSegment)}/${encodeURIComponent(recordId)}/comments`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      credentials: 'same-origin',
-      body: JSON.stringify(payload),
-    },
-  );
-
-  return parseJsonResponse(response);
-}
-
-async function deleteRecordComment(toolConfig, projectId, recordId, commentId) {
-  const response = await fetch(
-    `/api/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(toolConfig.routeSegment)}/${encodeURIComponent(recordId)}/comments/${encodeURIComponent(commentId)}`,
-    {
-      method: 'DELETE',
-      credentials: 'same-origin',
-    },
-  );
-
-  return parseJsonResponse(response);
-}
-
-async function updateRequirementStatus(toolConfig, projectId, recordId, payload) {
-  const response = await fetch(
-    `/api/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(toolConfig.routeSegment)}/${encodeURIComponent(recordId)}/status`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      credentials: 'same-origin',
-      body: JSON.stringify(payload),
-    },
-  );
-
-  return parseJsonResponse(response);
-}
-
-async function changeWorkItemAssignees(toolConfig, projectId, recordId, payload) {
-  const response = await fetch(
-    `/api/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(toolConfig.routeSegment)}/${encodeURIComponent(recordId)}/assignees`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      credentials: 'same-origin',
-      body: JSON.stringify(payload),
-    },
-  );
-
-  return parseJsonResponse(response);
-}
-
-async function exchangeCodeForUser(code) {
-  const response = await fetch('/api/auth/feishu', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'same-origin',
-    body: JSON.stringify({ code }),
-  });
-
-  const payload = await parseJsonResponse(response);
-  return payload.user;
-}
-
-async function createDebugSession() {
-  const response = await fetch('/api/auth/debug', {
-    method: 'POST',
-    credentials: 'same-origin',
-  });
-
-  const payload = await parseJsonResponse(response);
-  return payload.user;
-}
-
-async function parseJsonResponse(response) {
-  let payload = null;
-
-  try {
-    payload = await response.json();
-  } catch {
-    payload = {};
-  }
-
-  if (!response.ok) {
-    const error = new Error(payload.message || '请求失败');
-    error.payload = payload;
-    throw error;
-  }
-
-  return payload;
 }
 
 function buildRequirementsReadyMessage(payload) {

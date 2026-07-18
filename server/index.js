@@ -24,6 +24,11 @@ import {
   buildProjectOverviewData,
   normalizeProjectOverviewConfig,
 } from '../shared/projectOverviewUtils.js';
+import {
+  PROJECT_TOOL_DEFINITIONS,
+  REQUIREMENT_PRIORITIES,
+  getWorkItemToolDefinition,
+} from '../shared/workItemDefinitions.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -40,7 +45,6 @@ const realtimeSubscribers = new Map();
 let tenantTokenCache = null;
 let peopleDirectoryCache = null;
 
-const REQUIREMENT_PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4'];
 const MAX_SUBMIT_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const MAX_SUBMIT_ATTACHMENT_COUNT = 5;
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -51,14 +55,6 @@ const STRUCTURE_CACHE_TTL_MS = 5 * 60 * 1000;
 const LONG_STRUCTURE_CACHE_TTL_MS = 10 * 60 * 1000;
 const SUPER_ADMIN_DEPARTMENT = '超级管理员';
 const WORK_ITEM_TOOL_IDS = new Set(['requirements', 'bugs', 'feedback']);
-const PROJECT_TOOL_DEFINITIONS = [
-  { id: 'overview', label: '项目总览' },
-  { id: 'requirements', label: '需求列表' },
-  { id: 'bugs', label: 'Bug列表' },
-  { id: 'feedback', label: '反馈列表' },
-  { id: 'builds', label: '打包列表' },
-  { id: 'review', label: '内容审查' },
-];
 const PERMISSION_TOOL_DEFINITIONS = PROJECT_TOOL_DEFINITIONS.filter((tool) => tool.id !== 'overview');
 const projectDataCache = new Map();
 const resolvedBitableTableConfigCache = new Map();
@@ -3341,93 +3337,37 @@ function normalizePriorityValue(value) {
 }
 
 function getWorkItemToolConfig(toolId) {
-  const normalizedToolId = String(toolId || '').trim();
+  const definition = getWorkItemToolDefinition(toolId);
   const knowledgeBase = runtimeConfig.knowledgeBase;
-
-  if (normalizedToolId === 'feedback') {
-    return {
-      toolId: 'feedback',
-      routeSegment: 'feedback',
-      listLabel: '反馈列表',
-      itemLabel: '反馈',
-      itemNameLabel: '反馈标题',
-      itemsKey: 'feedbacks',
-      legacyItemsKey: 'feedbacks',
-      itemIdKey: 'feedbackId',
-      directDetailType: 'feedback-detail',
-      directCommentType: 'feedback-comment',
-      parentName: knowledgeBase.feedbackParentName,
-      templateName: knowledgeBase.feedbackTemplateName,
-      templateAppToken: knowledgeBase.feedbackTemplateAppToken,
-      idPrefix: knowledgeBase.feedbackIdPrefix,
-      idDigits: knowledgeBase.feedbackIdDigits,
-      fieldNames: knowledgeBase.feedbackFieldNames,
-      missingTemplatePrefix: '找不到反馈模板',
-      missingNodeText: '找不到项目反馈表',
-      notLinkedText: '反馈列表没有关联多维表格',
-      noTableText: '反馈列表没有可读取的数据表',
-      missingRecordText: '反馈记录不存在',
-      unnamedTitle: '未命名反馈',
-      noIdText: '无反馈ID',
-      supportsPriority: false,
-      channelValue: '内部开发平台',
-    };
-  }
-
-  if (normalizedToolId === 'bugs') {
-    return {
-      toolId: 'bugs',
-      routeSegment: 'bugs',
-      listLabel: 'Bug列表',
-      itemLabel: 'Bug',
-      itemNameLabel: 'Bug名称',
-      itemsKey: 'bugs',
-      legacyItemsKey: 'bugs',
-      itemIdKey: 'bugId',
-      directDetailType: 'bug-detail',
-      directCommentType: 'bug-comment',
-      parentName: knowledgeBase.bugsParentName,
-      templateName: knowledgeBase.bugsTemplateName,
-      templateAppToken: knowledgeBase.bugsTemplateAppToken,
-      idPrefix: knowledgeBase.bugsIdPrefix,
-      idDigits: knowledgeBase.bugsIdDigits,
-      fieldNames: knowledgeBase.bugsFieldNames,
-      missingTemplatePrefix: '找不到Bug模板',
-      missingNodeText: '找不到项目Bug表',
-      notLinkedText: 'Bug列表没有关联多维表格',
-      noTableText: 'Bug列表没有可读取的数据表',
-      missingRecordText: 'Bug记录不存在',
-      unnamedTitle: '未命名Bug',
-      noIdText: '无BugID',
-      supportsPriority: true,
-    };
-  }
-
+  const source = definition.toolId === 'feedback'
+    ? {
+        parentName: knowledgeBase.feedbackParentName,
+        templateName: knowledgeBase.feedbackTemplateName,
+        templateAppToken: knowledgeBase.feedbackTemplateAppToken,
+        idPrefix: knowledgeBase.feedbackIdPrefix,
+        idDigits: knowledgeBase.feedbackIdDigits,
+        fieldNames: knowledgeBase.feedbackFieldNames,
+      }
+    : definition.toolId === 'bugs'
+      ? {
+          parentName: knowledgeBase.bugsParentName,
+          templateName: knowledgeBase.bugsTemplateName,
+          templateAppToken: knowledgeBase.bugsTemplateAppToken,
+          idPrefix: knowledgeBase.bugsIdPrefix,
+          idDigits: knowledgeBase.bugsIdDigits,
+          fieldNames: knowledgeBase.bugsFieldNames,
+        }
+      : {
+          parentName: knowledgeBase.requirementsParentName,
+          templateName: knowledgeBase.requirementsTemplateName,
+          templateAppToken: knowledgeBase.requirementsTemplateAppToken,
+          idPrefix: knowledgeBase.requirementsIdPrefix,
+          idDigits: knowledgeBase.requirementsIdDigits,
+          fieldNames: knowledgeBase.requirementsFieldNames,
+        };
   return {
-    toolId: 'requirements',
-    routeSegment: 'requirements',
-    listLabel: '需求列表',
-    itemLabel: '需求',
-    itemNameLabel: '需求名称',
-    itemsKey: 'requirements',
-    legacyItemsKey: 'requirements',
-    itemIdKey: 'requirementId',
-    directDetailType: 'requirement-detail',
-    directCommentType: 'requirement-comment',
-    parentName: knowledgeBase.requirementsParentName,
-    templateName: knowledgeBase.requirementsTemplateName,
-    templateAppToken: knowledgeBase.requirementsTemplateAppToken,
-    idPrefix: knowledgeBase.requirementsIdPrefix,
-    idDigits: knowledgeBase.requirementsIdDigits,
-    fieldNames: knowledgeBase.requirementsFieldNames,
-    missingTemplatePrefix: '找不到需求模板',
-    missingNodeText: '找不到项目需求表',
-    notLinkedText: '需求列表没有关联多维表格',
-    noTableText: '需求列表没有可读取的数据表',
-    missingRecordText: '需求记录不存在',
-    unnamedTitle: '未命名需求',
-    noIdText: '无需求ID',
-    supportsPriority: true,
+    ...definition,
+    ...source,
   };
 }
 

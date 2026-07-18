@@ -33,6 +33,7 @@ import {
   saveCachedSnapshot,
   writeLocalPreference,
 } from './localCache.js';
+import { fetchProjectOverview } from '../api/overview.js';
 
 echarts.use([
   AriaComponent,
@@ -713,24 +714,6 @@ function buildAssigneeChartOption(load) {
       },
     ],
   };
-}
-
-async function fetchProjectOverview(projectId, scope, trendDays) {
-  const query = new URLSearchParams({ scope, trendDays: String(trendDays) });
-  const response = await fetch(
-    `/api/projects/${encodeURIComponent(projectId)}/overview?${query}`,
-    { credentials: 'same-origin' },
-  );
-  let payload = {};
-  try {
-    payload = await response.json();
-  } catch {
-    payload = {};
-  }
-  if (!response.ok) {
-    throw new Error(payload.message || '获取项目总览失败');
-  }
-  return payload;
 }
 
 function createEmptyOverviewData() {
