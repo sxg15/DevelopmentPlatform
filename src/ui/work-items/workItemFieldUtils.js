@@ -1,4 +1,4 @@
-import { WORK_ITEM_TOOL_DEFINITIONS as WORK_ITEM_TOOL_CONFIGS } from '../../../shared/workItemDefinitions.js';
+import { getWorkItemToolDefinition } from '../../../shared/workItemDefinitions.js';
 
 export function isEmptyBitableValue(value) {
   if (value === null || value === undefined || value === '') {
@@ -362,7 +362,7 @@ export function normalizeUrlItems(value) {
     .filter(Boolean);
 }
 
-export function normalizeAttachmentItems(value, projectId = '', toolConfig = getWorkItemToolConfig('requirements')) {
+export function normalizeAttachmentItems(value, projectId = '', toolConfig = getWorkItemToolDefinition('requirements')) {
   const values = Array.isArray(value) ? value : [value];
 
   return values
@@ -661,8 +661,4 @@ export function buildDisplayUserKeys(user) {
       .map((item) => String(item || '').trim())
       .filter(Boolean),
   );
-}
-
-function getWorkItemToolConfig(toolId) {
-  return WORK_ITEM_TOOL_CONFIGS.find((tool) => tool.toolId === toolId || tool.id === toolId) || null;
 }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildDisplayFields,
+  isAttachmentField,
   normalizeAttachmentItems,
   normalizeEditableFeedbackContactInfo,
   parseFeedbackContactInfoForClient,
@@ -37,6 +38,19 @@ test('attachment values use the work item attachment proxy when only a token exi
   assert.equal(
     attachment.url,
     '/api/projects/project-1/bugs/attachments/file-token?name=design.png',
+  );
+});
+
+test('detail field checks use the default requirement tool definition safely', () => {
+  assert.equal(isAttachmentField({ fieldName: '标题', type: 1 }, []), false);
+
+  const [attachment] = normalizeAttachmentItems(
+    [{ file_token: 'default-token', name: 'default.png' }],
+    'project-1',
+  );
+  assert.equal(
+    attachment.url,
+    '/api/projects/project-1/requirements/attachments/default-token?name=default.png',
   );
 });
 
