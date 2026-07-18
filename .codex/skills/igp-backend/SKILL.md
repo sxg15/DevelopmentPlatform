@@ -17,6 +17,10 @@ Read `AGENTS.md`, then locate the owning layer.
 - Wiki nodes and copy tasks: `server/integrations/wikiClient.js`.
 - Sessions, SSE, cache primitives, and client error logging: `server/runtime/`.
 - Update manifest fetch: `server/services/updateService.js`.
+- Personal settings Bitable workflow:
+  `server/services/personalSettingsService.js`.
+- Daily reminder timing: `server/services/todoNotificationScheduler.js`;
+  reminder orchestration and cards remain in `server/index.js`.
 
 ## Rules
 
@@ -38,6 +42,13 @@ Read `AGENTS.md`, then locate the owning layer.
 - When adding server modules, keep `scripts/build.ps1` copying the complete
   `server/` tree.
 - Prefer `getCachedValue` for shared promise-aware TTL cache behavior.
+- Resolve personal settings through the configured Wiki node token, validate the
+  exact `用户`, `接收待办事项通知`, and `待办事项通知时间` fields, and reject
+  duplicate records for the same user.
+- Keep reminder scheduling minute-aligned at second five. Do not add startup
+  catch-up behavior or send more than once per user and Shanghai calendar day.
+- Settings routes are `GET /api/me/settings` and `PUT /api/me/settings`; require a
+  session and retain the `{ notifications: ... }` contract.
 
 ## Validate
 

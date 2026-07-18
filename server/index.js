@@ -2,6 +2,14 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import express from 'express';
+import {
+  buildTodoNotificationDedupeKey,
+  collectPendingTodoNotificationItems,
+  getZonedDateTimeParts,
+  isTodoNotificationDue,
+  isValidTodoNotificationTime,
+  summarizeTodoNotificationItems,
+} from '../shared/personalSettingsUtils.js';
 import { buildUpdateResponse } from '../shared/updateManifest.js';
 import { countWaitingAssignedWorkItems } from '../shared/workItemRealtimeUtils.js';
 import {
@@ -55,6 +63,12 @@ import {
 } from './runtime/clientErrorLog.js';
 import { fetchUpdateManifest } from './services/updateService.js';
 import {
+  listTodoNotificationRecipients,
+  readPersonalSettingsForUser,
+  savePersonalSettingsForUser,
+} from './services/personalSettingsService.js';
+import { createTodoNotificationScheduler } from './services/todoNotificationScheduler.js';
+import {
   exchangeCodeForAccessToken,
   fetchFeishuJson,
   fetchFeishuUser,
@@ -105,11 +119,19 @@ const resolvedBitableTableConfigCache = new Map();
 const workItemNodeCache = new Map();
 const workItemTableContextCache = new Map();
 const projectOverviewCache = new Map();
+const sentTodoNotificationKeys = new Set();
+let sentTodoNotificationDateKey = '';
 const {
   publishWorkItemUpdated,
   subscribe: subscribeToWorkItemUpdates,
 } = createWorkItemRealtimeHub({
   onPublish: ({ projectId }) => invalidateProjectOverviewCache(projectId),
+});
+const todoNotificationScheduler = createTodoNotificationScheduler({
+  run: runTodoNotificationTick,
+  onError(error) {
+    console.error('[todo-notification] 调度失败', formatLogError(error));
+  },
 });
 
 const app = express();
@@ -194,6 +216,14 @@ app.get('/api/me', async (request, response) => {
     const status = message.includes('没有权限') ? 403 : message.includes('缺少') ? 500 : 502;
     response.status(status).json({ message });
   }
+});
+
+app.get('/api/me/settings', async (request, response) => {
+  await handlePersonalSettingsRead(request, response);
+});
+
+app.put('/api/me/settings', async (request, response) => {
+  await handlePersonalSettingsUpdate(request, response);
 });
 
 app.post('/api/auth/debug', async (_request, response) => {
@@ -533,6 +563,84 @@ async function handleWorkItemRead(request, response, toolId) {
     const status = message.includes('缺少') ? 500 : message.includes('权限') ? 403 : message.includes('不存在') ? 404 : 502;
     response.status(status).json({ message });
   }
+}
+
+async function handlePersonalSettingsRead(request, response) {
+  try {
+    if (!appId || !appSecret) {
+      response.status(500).json({ message: '缺少飞书应用配置' });
+      return;
+    }
+
+    const session = getSession(request);
+    if (!session) {
+      response.status(401).json({ message: '请先登录飞书' });
+      return;
+    }
+
+    const token = await getTenantAccessToken();
+    await ensureUserHasPlatformAccess(token, session.user);
+    const settings = await readPersonalSettingsForUser(token, session.user);
+    response.json({ settings });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '读取个人设置失败';
+    response.status(getPersonalSettingsErrorStatus(error, message)).json({ message });
+  }
+}
+
+async function handlePersonalSettingsUpdate(request, response) {
+  try {
+    if (!appId || !appSecret) {
+      response.status(500).json({ message: '缺少飞书应用配置' });
+      return;
+    }
+
+    const session = getSession(request);
+    if (!session) {
+      response.status(401).json({ message: '请先登录飞书' });
+      return;
+    }
+
+    const notifications = request.body?.notifications;
+    if (!notifications || typeof notifications !== 'object') {
+      response.status(400).json({ message: '缺少通知设置' });
+      return;
+    }
+    if (typeof notifications.receiveTodoNotifications !== 'boolean') {
+      response.status(400).json({ message: '接收待办事项通知必须是开关值' });
+      return;
+    }
+    if (!isValidTodoNotificationTime(notifications.todoNotificationTime)) {
+      response.status(400).json({ message: '待办事项通知时间必须是 HH:mm 格式' });
+      return;
+    }
+
+    const token = await getTenantAccessToken();
+    await ensureUserHasPlatformAccess(token, session.user);
+    const settings = await savePersonalSettingsForUser(token, session.user, { notifications });
+    response.json({ settings });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '保存个人设置失败';
+    response.status(getPersonalSettingsErrorStatus(error, message)).json({ message });
+  }
+}
+
+function getPersonalSettingsErrorStatus(error, message) {
+  if (error?.code === 'DUPLICATE_PERSONAL_SETTINGS') {
+    return 409;
+  }
+  if (message.includes('没有权限')) {
+    return 403;
+  }
+  if (
+    message.includes('缺少')
+    || message.includes('必须是')
+    || message.includes('不是多维表格')
+    || message.includes('没有可读取')
+  ) {
+    return 500;
+  }
+  return 502;
 }
 
 async function handleRelatedWorkItemCounts(request, response) {
@@ -1840,6 +1948,7 @@ app.listen(port, host, () => {
   for (const url of getLocalUrls(port)) {
     console.log(url);
   }
+  todoNotificationScheduler.start();
 });
 
 function normalizeProjects(records) {
@@ -1905,7 +2014,101 @@ async function getAccessibleProjectsForUser(token, user) {
     .sort(compareProjects);
 }
 
+async function runTodoNotificationTick(now = new Date()) {
+  const timeZone = runtimeConfig.bitable.personalSettings.timeZone;
+  const { dateKey } = getZonedDateTimeParts(now, timeZone);
+  if (sentTodoNotificationDateKey !== dateKey) {
+    sentTodoNotificationDateKey = dateKey;
+    sentTodoNotificationKeys.clear();
+  }
+
+  const token = await getTenantAccessToken();
+  const { recipients, warnings } = await listTodoNotificationRecipients(token);
+  for (const warning of warnings) {
+    console.warn('[todo-notification]', warning);
+  }
+
+  const dueRecipients = recipients.filter(({ settings }) => (
+    isTodoNotificationDue(settings, now, timeZone)
+  ));
+
+  await mapWithConcurrency(dueRecipients, 3, async ({ user, settings }) => {
+    const dedupeKey = buildTodoNotificationDedupeKey(user, now, timeZone);
+    if (sentTodoNotificationKeys.has(dedupeKey)) {
+      return;
+    }
+
+    try {
+      const result = await collectTodoNotificationItemsForUser(token, user);
+      if (result.items.length > 0) {
+        const card = buildTodoNotificationCard(user, {
+          items: result.items,
+          failedSourceCount: result.failedSourceCount,
+          notificationTime: settings.todoNotificationTime,
+        });
+        await sendFeishuInteractiveMessage(token, user.openId, card);
+      }
+      sentTodoNotificationKeys.add(dedupeKey);
+      console.log(
+        `[todo-notification] 完成：待办 ${result.items.length} 项，读取失败 ${result.failedSourceCount} 项`,
+      );
+    } catch (error) {
+      console.error('[todo-notification] 用户通知失败', formatLogError(error));
+    }
+  });
+}
+
+async function collectTodoNotificationItemsForUser(token, user) {
+  const projects = await getAccessibleProjectsForUser(token, user);
+  const tasks = [];
+
+  for (const project of projects) {
+    const allowedToolIds = new Set((project.allowedTools || []).map((tool) => tool.id));
+    for (const toolId of WORK_ITEM_TOOL_IDS) {
+      if (allowedToolIds.has(toolId)) {
+        tasks.push({
+          project,
+          toolConfig: getWorkItemToolConfig(toolId),
+        });
+      }
+    }
+  }
+
+  const results = await mapWithConcurrency(tasks, 4, async ({ project, toolConfig }) => {
+    try {
+      return {
+        source: {
+          project,
+          toolId: toolConfig.toolId,
+          items: await getProjectWorkItems(token, project, user, toolConfig),
+        },
+        error: null,
+      };
+    } catch (error) {
+      console.error(
+        `[todo-notification] 读取 ${project.projectId || 'unknown'}/${toolConfig.toolId} 失败`,
+        formatLogError(error),
+      );
+      return { source: null, error };
+    }
+  });
+
+  return {
+    items: collectPendingTodoNotificationItems(
+      results.map((result) => result.source).filter(Boolean),
+      user,
+      runtimeConfig.dashboard.statusGroups,
+    ),
+    failedSourceCount: results.filter((result) => result.error).length,
+  };
+}
+
 async function getProjectWaitingWorkItemCount(token, project, user, toolConfig) {
+  const items = await getProjectWorkItems(token, project, user, toolConfig);
+  return countWaitingAssignedWorkItems(toolConfig.toolId, items, user);
+}
+
+async function getProjectWorkItems(token, project, user, toolConfig) {
   try {
     const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
     const { appToken, tableId } = await getCachedWorkItemTableContext(token, node, toolConfig);
@@ -1915,11 +2118,10 @@ async function getProjectWaitingWorkItemCount(token, project, user, toolConfig) 
       viewId: '',
       fieldNames: {},
     });
-    const items = normalizeWorkItemRecords(records, user, toolConfig);
-    return countWaitingAssignedWorkItems(toolConfig.toolId, items, user);
+    return normalizeWorkItemRecords(records, user, toolConfig);
   } catch (error) {
     if (isMissingWorkItemListError(error, toolConfig)) {
-      return 0;
+      return [];
     }
     throw error;
   }
@@ -4409,6 +4611,71 @@ async function sendFeishuInteractiveMessage(token, openId, card) {
   return payload.data || {};
 }
 
+function buildTodoNotificationCard(_user, context) {
+  const summary = summarizeTodoNotificationItems(context.items);
+  const platformLink = buildPlatformExternalLink('home');
+  const elements = [
+    buildCardTextElement(
+      '待办汇总',
+      `需求 ${summary.counts.requirements} 项 · Bug ${summary.counts.bugs} 项 · 反馈 ${summary.counts.feedback} 项`,
+    ),
+    buildTodoNotificationListElement(summary.displayedItems),
+  ];
+
+  if (summary.hiddenCount > 0) {
+    elements.push(buildCardTextElement('更多事项', `还有 ${summary.hiddenCount} 项未在卡片中展开`));
+  }
+  if (context.failedSourceCount > 0) {
+    elements.push(buildCardTextElement(
+      '数据提示',
+      `有 ${context.failedSourceCount} 个项目工具读取失败，卡片可能未包含全部待办`,
+    ));
+  }
+
+  elements.push({
+    tag: 'action',
+    actions: [
+      buildCardLinkButton('打开开发平台', platformLink),
+    ],
+  });
+
+  return {
+    config: {
+      wide_screen_mode: true,
+    },
+    header: {
+      template: 'blue',
+      title: {
+        tag: 'plain_text',
+        content: `你有 ${summary.total} 项待办事项`,
+      },
+    },
+    elements,
+  };
+}
+
+function buildTodoNotificationListElement(items) {
+  const content = (Array.isArray(items) ? items : []).map((item, index) => {
+    const toolConfig = getWorkItemToolConfig(item.toolId);
+    const itemLabel = item.itemId ? `${item.itemId} ${item.title}` : item.title;
+    const link = buildPlatformExternalLink(toolConfig.directDetailType, {
+      projectId: item.projectId,
+      tool: item.toolId,
+      recordId: item.recordId,
+    });
+    const targetUrl = link.appLink || link.webUrl || link.displayUrl;
+    return `${index + 1}. [${escapeLarkMarkdown(`${item.projectName} · ${itemLabel}`)}](${targetUrl})  \n${escapeLarkMarkdown(`${toolConfig.itemLabel} · ${item.status}`)}`;
+  }).join('\n');
+
+  return {
+    tag: 'div',
+    text: {
+      tag: 'lark_md',
+      content: content || '暂无可展示的待办事项',
+    },
+  };
+}
+
 function buildCommentNotificationCard(_user, context) {
   const toolConfig = context.toolConfig || getWorkItemToolConfig('requirements');
   const projectName = context.project?.projectName || '未命名项目';
@@ -4752,6 +5019,10 @@ function escapeLarkMarkdown(value) {
 
 function escapeLarkAtId(value) {
   return String(value || '').replace(/['"<>]/g, '');
+}
+
+function formatLogError(error) {
+  return error instanceof Error ? error.message : String(error || '未知错误');
 }
 
 function buildPlatformExternalLink(targetType, params = {}, request = null) {

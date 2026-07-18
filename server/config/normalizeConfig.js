@@ -11,6 +11,7 @@ export function normalizeConfig(config) {
   const projectPermissionFieldNames = config?.bitable?.projectPermission?.fieldNames || {};
   const toolPermissionFieldNames = config?.bitable?.toolPermission?.fieldNames || {};
   const toolPermissionToolFields = toolPermissionFieldNames.tools || {};
+  const personalSettingsFieldNames = config?.bitable?.personalSettings?.fieldNames || {};
 
   return {
     server: {
@@ -137,6 +138,26 @@ export function normalizeConfig(config) {
             review: String(toolPermissionToolFields.review || '内容审查'),
             feedback: String(toolPermissionToolFields.feedback || '反馈列表'),
           },
+        },
+      },
+      personalSettings: {
+        wikiNodeToken: String(
+          config?.bitable?.personalSettings?.wikiNodeToken
+          || 'PDcJwzNTIiJHzNkcM0Gc3Cy1nRd',
+        ),
+        tableId: String(config?.bitable?.personalSettings?.tableId || ''),
+        viewId: String(config?.bitable?.personalSettings?.viewId || ''),
+        enabledValue: String(config?.bitable?.personalSettings?.enabledValue || '允许'),
+        defaultTime: String(config?.bitable?.personalSettings?.defaultTime || '11:00'),
+        timeZone: String(config?.bitable?.personalSettings?.timeZone || 'Asia/Shanghai'),
+        fieldNames: {
+          user: String(personalSettingsFieldNames.user || '用户'),
+          receiveTodoNotifications: String(
+            personalSettingsFieldNames.receiveTodoNotifications || '接收待办事项通知',
+          ),
+          todoNotificationTime: String(
+            personalSettingsFieldNames.todoNotificationTime || '待办事项通知时间',
+          ),
         },
       },
       links: Array.isArray(config?.bitable?.links) ? config.bitable.links : [],

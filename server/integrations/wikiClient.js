@@ -59,6 +59,35 @@ export async function findWikiNodeByTitle(token, title) {
   });
 }
 
+export async function fetchWikiNodeByToken(token, nodeToken) {
+  const normalizedToken = String(nodeToken || '').trim();
+  if (!normalizedToken) {
+    throw new Error('缺少知识库节点 Token');
+  }
+
+  const query = new URLSearchParams({
+    token: normalizedToken,
+    obj_type: 'wiki',
+  });
+  const response = await fetch(`https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?${query}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const payload = await readJson(response);
+
+  if (!response.ok || payload.code !== 0) {
+    throw new Error(payload.msg || '读取知识库节点失败');
+  }
+
+  const node = normalizeWikiNode(payload.data?.node || payload.data?.wiki_node || payload.data);
+  if (!node?.nodeToken || !node?.objToken) {
+    throw new Error('知识库节点没有返回有效的关联对象');
+  }
+
+  return node;
+}
+
 export async function fetchWikiChildNodes(token, parentNodeToken) {
   const knowledgeBase = runtimeConfig.knowledgeBase;
   const nodes = [];

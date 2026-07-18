@@ -25,7 +25,7 @@ export function countWaitingAssignedWorkItems(toolId, items, user) {
 
   return (Array.isArray(items) ? items : []).filter((item) => (
     getWorkItemStatus(item) === waitingStatus
-    && (Array.isArray(item?.assignees) ? item.assignees : []).some((assignee) => hasMatchingWorkItemUser(assignee, userKeys))
+    && isWorkItemAssignedToUser(item, user)
   )).length;
 }
 
@@ -49,6 +49,16 @@ export function getWorkItemUserKeys(user) {
     .filter(Boolean);
 
   return new Set(keys);
+}
+
+export function isWorkItemAssignedToUser(item, user) {
+  const userKeys = getWorkItemUserKeys(user);
+  if (userKeys.size === 0) {
+    return false;
+  }
+
+  return (Array.isArray(item?.assignees) ? item.assignees : [])
+    .some((assignee) => hasMatchingWorkItemUser(assignee, userKeys));
 }
 
 function hasMatchingWorkItemUser(user, expectedKeys) {

@@ -17,6 +17,7 @@ const FRONTEND_MODULES = [
   'src/ui/work-items/WorkItemTimelinePanel.jsx',
   'src/ui/work-items/workItemFieldUtils.js',
   'src/ui/work-items/workItemTimelineUtils.js',
+  'src/ui/settings/PersonalSettingsDialog.jsx',
 ];
 const BROWSER_GLOBALS = new Set([
   'Array',

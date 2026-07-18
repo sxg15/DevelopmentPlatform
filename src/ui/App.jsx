@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Settings } from 'lucide-react';
 import { compareSemanticVersions } from '../../shared/updateManifest.js';
 import {
   createLocalCacheUserKey,
@@ -18,6 +19,7 @@ import {
   waitForFeishuRuntime,
 } from '../integrations/feishuH5.js';
 import { PlatformWorkspace } from './workspace/PlatformWorkspace.jsx';
+import { PersonalSettingsDialog } from './settings/PersonalSettingsDialog.jsx';
 
 const INITIAL_AUTH_STATE = {
   status: 'loading',
@@ -28,6 +30,7 @@ const INITIAL_AUTH_STATE = {
 export function App() {
   const [authState, setAuthState] = useState(INITIAL_AUTH_STATE);
   const [updateDialog, setUpdateDialog] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     let isActive = true;
@@ -147,24 +150,36 @@ export function App() {
 
   return (
     <main className="app-shell" aria-label="开发平台">
-      <TopToolbar state={authState} />
+      <TopToolbar state={authState} onOpenSettings={() => setSettingsOpen(true)} />
       {authState.status === 'ready' && authState.user ? (
         <PlatformWorkspace user={authState.user} cacheUserKey={cacheUserKey} />
       ) : (
         <AuthStatusPanel state={authState} />
       )}
       {updateDialog ? <UpdateLogDialog update={updateDialog} onClose={closeUpdateDialog} /> : null}
+      {settingsOpen && authState.user ? (
+        <PersonalSettingsDialog onClose={() => setSettingsOpen(false)} />
+      ) : null}
     </main>
   );
 }
 
-function TopToolbar({ state }) {
+function TopToolbar({ state, onOpenSettings }) {
   return (
     <header className="top-toolbar" aria-label="顶部工具栏">
       <div className="toolbar-title">开发平台</div>
       <div className="toolbar-user" aria-label="当前飞书用户">
         {state.status === 'ready' && state.user ? (
           <>
+            <button
+              type="button"
+              className="toolbar-settings-button"
+              onClick={onOpenSettings}
+              aria-label="打开个人设置"
+              title="个人设置"
+            >
+              <Settings size={18} aria-hidden="true" />
+            </button>
             <Avatar user={state.user} />
             <span className="user-name" title={state.user.name}>{state.user.name}</span>
           </>

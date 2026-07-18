@@ -152,6 +152,19 @@
         }
       }
     },
+    "personalSettings": {
+      "wikiNodeToken": "PDcJwzNTIiJHzNkcM0Gc3Cy1nRd",
+      "tableId": "",
+      "viewId": "",
+      "enabledValue": "允许",
+      "defaultTime": "11:00",
+      "timeZone": "Asia/Shanghai",
+      "fieldNames": {
+        "user": "用户",
+        "receiveTodoNotifications": "接收待办事项通知",
+        "todoNotificationTime": "待办事项通知时间"
+      }
+    },
     "links": []
   }
 }

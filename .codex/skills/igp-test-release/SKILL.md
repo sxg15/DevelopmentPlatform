@@ -36,6 +36,8 @@ commit `Publish/config.json`.
 - Client runtime diagnostics and redaction: `test/clientErrorUtils.test.js`.
 - Backend config/runtime/integrations: `test/serverConfig.test.js`,
   `test/serverRuntime.test.js`, `test/wikiClient.test.js`.
+- Personal settings and reminder scheduling:
+  `test/personalSettingsUtils.test.js`.
 
 Add focused Node tests for pure behavior. Use browser verification for visible UI
 changes and local API smoke tests for route changes.

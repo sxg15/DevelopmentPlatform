@@ -20,6 +20,12 @@ test('server config normalization preserves workflow field defaults', () => {
     config.bitable.projectPermission.fieldNames.developmentSuperAdmins,
     DEFAULT_DEVELOPMENT_SUPER_ADMIN_FIELD,
   );
+  assert.equal(config.bitable.personalSettings.wikiNodeToken, 'PDcJwzNTIiJHzNkcM0Gc3Cy1nRd');
+  assert.equal(config.bitable.personalSettings.defaultTime, '11:00');
+  assert.equal(
+    config.bitable.personalSettings.fieldNames.todoNotificationTime,
+    '待办事项通知时间',
+  );
 });
 
 test('server config normalization accepts custom work item and permission fields', () => {
@@ -37,6 +43,13 @@ test('server config normalization accepts custom work item and permission fields
           developmentSuperAdmins: '研发负责人',
         },
       },
+      personalSettings: {
+        wikiNodeToken: 'wikcn_custom',
+        defaultTime: '09:30',
+        fieldNames: {
+          todoNotificationTime: '提醒时间',
+        },
+      },
     },
   });
 
@@ -50,4 +63,7 @@ test('server config normalization accepts custom work item and permission fields
     config.bitable.projectPermission.fieldNames.developmentSuperAdmins,
     '研发负责人',
   );
+  assert.equal(config.bitable.personalSettings.wikiNodeToken, 'wikcn_custom');
+  assert.equal(config.bitable.personalSettings.defaultTime, '09:30');
+  assert.equal(config.bitable.personalSettings.fieldNames.todoNotificationTime, '提醒时间');
 });

@@ -60,6 +60,13 @@ export function validateToolPermissionConfig() {
   }
 }
 
+export function validatePersonalSettingsConfig() {
+  const personalSettings = runtimeConfig.bitable.personalSettings;
+  if (!personalSettings.wikiNodeToken) {
+    throw new Error('缺少个人设置表配置');
+  }
+}
+
 export function validateKnowledgeBaseConfig() {
   const knowledgeBase = runtimeConfig.knowledgeBase;
   if (!knowledgeBase.spaceId) {

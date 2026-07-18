@@ -1,0 +1,331 @@
+.toolbar-settings-button,
+.personal-settings-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  padding: 0;
+  color: #46534f;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.toolbar-settings-button:hover,
+.toolbar-settings-button:focus-visible,
+.personal-settings-icon-button:hover,
+.personal-settings-icon-button:focus-visible {
+  color: #0b6f63;
+  background: #edf7f4;
+  border-color: #cfe4de;
+}
+
+.personal-settings-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(7 20 17 / 48%);
+}
+
+.personal-settings-dialog {
+  display: flex;
+  width: min(760px, 100%);
+  height: min(520px, calc(100vh - 48px));
+  min-width: 0;
+  min-height: 360px;
+  flex-direction: column;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #d7e3df;
+  border-radius: 8px;
+  box-shadow: 0 18px 50px rgb(7 20 17 / 24%);
+}
+
+.personal-settings-header,
+.personal-settings-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 58px;
+  padding: 0 20px;
+}
+
+.personal-settings-header {
+  justify-content: space-between;
+  border-bottom: 1px solid #dce6e2;
+}
+
+.personal-settings-header h2,
+.personal-settings-section-heading h3 {
+  margin: 0;
+  color: #101b18;
+  letter-spacing: 0;
+}
+
+.personal-settings-header h2 {
+  font-size: 18px;
+  line-height: 26px;
+}
+
+.personal-settings-layout {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-columns: 176px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.personal-settings-nav {
+  min-width: 0;
+  padding: 14px 10px;
+  background: #f5f8f7;
+  border-right: 1px solid #dce6e2;
+}
+
+.personal-settings-nav-item {
+  display: flex;
+  width: 100%;
+  min-height: 38px;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 11px;
+  color: #4a5954;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: left;
+}
+
+.personal-settings-nav-item.is-active {
+  color: #0c675d;
+  background: #e8f4f0;
+  border-color: #cbe2db;
+}
+
+.personal-settings-content {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px 28px;
+}
+
+.personal-settings-section-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-bottom: 16px;
+  color: #0d7164;
+  border-bottom: 1px solid #e0e8e5;
+}
+
+.personal-settings-section-heading h3 {
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.personal-settings-fields {
+  display: flex;
+  flex-direction: column;
+}
+
+.personal-settings-field-row {
+  display: flex;
+  min-height: 64px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 1px solid #edf1ef;
+}
+
+.personal-settings-field-row strong {
+  color: #1b2925;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.personal-settings-switch {
+  position: relative;
+  display: inline-flex;
+  width: 42px;
+  height: 24px;
+  flex: 0 0 42px;
+}
+
+.personal-settings-switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+}
+
+.personal-settings-switch span {
+  position: absolute;
+  inset: 0;
+  background: #aeb9b5;
+  border-radius: 999px;
+  transition: background 160ms ease;
+}
+
+.personal-settings-switch span::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  content: "";
+  background: #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 22%);
+  transition: transform 160ms ease;
+}
+
+.personal-settings-switch input:checked + span {
+  background: #167c6f;
+}
+
+.personal-settings-switch input:checked + span::after {
+  transform: translateX(18px);
+}
+
+.personal-settings-switch input:focus-visible + span {
+  outline: 2px solid #2f80ed;
+  outline-offset: 2px;
+}
+
+.personal-settings-switch input:disabled + span {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.personal-settings-time-input {
+  width: 132px;
+  height: 36px;
+  padding: 0 10px;
+  color: #16231f;
+  background: #ffffff;
+  border: 1px solid #cbd8d3;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 14px;
+}
+
+.personal-settings-time-input:focus {
+  border-color: #167c6f;
+  outline: 2px solid rgb(22 124 111 / 16%);
+}
+
+.personal-settings-state {
+  display: flex;
+  min-height: 128px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: #60706a;
+  font-size: 14px;
+}
+
+.personal-settings-state.is-error {
+  flex-direction: column;
+  color: #a61b1b;
+  text-align: center;
+}
+
+.personal-settings-state.is-error button {
+  min-height: 32px;
+  padding: 0 12px;
+  color: #a61b1b;
+  background: #ffffff;
+  border: 1px solid #d99a96;
+  border-radius: 5px;
+  font-weight: 700;
+}
+
+.personal-settings-message {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 8px 11px;
+  color: #166534;
+  background: #eef9f1;
+  border: 1px solid #c9e9d0;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.personal-settings-message.is-error {
+  color: #a61b1b;
+  background: #fff2f1;
+  border-color: #f0c8c5;
+}
+
+.personal-settings-message button {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  font-weight: 700;
+}
+
+.personal-settings-actions {
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid #dce6e2;
+}
+
+.personal-settings-primary,
+.personal-settings-secondary {
+  display: inline-flex;
+  min-width: 88px;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 14px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.personal-settings-primary {
+  color: #ffffff;
+  background: #126f64;
+  border: 1px solid #126f64;
+}
+
+.personal-settings-primary:hover:not(:disabled),
+.personal-settings-primary:focus-visible:not(:disabled) {
+  background: #0c5a52;
+  border-color: #0c5a52;
+}
+
+.personal-settings-secondary {
+  color: #3e4c47;
+  background: #ffffff;
+  border: 1px solid #cbd7d3;
+}
+
+.personal-settings-primary:disabled,
+.personal-settings-secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.personal-settings-dialog .is-spinning {
+  animation: spin 1s linear infinite;
+}

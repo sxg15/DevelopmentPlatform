@@ -12,6 +12,8 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - App startup or login: `src/main.jsx`, `src/ui/App.jsx`,
   `src/ui/AppErrorBoundary.jsx`, `src/api/auth.js`,
   `src/api/clientErrors.js`, `src/integrations/feishuH5.js`.
+- Personal settings: `src/ui/settings/PersonalSettingsDialog.jsx`,
+  `src/api/personalSettings.js`, `src/styles/settings.css`.
 - Project loading/navigation: `src/ui/workspace/PlatformWorkspace.jsx`,
   `src/ui/workspace/ProjectNavigation.jsx`, `src/api/projects.js`.
 - Overview: `src/ui/ProjectOverview.jsx`, `src/api/overview.js`,
@@ -36,6 +38,10 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - Isolate ECharts initialization, option updates, resize callbacks, and disposal so
   a chart failure cannot unmount the application.
 - Keep Feishu SDK behavior in `src/integrations/`.
+- Keep the settings dialog isolated from `App.jsx`; the app shell owns only open
+  state, while loading and saving belong to the settings component and API client.
+- Personal notification settings use
+  `{ receiveTodoNotifications, todoNotificationTime }`, with `HH:mm` time values.
 - Reuse `shared/workItemDefinitions.js` instead of duplicating route segments,
   labels, statuses, or field contracts.
 - Keep pure formatting/filtering logic outside JSX when it can be tested.
@@ -54,7 +60,8 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - Load React Chrono's global stylesheet before project styles so local base and
   work-item rules retain cascade ownership.
 - Preserve local snapshot and draft keys when changing workspace state.
-- Keep stylesheet import order: base, overview, work items, auth, responsive.
+- Keep stylesheet import order: base, overview, work items, auth, settings,
+  responsive.
 - Add component-specific CSS to the owning stylesheet; add cross-module responsive
   overrides to `responsive.css`.
 - Maintain existing dense operational UI patterns and verify text does not truncate

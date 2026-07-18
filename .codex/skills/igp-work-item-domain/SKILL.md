@@ -41,6 +41,14 @@ Treat shared definitions as the canonical frontend/backend contract.
   current stored data does not prove those historical values.
 - Empty assignees in detail views must remain visibly warned.
 - Feedback contact data remains normalized JSON in `联系信息数据`.
+- Daily pending reminders include assigned requirements, Bugs, and feedback whose
+  current status is not in that tool's configured completed group. Blocked,
+  stalled, and unset statuses remain pending.
+- Reminder collection must honor the user's project and tool permissions, treat
+  missing work-item tables as empty, and continue when one project/tool read
+  fails.
+- Reminder cards show a three-tool count summary and at most ten urgency-sorted
+  direct-detail links.
 - Comments and status change logs must retain their stored document schemas.
 - Realtime updates retain `projectId`, `toolId`, and `recordId`.
 - Opening project overview must not create or copy work-item tables.

@@ -28,6 +28,8 @@ or validation commands change.
   rules and change descriptions.
 - `shared/projectOverviewUtils.js`: overview aggregation, risk detection, and trends.
 - `shared/workItemRealtimeUtils.js`: client/server realtime item helpers.
+- `shared/personalSettingsUtils.js`: personal notification time normalization,
+  scheduled reminder matching, pending-item filtering, sorting, and summaries.
 - `shared/clientErrorUtils.js`: runtime-neutral client error redaction, truncation,
   and diagnostic identifiers.
 - `shared/updateManifest.js`: update manifest and semantic version handling.
@@ -39,6 +41,8 @@ Shared modules must remain runtime-neutral and importable from Node tests.
 - `src/main.jsx`: React bootstrap, global runtime error reporting, and aggregate
   stylesheet import.
 - `src/ui/App.jsx`: authentication shell, update checks, toolbar, and login states.
+- `src/ui/settings/PersonalSettingsDialog.jsx`: personal settings modal and
+  notification preferences.
 - `src/ui/AppErrorBoundary.jsx`: root fallback for React render and effect errors.
 - `src/ui/workspace/PlatformWorkspace.jsx`: project/work-item orchestration.
 - `src/ui/workspace/ProjectNavigation.jsx`: project sidebar and home navigation.
@@ -54,7 +58,8 @@ Shared modules must remain runtime-neutral and importable from Node tests.
   ordering, filtering, pagination, and timestamp helpers.
 - `src/ui/workItemListUtils.js`: pure list filtering, grouping, and sorting rules.
 - `src/ui/localCache.js`: browser cache, drafts, snapshots, and preferences.
-- `src/api/`: all frontend HTTP clients, including sanitized client-error reporting.
+- `src/api/`: all frontend HTTP clients, including personal settings and sanitized
+  client-error reporting.
   Do not add direct `fetch` calls to UI files.
 - `src/integrations/feishuH5.js`: Feishu H5 SDK loading and authorization.
 - `src/styles.css`: stylesheet aggregator. Keep imports in cascade order.
@@ -78,6 +83,10 @@ Shared modules must remain runtime-neutral and importable from Node tests.
   `logs/client-errors.log` in development and `Publish/logs/client-errors.log` in
   production, with one 10 MB rotated backup.
 - `server/services/updateService.js`: remote update manifest retrieval.
+- `server/services/personalSettingsService.js`: Wiki-backed personal settings
+  schema validation, record lookup, creation, and updates.
+- `server/services/todoNotificationScheduler.js`: minute-aligned scheduled reminder
+  execution.
 
 Keep Feishu HTTP details in `server/integrations/`, process-local state in
 `server/runtime/`, config behavior in `server/config/`, and route orchestration in
@@ -99,6 +108,14 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
   each node. Assignee and attachment events use the stored system-comment
   prefixes; do not create a separate timeline field.
 - Feedback stores normalized identity/contact data in `联系信息数据`.
+- Personal settings use the Wiki-backed Bitable fields `用户`,
+  `接收待办事项通知`, and `待办事项通知时间`. Enabled notifications store
+  the select value `允许`.
+- Daily pending notifications include assigned requirement, Bug, and feedback
+  records whose statuses are not in the configured completed groups. Missing
+  work-item tables count as empty; blocked and unset statuses remain pending.
+- Notification checks run in `Asia/Shanghai` at second five of each minute, do not
+  catch up after downtime, and send at most once per user and calendar day.
 - Project overview reads existing work-item tables and must not create Wiki nodes or
   copy templates.
 - Realtime events use `projectId`, `toolId`, and `recordId`; preserve this payload.
@@ -108,6 +125,8 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 - `config/config.json` and `Publish/config.json` contain runtime secrets. Never print,
   inspect in responses, commit, or copy their values into tests/docs.
 - Use `config/config.example.json` for documented configuration changes.
+- Personal settings configuration lives under `bitable.personalSettings`; keep the
+  Wiki node token and exact table field names configurable.
 - The browser may receive `appId` and debug identity only; never expose `appSecret`
   or access tokens.
 - Client error reports may include only sanitized messages/stacks, component stacks,
