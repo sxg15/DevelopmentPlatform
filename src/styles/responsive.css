@@ -181,6 +181,10 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .version-form-association-options {
+    height: min(220px, 32vh);
+  }
+
   .version-metadata-grid > div:nth-last-child(-n + 2) {
     border-bottom: 1px solid #edf1f5;
   }

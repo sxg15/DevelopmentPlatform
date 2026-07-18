@@ -404,7 +404,6 @@ button.version-active-slot:focus-visible {
 
 .version-filter-row select,
 .version-form-grid select,
-.version-form-associations select,
 .version-form-reason select,
 .version-comment-editor select {
   width: 100%;
@@ -1121,8 +1120,7 @@ button.version-active-slot:focus-visible {
   gap: 12px;
 }
 
-.version-form-grid label,
-.version-form-associations label {
+.version-form-grid label {
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -1154,21 +1152,162 @@ button.version-active-slot:focus-visible {
   margin-top: 16px;
 }
 
-.version-form-associations label > span {
+.version-form-association-group {
+  min-width: 0;
+  overflow: hidden;
+  background: #f8fafc;
+  border: 1px solid #dbe3ec;
+  border-radius: 8px;
+}
+
+.version-form-association-group > header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 8px;
+  padding: 9px 10px 7px;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.version-form-association-group > header > span {
+  display: flex;
+  align-items: center;
+  min-width: 0;
   gap: 6px;
 }
 
-.version-form-associations label > span svg {
+.version-form-association-group > header svg {
   width: 15px;
   height: 15px;
+  flex: 0 0 auto;
   color: #2563eb;
 }
 
-.version-form-associations select {
-  min-height: 150px;
-  padding: 7px;
+.version-form-association-group > header strong {
+  flex: 0 0 auto;
+  color: #2563eb;
+  font-size: 10px;
+}
+
+.version-form-association-search {
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  margin: 0 8px 8px;
+  padding: 0 8px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+}
+
+.version-form-association-search:focus-within {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 2px rgb(59 130 246 / 12%);
+}
+
+.version-form-association-search svg {
+  width: 14px;
+  height: 14px;
+  color: #64748b;
+}
+
+.version-form-association-search input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0;
+  color: #1e293b;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.version-form-association-options {
+  height: 190px;
+  overflow-y: auto;
+  background: #ffffff;
+  border-top: 1px solid #e2e8f0;
+}
+
+.version-form-association-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
+  align-items: center;
+  min-height: 48px;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid #edf2f7;
+  transition: background-color 120ms ease;
+}
+
+.version-form-association-option:hover {
+  background: #f8fafc;
+}
+
+.version-form-association-option.is-selected {
+  background: #eff6ff;
+}
+
+.version-form-association-option-copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 2px;
+}
+
+.version-form-association-option-copy strong {
+  color: #1e3a8a;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.version-form-association-option-copy > span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 15px;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.version-form-association-option-copy small {
+  width: max-content;
+  padding: 1px 5px;
+  color: #9a3412;
+  background: #ffedd5;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.version-form-association-option input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+
+.version-form-association-empty {
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+  margin: 0;
+  padding: 20px 10px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
 }
 
 .version-form-reason {

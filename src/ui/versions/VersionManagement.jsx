@@ -33,6 +33,7 @@ import {
 } from '../../api/versions.js';
 import {
   buildActiveVersionMatrix,
+  filterVersionAssociationCandidates,
   filterVersions,
   mergeVersionPayload,
   normalizeVersionManagementPayload,
@@ -653,6 +654,9 @@ function VersionDetail({
 
 function VersionEditorDialog({ state, data, onChange, onClose, onSubmit }) {
   const isEditing = Boolean(state.recordId);
+  const [associationSearch, setAssociationSearch] = useState(() => Object.fromEntries(
+    ASSOCIATION_DEFINITIONS.map(({ id }) => [id, '']),
+  ));
   return (
     <DialogShell title={isEditing ? '编辑版本' : '创建版本'} icon={isEditing ? Pencil : Plus} onClose={onClose}>
       <div className="version-form-grid">
@@ -702,27 +706,68 @@ function VersionEditorDialog({ state, data, onChange, onClose, onSubmit }) {
       <div className="version-form-associations">
         {ASSOCIATION_DEFINITIONS.map(({ id, label, icon: Icon }) => {
           const candidates = mergeAssociationCandidates(data.completedWorkItems[id], state.existingAssociations[id]);
+          const selectedRecordIds = Array.isArray(state.associations[id]) ? state.associations[id] : [];
+          const filteredCandidates = filterVersionAssociationCandidates(candidates, associationSearch[id]);
           return (
-            <label key={id}>
-              <span><Icon aria-hidden="true" />{label}</span>
-              <select
-                multiple
-                value={state.associations[id]}
-                onChange={(event) => onChange((current) => ({
-                  ...current,
-                  associations: {
-                    ...current.associations,
-                    [id]: Array.from(event.target.selectedOptions).map((option) => option.value),
-                  },
-                }))}
-              >
-                {candidates.map((item) => (
-                  <option key={item.recordId} value={item.recordId}>
-                    {item.itemId || '无编号'} · {item.title}{item.isExistingOnly ? '（历史关联）' : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <section className="version-form-association-group" key={id}>
+              <header>
+                <span><Icon aria-hidden="true" />{label}</span>
+                <strong>已选 {selectedRecordIds.length}</strong>
+              </header>
+              <label className="version-form-association-search">
+                <Search aria-hidden="true" />
+                <input
+                  type="search"
+                  value={associationSearch[id]}
+                  placeholder="搜索编号或标题"
+                  aria-label={`搜索${label}`}
+                  onChange={(event) => setAssociationSearch((current) => ({
+                    ...current,
+                    [id]: event.target.value,
+                  }))}
+                />
+              </label>
+              <div className="version-form-association-options" role="group" aria-label={label}>
+                {filteredCandidates.length ? filteredCandidates.map((item) => {
+                  const selected = selectedRecordIds.includes(item.recordId);
+                  return (
+                    <label
+                      className={`version-form-association-option ${selected ? 'is-selected' : ''}`}
+                      key={item.recordId}
+                    >
+                      <span className="version-form-association-option-copy">
+                        <strong>{item.itemId || '无编号'}</strong>
+                        <span title={item.title}>{item.title}</span>
+                        {item.isExistingOnly ? <small>历史关联</small> : null}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        aria-label={`${selected ? '取消选择' : '选择'}${item.itemId || item.title}`}
+                        onChange={(event) => onChange((current) => {
+                          const currentIds = Array.isArray(current.associations[id])
+                            ? current.associations[id]
+                            : [];
+                          return {
+                            ...current,
+                            associations: {
+                              ...current.associations,
+                              [id]: event.target.checked
+                                ? [...new Set([...currentIds, item.recordId])]
+                                : currentIds.filter((recordId) => recordId !== item.recordId),
+                            },
+                          };
+                        })}
+                      />
+                    </label>
+                  );
+                }) : (
+                  <p className="version-form-association-empty">
+                    {candidates.length ? '没有匹配的工作项' : '暂无可关联的工作项'}
+                  </p>
+                )}
+              </div>
+            </section>
           );
         })}
       </div>

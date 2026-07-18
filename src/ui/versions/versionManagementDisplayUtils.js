@@ -109,6 +109,18 @@ export function filterVersions(versions, { search = '', platform = 'all', status
     .sort(compareVersions);
 }
 
+export function filterVersionAssociationCandidates(candidates, search = '') {
+  const keyword = String(search || '').trim().toLocaleLowerCase('zh-CN');
+  if (!keyword) {
+    return Array.isArray(candidates) ? candidates : [];
+  }
+  return (Array.isArray(candidates) ? candidates : []).filter((item) => [
+    item?.itemId,
+    item?.title,
+    item?.status,
+  ].join(' ').toLocaleLowerCase('zh-CN').includes(keyword));
+}
+
 export function buildActiveVersionMatrix(versions, platforms, statuses) {
   return (Array.isArray(platforms) ? platforms : VERSION_PLATFORMS).map((platform) => ({
     platform,
