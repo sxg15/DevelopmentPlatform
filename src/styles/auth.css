@@ -1,0 +1,137 @@
+.auth-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 64px;
+  max-width: min(360px, calc(100vw - 40px));
+  padding: 14px 18px;
+  overflow: hidden;
+  color: #111827;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid #d7e3df;
+  border-radius: 8px;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.12);
+  transform: translate(-50%, -50%);
+}
+
+.auth-panel-error {
+  color: #991b1b;
+  border-color: #fecaca;
+  background: rgba(255, 250, 250, 0.98);
+}
+
+.status-message,
+.user-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-panel .status-message {
+  font-size: 15px;
+  line-height: 22px;
+}
+
+.avatar {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #daf7ef;
+}
+
+.avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #107063;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.loading-mark {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+}
+
+.loading-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: conic-gradient(from 0deg, #148f7e, #7c3aed, #06b6d4, #148f7e);
+  animation: spin 1s linear infinite;
+}
+
+.loading-ring::after {
+  position: absolute;
+  inset: 4px;
+  content: "";
+  border-radius: inherit;
+  background: #ffffff;
+}
+
+.loading-core {
+  position: absolute;
+  inset: 12px;
+  border-radius: 999px;
+  background: #148f7e;
+  box-shadow: 0 0 18px rgba(20, 143, 126, 0.45);
+  animation: breathe 1.2s ease-in-out infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.78);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@container project-overview (max-width: 1100px) {
+  .project-overview-kpis {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container project-overview (max-width: 720px) {
+  .project-overview-header {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .project-overview-controls {
+    justify-items: start;
+  }
+
+  .project-overview-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container project-overview (max-width: 460px) {
+  .project-overview-kpis {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
