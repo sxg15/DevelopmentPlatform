@@ -49,12 +49,18 @@ import {
 } from './runtime/sessionStore.js';
 import { createWorkItemRealtimeHub } from './runtime/workItemRealtime.js';
 import { fetchUpdateManifest } from './services/updateService.js';
+import {
+  exchangeCodeForAccessToken,
+  fetchFeishuJson,
+  fetchFeishuUser,
+  getTenantAccessToken,
+  readJson,
+} from './integrations/feishuClient.js';
 
 const host = runtimeConfig.server.host;
 const port = runtimeConfig.server.port;
 const appId = runtimeConfig.feishu.appId;
 const appSecret = runtimeConfig.feishu.appSecret;
-let tenantTokenCache = null;
 let peopleDirectoryCache = null;
 
 const MAX_SUBMIT_ATTACHMENT_BYTES = 20 * 1024 * 1024;
@@ -1795,99 +1801,6 @@ app.listen(port, host, () => {
     console.log(url);
   }
 });
-
-async function exchangeCodeForAccessToken(code) {
-  const response = await fetch('https://open.feishu.cn/open-apis/authen/v2/oauth/token', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-    },
-    body: JSON.stringify({
-      grant_type: 'authorization_code',
-      client_id: appId,
-      client_secret: appSecret,
-      code,
-    }),
-  });
-
-  const payload = await readJson(response);
-
-  if (!response.ok || payload.code !== 0) {
-    throw new Error(payload.error_description || payload.msg || '飞书授权码换取失败');
-  }
-
-  const accessToken = payload.access_token || payload.data?.access_token;
-  if (!accessToken) {
-    throw new Error('飞书没有返回用户访问令牌');
-  }
-
-  return accessToken;
-}
-
-async function fetchFeishuUser(accessToken) {
-  const response = await fetch('https://open.feishu.cn/open-apis/authen/v1/user_info', {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
-
-  const payload = await readJson(response);
-
-  if (!response.ok || payload.code !== 0) {
-    throw new Error(payload.msg || '获取飞书用户信息失败');
-  }
-
-  const source = payload.data || payload;
-  const name = source.name || source.en_name || source.email || '飞书用户';
-  const avatarUrl =
-    source.avatar_url || source.avatar_thumb || source.avatar_middle || source.avatar_big || '';
-
-  return {
-    name,
-    avatarUrl,
-    openId: source.open_id || source.openId || '',
-    unionId: source.union_id || source.unionId || '',
-    userId: source.user_id || source.userId || '',
-    email: source.email || '',
-  };
-}
-
-async function getTenantAccessToken() {
-  const now = Date.now();
-  if (tenantTokenCache && tenantTokenCache.expiresAt > now + 60 * 1000) {
-    return tenantTokenCache.token;
-  }
-
-  const response = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-    },
-    body: JSON.stringify({
-      app_id: appId,
-      app_secret: appSecret,
-    }),
-  });
-
-  const payload = await readJson(response);
-
-  if (!response.ok || payload.code !== 0) {
-    throw new Error(payload.msg || '获取飞书应用访问令牌失败');
-  }
-
-  const token = payload.tenant_access_token;
-  if (!token) {
-    throw new Error('飞书没有返回应用访问令牌');
-  }
-
-  const expireSeconds = Number(payload.expire || 7200);
-  tenantTokenCache = {
-    token,
-    expiresAt: now + Math.max(expireSeconds - 120, 60) * 1000,
-  };
-
-  return token;
-}
 
 async function fetchBitableRecords(token, tableConfig) {
   const records = [];
@@ -4569,26 +4482,6 @@ async function fetchFeishuDepartmentUsers(token, departmentId) {
   return users;
 }
 
-async function fetchFeishuJson(url, options) {
-  const response = await fetch(url, {
-    method: options.method || 'GET',
-    headers: {
-      Authorization: `Bearer ${options.token}`,
-      'Content-Type': 'application/json; charset=utf-8',
-    },
-  });
-  const payload = await readJson(response);
-
-  if (!response.ok || payload.code !== 0) {
-    const message = typeof options.normalizeError === 'function'
-      ? options.normalizeError(payload)
-      : payload.msg;
-    throw new Error(message || options.errorMessage || '飞书请求失败');
-  }
-
-  return payload;
-}
-
 function normalizeDepartmentId(department) {
   return String(
     department.open_department_id
@@ -5773,14 +5666,6 @@ function wait(milliseconds) {
   return new Promise((resolve) => {
     setTimeout(resolve, milliseconds);
   });
-}
-
-async function readJson(response) {
-  try {
-    return await response.json();
-  } catch {
-    return {};
-  }
 }
 
 function isPeopleSearchReauthorizationRequired(message) {
