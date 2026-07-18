@@ -10,6 +10,32 @@ import {
   parseCookies,
 } from '../server/runtime/sessionStore.js';
 import { createWorkItemRealtimeHub } from '../server/runtime/workItemRealtime.js';
+import { getCachedValue } from '../server/runtime/asyncCache.js';
+
+test('async cache shares pending loads and evicts failed values', async () => {
+  const cache = new Map();
+  let loadCount = 0;
+  const loader = async () => {
+    loadCount += 1;
+    return { value: 'cached' };
+  };
+
+  const [left, right] = await Promise.all([
+    getCachedValue(cache, 'key', 1000, loader),
+    getCachedValue(cache, 'key', 1000, loader),
+  ]);
+
+  assert.equal(loadCount, 1);
+  assert.strictEqual(left, right);
+
+  await assert.rejects(
+    getCachedValue(cache, 'failed', 1000, async () => {
+      throw new Error('load failed');
+    }),
+    /load failed/,
+  );
+  assert.equal(cache.has('failed'), false);
+});
 
 test('session store creates, reads and clears request sessions', () => {
   const user = { name: '测试用户', openId: 'ou_test' };
