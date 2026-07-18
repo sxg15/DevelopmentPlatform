@@ -15,9 +15,11 @@ import {
 } from '../integrations/bitableClient.js';
 import { fetchWikiNodeByToken, isWikiBitableNode } from '../integrations/wikiClient.js';
 import { getCachedValue } from '../runtime/asyncCache.js';
+import { createKeyedTaskQueue } from '../runtime/keyedTaskQueue.js';
 
 const PERSONAL_SETTINGS_CONTEXT_TTL_MS = 10 * 60 * 1000;
 const personalSettingsContextCache = new Map();
+const personalSettingsUserQueue = createKeyedTaskQueue();
 
 export async function readPersonalSettingsForUser(token, user) {
   const context = await getPersonalSettingsTableContext(token);
@@ -32,6 +34,48 @@ export async function readPersonalSettingsForUser(token, user) {
 }
 
 export async function savePersonalSettingsForUser(token, user, value) {
+  return personalSettingsUserQueue.run(
+    getRequiredPersonalSettingsUserKey(user),
+    () => savePersonalSettingsForUserUnqueued(token, user, value),
+  );
+}
+
+export async function ensurePersonalSettingsForUser(token, user) {
+  return personalSettingsUserQueue.run(
+    getRequiredPersonalSettingsUserKey(user),
+    async () => {
+      const context = await getPersonalSettingsTableContext(token);
+      const records = await fetchPersonalSettingsRecords(token, context);
+      const matchedRecords = findPersonalSettingsRecordsForUser(records, user, context.config.fieldNames);
+
+      if (matchedRecords.length > 1) {
+        throw createDuplicatePersonalSettingsError();
+      }
+      if (matchedRecords.length === 1) {
+        return {
+          created: false,
+          settings: normalizePersonalSettingsRecord(matchedRecords[0], context.config),
+        };
+      }
+
+      const settings = normalizePersonalNotificationSettings({}, {
+        defaultTime: context.config.defaultTime,
+        timeZone: context.config.timeZone,
+      });
+      const fields = buildPersonalSettingsFields(context, user, settings, {
+        includeUser: true,
+      });
+      await createBitableRecord(token, context.appToken, context.tableId, fields);
+
+      return {
+        created: true,
+        settings,
+      };
+    },
+  );
+}
+
+async function savePersonalSettingsForUserUnqueued(token, user, value) {
   const context = await getPersonalSettingsTableContext(token);
   const settings = normalizePersonalNotificationSettings(value, {
     defaultTime: context.config.defaultTime,
@@ -259,6 +303,14 @@ function toBitableUserValue(user) {
 
 function getPrimaryUserKey(user) {
   return [...getUserKeySet(user)][0] || '';
+}
+
+function getRequiredPersonalSettingsUserKey(user) {
+  const openId = String(user?.openId || user?.open_id || '').trim();
+  if (!openId) {
+    throw new Error('当前用户缺少飞书 Open ID');
+  }
+  return openId;
 }
 
 function getUserKeySet(user) {

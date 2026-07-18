@@ -63,6 +63,7 @@ import {
 } from './runtime/clientErrorLog.js';
 import { fetchUpdateManifest } from './services/updateService.js';
 import {
+  ensurePersonalSettingsForUser,
   listTodoNotificationRecipients,
   readPersonalSettingsForUser,
   savePersonalSettingsForUser,
@@ -224,6 +225,10 @@ app.get('/api/me/settings', async (request, response) => {
 
 app.put('/api/me/settings', async (request, response) => {
   await handlePersonalSettingsUpdate(request, response);
+});
+
+app.post('/api/me/settings/ensure', async (request, response) => {
+  await handlePersonalSettingsEnsure(request, response);
 });
 
 app.post('/api/auth/debug', async (_request, response) => {
@@ -621,6 +626,32 @@ async function handlePersonalSettingsUpdate(request, response) {
     response.json({ settings });
   } catch (error) {
     const message = error instanceof Error ? error.message : '保存个人设置失败';
+    response.status(getPersonalSettingsErrorStatus(error, message)).json({ message });
+  }
+}
+
+async function handlePersonalSettingsEnsure(request, response) {
+  try {
+    if (!appId || !appSecret) {
+      response.status(500).json({ message: '缺少飞书应用配置' });
+      return;
+    }
+
+    const session = getSession(request);
+    if (!session) {
+      response.status(401).json({ message: '请先登录飞书' });
+      return;
+    }
+
+    const token = await getTenantAccessToken();
+    await ensureUserHasPlatformAccess(token, session.user);
+    const result = await ensurePersonalSettingsForUser(token, session.user);
+    response.status(result.created ? 201 : 200).json({
+      ok: true,
+      created: result.created,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '初始化个人设置失败';
     response.status(getPersonalSettingsErrorStatus(error, message)).json({ message });
   }
 }

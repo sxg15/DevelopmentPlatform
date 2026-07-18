@@ -40,6 +40,9 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - Keep Feishu SDK behavior in `src/integrations/`.
 - Keep the settings dialog isolated from `App.jsx`; the app shell owns only open
   state, while loading and saving belong to the settings component and API client.
+- When authentication becomes ready, call the personal-settings ensure endpoint
+  without awaiting it. Swallow initialization failures so project loading and
+  normal use remain available.
 - Personal notification settings use
   `{ receiveTodoNotifications, todoNotificationTime }`, with `HH:mm` time values.
 - Reuse `shared/workItemDefinitions.js` instead of duplicating route segments,

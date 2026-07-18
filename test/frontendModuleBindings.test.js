@@ -95,3 +95,10 @@ test('work item timeline overrides React Chrono card minimum widths', () => {
     /\.work-item-timeline-chrono \.timeline-card-content\s*\{[^}]*min-width:\s*202px\s*!important;/s,
   );
 });
+
+test('app initializes personal settings without awaiting workspace startup', () => {
+  const source = fs.readFileSync('src/ui/App.jsx', 'utf8');
+
+  assert.match(source, /ensurePersonalSettingsRecord\(\)\.catch\(\(\) =>/);
+  assert.doesNotMatch(source, /await\s+ensurePersonalSettingsRecord\(\)/);
+});

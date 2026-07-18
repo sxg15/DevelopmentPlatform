@@ -14,6 +14,7 @@ import {
   fetchCurrentUser,
 } from '../api/auth.js';
 import { fetchUpdates } from '../api/projects.js';
+import { ensurePersonalSettingsRecord } from '../api/personalSettings.js';
 import {
   getFeishuAuthCode,
   waitForFeishuRuntime,
@@ -95,6 +96,16 @@ export function App() {
       isActive = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (authState.status !== 'ready' || !authState.user) {
+      return;
+    }
+
+    ensurePersonalSettingsRecord().catch(() => {
+      // Personal settings initialization must not block normal workspace use.
+    });
+  }, [authState.status, authState.user]);
 
   useEffect(() => {
     if (authState.status !== 'ready' || !authState.user) {

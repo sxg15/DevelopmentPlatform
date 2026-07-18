@@ -82,6 +82,8 @@ Shared modules must remain runtime-neutral and importable from Node tests.
   client-error log entries. Browser runtime errors append to
   `logs/client-errors.log` in development and `Publish/logs/client-errors.log` in
   production, with one 10 MB rotated backup.
+- `server/runtime/keyedTaskQueue.js`: serializes mutations for the same stable key
+  while allowing unrelated users to proceed concurrently.
 - `server/services/updateService.js`: remote update manifest retrieval.
 - `server/services/personalSettingsService.js`: Wiki-backed personal settings
   schema validation, record lookup, creation, and updates.
@@ -111,6 +113,11 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 - Personal settings use the Wiki-backed Bitable fields `用户`,
   `接收待办事项通知`, and `待办事项通知时间`. Enabled notifications store
   the select value `允许`.
+- After authentication becomes ready, the frontend silently ensures a personal
+  settings record. Missing records are created with notifications disabled and
+  the configured default time; initialization failures never block the workspace.
+- Automatic settings creation and explicit saves for the same user must run
+  serially to prevent duplicate Bitable records.
 - Daily pending notifications include assigned requirement, Bug, and feedback
   records whose statuses are not in the configured completed groups. Missing
   work-item tables count as empty; blocked and unset statuses remain pending.

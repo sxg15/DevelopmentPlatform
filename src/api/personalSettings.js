@@ -5,6 +5,15 @@ export async function fetchPersonalSettings() {
   return payload.settings;
 }
 
+export async function ensurePersonalSettingsRecord() {
+  const payload = await requestJson('/api/me/settings/ensure', {
+    method: 'POST',
+  });
+  return {
+    created: payload.created === true,
+  };
+}
+
 export async function updatePersonalSettings(settings) {
   const payload = await requestJson('/api/me/settings', {
     method: 'PUT',

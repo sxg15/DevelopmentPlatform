@@ -49,6 +49,9 @@ Treat shared definitions as the canonical frontend/backend contract.
   fails.
 - Reminder cards show a three-tool count summary and at most ten urgency-sorted
   direct-detail links.
+- Opening the authenticated app silently creates a missing personal-settings
+  record with notifications disabled. Record creation must not delay or fail the
+  normal workspace startup path.
 - Comments and status change logs must retain their stored document schemas.
 - Realtime updates retain `projectId`, `toolId`, and `recordId`.
 - Opening project overview must not create or copy work-item tables.

@@ -49,6 +49,12 @@ Read `AGENTS.md`, then locate the owning layer.
   catch-up behavior or send more than once per user and Shanghai calendar day.
 - Settings routes are `GET /api/me/settings` and `PUT /api/me/settings`; require a
   session and retain the `{ notifications: ... }` contract.
+- `POST /api/me/settings/ensure` creates a missing user record with notifications
+  disabled and the configured default time. Existing records must remain
+  unchanged.
+- Serialize ensure and save operations for the same Open ID through
+  `server/runtime/keyedTaskQueue.js` so concurrent app tabs cannot create
+  duplicates; different users must remain concurrent.
 
 ## Validate
 

@@ -11,6 +11,7 @@ import {
 } from '../server/runtime/sessionStore.js';
 import { createWorkItemRealtimeHub } from '../server/runtime/workItemRealtime.js';
 import { getCachedValue } from '../server/runtime/asyncCache.js';
+import { createKeyedTaskQueue } from '../server/runtime/keyedTaskQueue.js';
 
 test('async cache shares pending loads and evicts failed values', async () => {
   const cache = new Map();
@@ -93,4 +94,33 @@ test('realtime hub only publishes events allowed for each project and tool', () 
   assert.match(writes[0], /^event: ready/);
   assert.equal(writes.filter((value) => value.startsWith('event: work-item-updated')).length, 1);
   assert.match(writes.at(-1), /requirement-1/);
+});
+
+test('keyed task queue serializes one user without blocking other users', async () => {
+  const queue = createKeyedTaskQueue();
+  const order = [];
+  let releaseFirst;
+  const firstGate = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+
+  const first = queue.run('ou_first', async () => {
+    order.push('first-start');
+    await firstGate;
+    order.push('first-end');
+  });
+  const second = queue.run('ou_first', async () => {
+    order.push('second');
+  });
+  const other = queue.run('ou_other', async () => {
+    order.push('other');
+  });
+
+  await other;
+  assert.deepEqual(order, ['first-start', 'other']);
+  releaseFirst();
+  await Promise.all([first, second]);
+
+  assert.deepEqual(order, ['first-start', 'other', 'first-end', 'second']);
+  assert.equal(queue.size(), 0);
 });
