@@ -104,3 +104,14 @@ test('app initializes personal settings without awaiting workspace startup', () 
   assert.match(source, /ensurePersonalSettingsRecord\(\)\.catch\(\(\) =>/);
   assert.doesNotMatch(source, /await\s+ensurePersonalSettingsRecord\(\)/);
 });
+
+test('version management renders a local snapshot before refreshing it', () => {
+  const versionSource = fs.readFileSync('src/ui/versions/VersionManagement.jsx', 'utf8');
+  const workspaceSource = fs.readFileSync('src/ui/workspace/PlatformWorkspace.jsx', 'utf8');
+
+  assert.match(versionSource, /loadVersions\(\{\s*readCache:\s*true\s*\}\)/);
+  assert.match(versionSource, /await\s+getCachedSnapshot\(snapshotKey\)/);
+  assert.match(versionSource, /normalizeVersionManagementPayload\(cachedSnapshot\.value\)/);
+  assert.match(versionSource, /saveCachedSnapshot\(cacheUserKey,\s*snapshotKey,\s*payload\)/s);
+  assert.match(workspaceSource, /<VersionManagement[\s\S]*cacheUserKey=\{cacheUserKey\}/);
+});

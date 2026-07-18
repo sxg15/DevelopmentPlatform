@@ -32,6 +32,11 @@ import {
   updateVersionStatus,
 } from '../../api/versions.js';
 import {
+  createVersionManagementSnapshotKey,
+  getCachedSnapshot,
+  saveCachedSnapshot,
+} from '../localCache.js';
+import {
   buildActiveVersionMatrix,
   filterVersionAssociationCandidates,
   filterVersions,
@@ -49,6 +54,7 @@ const ASSOCIATION_DEFINITIONS = [
 export function VersionManagement({
   project,
   user,
+  cacheUserKey,
   realtimeEvent,
   directTarget,
   targetRecordId,
@@ -63,15 +69,17 @@ export function VersionManagement({
   const [statusEditor, setStatusEditor] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const requestRef = useRef(0);
+  const dataRef = useRef(null);
   const processedRealtimeRef = useRef('');
   const processedDirectRef = useRef('');
 
   useEffect(() => {
-    void loadVersions();
+    dataRef.current = null;
+    void loadVersions({ readCache: true });
     return () => {
       requestRef.current += 1;
     };
-  }, [projectId]);
+  }, [cacheUserKey, projectId]);
 
   useEffect(() => {
     if (
@@ -110,10 +118,37 @@ export function VersionManagement({
     }
   }, [state.data, targetRecordId]);
 
-  async function loadVersions({ keepSelection = false, quiet = false } = {}) {
+  async function loadVersions({
+    keepSelection = false,
+    quiet = false,
+    readCache = false,
+  } = {}) {
     const requestId = requestRef.current + 1;
     requestRef.current = requestId;
-    if (!quiet) {
+    const snapshotKey = createVersionManagementSnapshotKey(cacheUserKey, projectId);
+    let cachedSnapshot = null;
+
+    if (readCache) {
+      setState({
+        status: 'loading',
+        message: '正在加载版本管理',
+        data: null,
+      });
+      cachedSnapshot = await getCachedSnapshot(snapshotKey);
+      if (requestRef.current !== requestId) {
+        return;
+      }
+      if (cachedSnapshot?.value) {
+        const cachedPayload = normalizeVersionManagementPayload(cachedSnapshot.value);
+        dataRef.current = cachedPayload;
+        setState({
+          status: 'refreshing',
+          message: buildVersionCacheMessage(cachedSnapshot.savedAt, true),
+          data: cachedPayload,
+        });
+        selectPreferredVersion(cachedPayload, keepSelection);
+      }
+    } else if (!quiet) {
       setState((current) => ({
         ...current,
         status: current.data ? 'refreshing' : 'loading',
@@ -125,15 +160,10 @@ export function VersionManagement({
       if (requestRef.current !== requestId) {
         return;
       }
+      dataRef.current = payload;
       setState({ status: 'ready', message: '', data: payload });
-      setSelectedRecordId((current) => {
-        const directRecordId = directTarget?.toolId === 'versions' ? directTarget.recordId : '';
-        const preferred = directRecordId || (keepSelection ? current : '');
-        if (preferred && payload.versions.some((version) => version.recordId === preferred)) {
-          return preferred;
-        }
-        return payload.versions[0]?.recordId || '';
-      });
+      void saveCachedSnapshot(cacheUserKey, snapshotKey, payload);
+      selectPreferredVersion(payload, keepSelection);
       if (directTarget?.toolId === 'versions' && directTarget.recordId) {
         const exists = payload.versions.some((version) => version.recordId === directTarget.recordId);
         onDirectNotice?.(exists
@@ -144,18 +174,35 @@ export function VersionManagement({
       if (requestRef.current === requestId) {
         setState((current) => ({
           status: current.data ? 'ready' : 'error',
-          message: formatError(error),
+          message: cachedSnapshot?.value
+            ? buildVersionCacheMessage(cachedSnapshot.savedAt, false, formatError(error))
+            : formatError(error),
           data: current.data,
         }));
       }
     }
   }
 
-  function applyMutationPayload(payload, preferredRecordId = '') {
-    setState((current) => {
-      const data = mergeVersionPayload(current.data, payload);
-      return { status: 'ready', message: '', data };
+  function selectPreferredVersion(payload, keepSelection) {
+    setSelectedRecordId((current) => {
+      const directRecordId = directTarget?.toolId === 'versions' ? directTarget.recordId : '';
+      const preferred = directRecordId || (keepSelection ? current : '');
+      if (preferred && payload.versions.some((version) => version.recordId === preferred)) {
+        return preferred;
+      }
+      return payload.versions[0]?.recordId || '';
     });
+  }
+
+  function applyMutationPayload(payload, preferredRecordId = '') {
+    const data = mergeVersionPayload(dataRef.current, payload);
+    dataRef.current = data;
+    setState({ status: 'ready', message: '', data });
+    void saveCachedSnapshot(
+      cacheUserKey,
+      createVersionManagementSnapshotKey(cacheUserKey, projectId),
+      data,
+    );
     if (preferredRecordId) {
       setSelectedRecordId(preferredRecordId);
     }
@@ -967,6 +1014,25 @@ function formatDateTime(value) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(timestamp));
+}
+
+function buildVersionCacheMessage(savedAt, refreshing, errorMessage = '') {
+  const time = formatCacheTime(savedAt);
+  return refreshing
+    ? `已加载本地缓存（最后同步：${time}），正在后台更新`
+    : `已显示本地缓存（最后同步：${time}）。服务器更新失败：${errorMessage || '请求失败'}`;
+}
+
+function formatCacheTime(value) {
+  const date = new Date(Number(value));
+  if (!Number.isFinite(date.getTime())) {
+    return '未知时间';
+  }
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-') + ` ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
 function isSameUser(comment, user) {

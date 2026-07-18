@@ -783,6 +783,7 @@ function ProjectWorkspace({
               <VersionManagement
                 project={project}
                 user={user}
+                cacheUserKey={cacheUserKey}
                 realtimeEvent={realtimeEvent}
                 directTarget={directTarget}
                 targetRecordId={selectedVersionId}

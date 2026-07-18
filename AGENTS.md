@@ -146,6 +146,9 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
   write fails.
 - Version associations store snapshots of completed/closed requirements, Bugs, and
   feedback. Existing snapshots remain valid after a work item is reopened.
+- Version Management stores its normalized read payload in a user/project-isolated
+  IndexedDB snapshot, renders cached data first, refreshes in the background, and
+  updates the snapshot after successful mutations.
 - `上个版本` is manual and may cross platforms, but must not self-reference or form
   a cycle. Block deletion while another version references the target.
 - Version association, previous-version, status-history, and comment text fields use

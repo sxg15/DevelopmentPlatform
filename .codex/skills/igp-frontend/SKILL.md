@@ -81,6 +81,9 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
   refresh events with `toolId: 'versions'`.
 - Normalize cached overview version data before rendering. An absent version table
   is a quiet uninitialized state, not an error and not a provisioning trigger.
+- Version Management uses a user/project-isolated IndexedDB snapshot for its
+  normalized payload. Render the snapshot first, refresh it in the background, and
+  update the snapshot after successful version mutations.
 
 ## Validate
 

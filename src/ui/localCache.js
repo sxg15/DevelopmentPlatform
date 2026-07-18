@@ -36,6 +36,10 @@ export function createProjectOverviewSnapshotKey(userKey, projectId, scope, tren
   return createSnapshotKey(userKey, 'project-overview', projectId, scope, trendDays);
 }
 
+export function createVersionManagementSnapshotKey(userKey, projectId) {
+  return createSnapshotKey(userKey, 'version-management', projectId);
+}
+
 export function createDraftKey(userKey, action, projectId, toolId, recordId = '') {
   return [
     normalizeKeyPart(userKey),

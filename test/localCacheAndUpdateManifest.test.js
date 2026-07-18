@@ -7,6 +7,7 @@ import {
   createLocalCacheUserKey,
   createProjectOverviewSnapshotKey,
   createProjectsSnapshotKey,
+  createVersionManagementSnapshotKey,
   createWorkItemsSnapshotKey,
   isLocalCacheEntryExpired,
   serializeDraftValue,
@@ -39,6 +40,14 @@ test('local cache keys isolate users, projects, and tools', () => {
   assert.notEqual(
     createProjectOverviewSnapshotKey(alice, 'project-a', 'project', 30),
     createProjectOverviewSnapshotKey(alice, 'project-a', 'mine', 30),
+  );
+  assert.notEqual(
+    createVersionManagementSnapshotKey(alice, 'project-a'),
+    createVersionManagementSnapshotKey(alice, 'project-b'),
+  );
+  assert.notEqual(
+    createVersionManagementSnapshotKey(alice, 'project-a'),
+    createVersionManagementSnapshotKey(bob, 'project-a'),
   );
 });
 
