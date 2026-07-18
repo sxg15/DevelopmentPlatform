@@ -68,6 +68,7 @@ import {
   buildDisplayUserKeys,
   buildDisplayUserSetKey,
   buildEditableFieldInitialValues,
+  buildBorderColor,
   buildSoftColor,
   findFieldOption,
   formatBitableDate,
@@ -97,6 +98,7 @@ import {
   mapBitableOptionColor,
   normalizeAttachmentItems,
   normalizeCheckboxValue,
+  normalizeDateDisplayTimestamp,
   normalizeDisplayText,
   normalizeEditableFeedbackContactInfo,
   normalizeFieldUsers,
@@ -106,7 +108,11 @@ import {
   parseFeedbackContactInfoForClient,
   toEditableAttachmentPayload,
 } from '../work-items/workItemFieldUtils.js';
-import { HomePanel, ProjectSidebar } from './ProjectNavigation.jsx';
+import {
+  HomePanel,
+  ProjectIcon,
+  ProjectSidebar,
+} from './ProjectNavigation.jsx';
 
 const INITIAL_PROJECT_STATE = {
   status: 'loading',

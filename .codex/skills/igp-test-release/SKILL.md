@@ -30,6 +30,7 @@ commit `Publish/config.json`.
 - Overview: `test/projectOverviewUtils.test.js`.
 - Frontend cache/list/fields: `test/localCacheAndUpdateManifest.test.js`,
   `test/workItemListUtils.test.js`, `test/workItemFieldUtils.test.js`.
+- Frontend module binding regression: `test/frontendModuleBindings.test.js`.
 - Backend config/runtime/integrations: `test/serverConfig.test.js`,
   `test/serverRuntime.test.js`, `test/wikiClient.test.js`.
 
