@@ -29,8 +29,10 @@ commit `Publish/config.json`.
   `test/requirementSubmissionAttachmentUtils.test.js`.
 - Overview: `test/projectOverviewUtils.test.js`.
 - Frontend cache/list/fields: `test/localCacheAndUpdateManifest.test.js`,
-  `test/workItemListUtils.test.js`, `test/workItemFieldUtils.test.js`.
+  `test/workItemListUtils.test.js`, `test/workItemFieldUtils.test.js`,
+  `test/projectOverviewDisplayUtils.test.js`.
 - Frontend module binding regression: `test/frontendModuleBindings.test.js`.
+- Client runtime diagnostics and redaction: `test/clientErrorUtils.test.js`.
 - Backend config/runtime/integrations: `test/serverConfig.test.js`,
   `test/serverRuntime.test.js`, `test/wikiClient.test.js`.
 

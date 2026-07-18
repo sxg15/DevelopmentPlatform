@@ -24,6 +24,81 @@
   background: rgba(255, 250, 250, 0.98);
 }
 
+.app-error-shell {
+  min-height: 100vh;
+}
+
+.app-runtime-error {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  width: min(720px, calc(100vw - 40px));
+  gap: 18px;
+  margin: auto;
+  padding: 24px;
+  color: #7f1d1d;
+  background: #fffafa;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  box-shadow: 0 18px 48px rgba(127, 29, 29, 0.1);
+}
+
+.app-runtime-error > svg {
+  width: 30px;
+  height: 30px;
+}
+
+.app-runtime-error-content {
+  min-width: 0;
+}
+
+.app-runtime-error h1 {
+  margin: 0;
+  color: #7f1d1d;
+  font-size: 20px;
+  line-height: 28px;
+}
+
+.app-runtime-error p {
+  margin: 6px 0 10px;
+  color: #7c2d2d;
+  font-size: 14px;
+  line-height: 21px;
+}
+
+.app-runtime-error code {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #991b1b;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.app-runtime-error button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  gap: 7px;
+  padding: 0 14px;
+  color: #ffffff;
+  background: #b42318;
+  border: 1px solid #991b1b;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.app-runtime-error button:hover {
+  background: #991b1b;
+}
+
+.app-runtime-error button svg {
+  width: 16px;
+  height: 16px;
+}
+
 .status-message,
 .user-name {
   min-width: 0;
@@ -133,5 +208,16 @@
 @container project-overview (max-width: 460px) {
   .project-overview-kpis {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 620px) {
+  .app-runtime-error {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .app-runtime-error button {
+    width: 100%;
   }
 }

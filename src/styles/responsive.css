@@ -176,9 +176,9 @@
     margin-left: 28px;
   }
 
-  .project-overview-chart,
+  .project-overview-chart-frame,
   .project-overview-chart-empty,
-  .project-overview-panel-trend .project-overview-chart,
+  .project-overview-panel-trend .project-overview-chart-frame,
   .project-overview-panel-trend .project-overview-chart-empty {
     height: 270px;
     min-height: 270px;

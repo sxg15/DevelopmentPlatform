@@ -6,8 +6,11 @@ import traverseModule from '@babel/traverse';
 
 const traverse = traverseModule.default || traverseModule;
 const FRONTEND_MODULES = [
+  'src/api/clientErrors.js',
   'src/ui/App.jsx',
+  'src/ui/AppErrorBoundary.jsx',
   'src/ui/ProjectOverview.jsx',
+  'src/ui/projectOverviewDisplayUtils.js',
   'src/ui/workspace/PlatformWorkspace.jsx',
   'src/ui/workspace/ProjectNavigation.jsx',
   'src/ui/work-items/workItemFieldUtils.js',

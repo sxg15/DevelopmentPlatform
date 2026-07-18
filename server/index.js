@@ -48,6 +48,10 @@ import {
   getSessionId,
 } from './runtime/sessionStore.js';
 import { createWorkItemRealtimeHub } from './runtime/workItemRealtime.js';
+import {
+  createClientErrorRateLimiter,
+  writeClientErrorLog,
+} from './runtime/clientErrorLog.js';
 import { fetchUpdateManifest } from './services/updateService.js';
 import {
   exchangeCodeForAccessToken,
@@ -108,9 +112,26 @@ const {
 });
 
 const app = express();
+const allowClientErrorReport = createClientErrorRateLimiter();
 
 app.use(express.json({ limit: '128kb' }));
 app.use(blockDirectConfigAccess);
+
+app.post('/api/client-errors', (request, response) => {
+  if (!allowClientErrorReport(request.ip)) {
+    response.status(429).json({ message: '客户端异常上报过于频繁' });
+    return;
+  }
+
+  const entry = writeClientErrorLog(request.body, {
+    authenticated: Boolean(getSession(request)),
+    userAgent: request.headers['user-agent'] || '',
+  });
+  response.status(202).json({
+    ok: true,
+    diagnosticId: entry.diagnosticId,
+  });
+});
 
 app.get('/api/health', (_request, response) => {
   response.json({ ok: true });

@@ -9,12 +9,13 @@ description: Maintain the IGP React/Vite frontend, including authentication shel
 
 Read `AGENTS.md`, then inspect only the owning frontend modules.
 
-- App startup or login: `src/ui/App.jsx`, `src/api/auth.js`,
-  `src/integrations/feishuH5.js`.
+- App startup or login: `src/main.jsx`, `src/ui/App.jsx`,
+  `src/ui/AppErrorBoundary.jsx`, `src/api/auth.js`,
+  `src/api/clientErrors.js`, `src/integrations/feishuH5.js`.
 - Project loading/navigation: `src/ui/workspace/PlatformWorkspace.jsx`,
   `src/ui/workspace/ProjectNavigation.jsx`, `src/api/projects.js`.
 - Overview: `src/ui/ProjectOverview.jsx`, `src/api/overview.js`,
-  `shared/projectOverviewUtils.js`.
+  `src/ui/projectOverviewDisplayUtils.js`, `shared/projectOverviewUtils.js`.
 - Work items: `src/ui/workspace/PlatformWorkspace.jsx`,
   `src/ui/work-items/workItemFieldUtils.js`, `src/ui/workItemListUtils.js`,
   `src/api/workItems.js`.
@@ -24,6 +25,13 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 ## Rules
 
 - Put HTTP calls in `src/api/`; do not add direct `fetch` calls to React components.
+- Keep the root error boundary and global runtime reporting active. Client reports
+  must use `shared/clientErrorUtils.js` and must not include form values, work-item
+  payloads, query strings, tokens, or runtime configuration.
+- Normalize cached or remote overview payloads before rendering; do not trust old
+  IndexedDB snapshots to retain the current schema.
+- Isolate ECharts initialization, option updates, resize callbacks, and disposal so
+  a chart failure cannot unmount the application.
 - Keep Feishu SDK behavior in `src/integrations/`.
 - Reuse `shared/workItemDefinitions.js` instead of duplicating route segments,
   labels, statuses, or field contracts.

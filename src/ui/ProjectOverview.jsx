@@ -33,6 +33,8 @@ import {
   saveCachedSnapshot,
   writeLocalPreference,
 } from './localCache.js';
+import { normalizeProjectOverviewDisplayData } from './projectOverviewDisplayUtils.js';
+import { reportClientError } from '../api/clientErrors.js';
 import { fetchProjectOverview } from '../api/overview.js';
 
 echarts.use([
@@ -204,14 +206,14 @@ export function ProjectOverview({
     );
   }
 
-  const data = state.data || createEmptyOverviewData();
+  const data = normalizeProjectOverviewDisplayData(state.data);
   const filteredRisks = riskFilter === 'all'
-    ? data.risks || []
-    : (data.risks || []).filter((item) => item.riskKinds?.includes(riskFilter));
-  const statusOption = buildStatusChartOption(data.statusByTool || []);
-  const priorityOption = buildPriorityChartOption(data.priorityDistribution || []);
-  const trendOption = buildTrendChartOption(data.trend || []);
-  const assigneeOption = buildAssigneeChartOption(data.assigneeLoad || []);
+    ? data.risks
+    : data.risks.filter((item) => item.riskKinds.includes(riskFilter));
+  const statusOption = buildStatusChartOption(data.statusByTool);
+  const priorityOption = buildPriorityChartOption(data.priorityDistribution);
+  const trendOption = buildTrendChartOption(data.trend);
+  const assigneeOption = buildAssigneeChartOption(data.assigneeLoad);
 
   return (
     <section className="project-overview" aria-label={`${project.projectName || '项目'}总览`}>
@@ -261,11 +263,11 @@ export function ProjectOverview({
       </header>
 
       {state.message ? <p className="project-overview-notice">{state.message}</p> : null}
-      {(data.unavailableTools || []).length > 0 ? (
+      {data.unavailableTools.length > 0 ? (
         <div className="project-overview-warning">
           <AlertTriangle aria-hidden="true" />
           <span>
-            {(data.unavailableTools || []).map((item) => item.label).join('、')} 暂无统计数据
+            {data.unavailableTools.map((item) => item.label).join('、')} 暂无统计数据
           </span>
         </div>
       ) : null}
@@ -300,7 +302,7 @@ export function ProjectOverview({
         >
           <OverviewChart
             option={statusOption}
-            empty={(data.statusByTool || []).length === 0}
+            empty={data.statusByTool.length === 0}
             emptyText="暂无工作项状态数据"
             ariaLabel="需求、Bug和反馈处理状态分布"
             onClick={(params) => {
@@ -320,7 +322,7 @@ export function ProjectOverview({
         >
           <OverviewChart
             option={priorityOption}
-            empty={!(data.priorityDistribution || []).some((item) => item.count > 0)}
+            empty={!data.priorityDistribution.some((item) => item.count > 0)}
             emptyText="暂无活跃需求或Bug"
             ariaLabel="活跃需求和Bug优先级分布"
           />
@@ -351,7 +353,7 @@ export function ProjectOverview({
         >
           <OverviewChart
             option={trendOption}
-            empty={(data.trend || []).length === 0}
+            empty={data.trend.length === 0}
             emptyText="暂无趋势数据"
             ariaLabel={`最近${trendDays}天工作项新增和完成趋势`}
           />
@@ -360,7 +362,7 @@ export function ProjectOverview({
         <OverviewPanel icon={Users} title="处理人员任务分布" meta="多人任务会计入每位处理人">
           <OverviewChart
             option={assigneeOption}
-            empty={(data.assigneeLoad || []).length === 0}
+            empty={data.assigneeLoad.length === 0}
             emptyText="暂无已分配的活跃工作项"
             ariaLabel="处理人员活跃任务分布"
           />
@@ -419,9 +421,9 @@ export function ProjectOverview({
 
         <OverviewPanel icon={Activity} title="最近动态" meta="平台内记录">
           <div className="project-overview-activity-list">
-            {(data.recentActivity || []).length === 0 ? (
+            {data.recentActivity.length === 0 ? (
               <p className="project-overview-empty">暂无最近动态</p>
-            ) : (data.recentActivity || []).slice(0, 10).map((activity) => (
+            ) : data.recentActivity.slice(0, 10).map((activity) => (
               <button
                 key={activity.id}
                 type="button"
@@ -486,6 +488,7 @@ function OverviewChart({ option, empty, emptyText, ariaLabel, onClick }) {
   const elementRef = useRef(null);
   const chartRef = useRef(null);
   const clickHandlerRef = useRef(onClick);
+  const [chartError, setChartError] = useState(false);
   clickHandlerRef.current = onClick;
 
   useEffect(() => {
@@ -493,31 +496,86 @@ function OverviewChart({ option, empty, emptyText, ariaLabel, onClick }) {
       return undefined;
     }
 
-    const chart = echarts.init(elementRef.current, null, { renderer: 'canvas' });
-    chartRef.current = chart;
-    const handleClick = (params) => clickHandlerRef.current?.(params);
-    chart.on('click', handleClick);
-    const resizeObserver = typeof ResizeObserver !== 'undefined'
-      ? new ResizeObserver(() => chart.resize())
-      : null;
-    resizeObserver?.observe(elementRef.current);
-    const handleWindowResize = () => chart.resize();
-    if (!resizeObserver) {
-      window.addEventListener('resize', handleWindowResize);
+    let isActive = true;
+    let chart = null;
+    let resizeObserver = null;
+
+    function handleChartError(error, phase) {
+      if (isActive) {
+        setChartError(true);
+      }
+      void reportClientError(error, {
+        source: `project-overview-chart-${phase}`,
+      });
+    }
+
+    function handleClick(params) {
+      try {
+        clickHandlerRef.current?.(params);
+      } catch (error) {
+        handleChartError(error, 'click');
+      }
+    }
+
+    function resizeChart() {
+      if (!chart || chart.isDisposed?.()) {
+        return;
+      }
+      try {
+        chart.resize();
+      } catch (error) {
+        handleChartError(error, 'resize');
+      }
+    }
+
+    try {
+      chart = echarts.init(elementRef.current, null, { renderer: 'canvas' });
+      chartRef.current = chart;
+      chart.on('click', handleClick);
+      resizeObserver = typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(resizeChart)
+        : null;
+      resizeObserver?.observe(elementRef.current);
+      if (!resizeObserver) {
+        window.addEventListener('resize', resizeChart);
+      }
+      setChartError(false);
+    } catch (error) {
+      handleChartError(error, 'init');
+      try {
+        chart?.dispose();
+      } catch {
+        // Ignore cleanup errors after a partial chart initialization.
+      }
+      chartRef.current = null;
+      return undefined;
     }
 
     return () => {
-      chart.off('click', handleClick);
+      isActive = false;
       resizeObserver?.disconnect();
-      window.removeEventListener('resize', handleWindowResize);
-      chart.dispose();
+      window.removeEventListener('resize', resizeChart);
+      try {
+        chart?.off('click', handleClick);
+        chart?.dispose();
+      } catch {
+        // The chart may already be disposed after a host webview lifecycle change.
+      }
       chartRef.current = null;
     };
   }, [empty]);
 
   useEffect(() => {
     if (!empty && chartRef.current) {
-      chartRef.current.setOption(option, { notMerge: true, lazyUpdate: true });
+      try {
+        chartRef.current.setOption(option, { notMerge: true, lazyUpdate: true });
+        setChartError(false);
+      } catch (error) {
+        setChartError(true);
+        void reportClientError(error, {
+          source: 'project-overview-chart-option',
+        });
+      }
     }
   }, [empty, option]);
 
@@ -525,7 +583,12 @@ function OverviewChart({ option, empty, emptyText, ariaLabel, onClick }) {
     return <div className="project-overview-chart-empty">{emptyText}</div>;
   }
 
-  return <div ref={elementRef} className="project-overview-chart" role="img" aria-label={ariaLabel} />;
+  return (
+    <div className="project-overview-chart-frame">
+      <div ref={elementRef} className="project-overview-chart" role="img" aria-label={ariaLabel} />
+      {chartError ? <div className="project-overview-chart-error">图表暂时无法显示</div> : null}
+    </div>
+  );
 }
 
 function OverviewProjectIcon({ project }) {
@@ -716,20 +779,6 @@ function buildAssigneeChartOption(load) {
   };
 }
 
-function createEmptyOverviewData() {
-  return {
-    generatedAt: Date.now(),
-    summary: {},
-    statusByTool: [],
-    priorityDistribution: [],
-    trend: [],
-    assigneeLoad: [],
-    risks: [],
-    recentActivity: [],
-    unavailableTools: [],
-  };
-}
-
 function buildOverviewCacheMessage(savedAt, refreshing, errorMessage = '') {
   const time = formatDateTime(savedAt);
   return refreshing
@@ -747,7 +796,7 @@ function formatDateTime(value) {
 
 function formatRelativeTime(value) {
   const timestamp = Number(value);
-  if (!Number.isFinite(timestamp)) {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
     return '时间未知';
   }
   const difference = Date.now() - timestamp;
@@ -772,6 +821,9 @@ function formatAssigneeNames(assignees) {
 }
 
 function formatRemainingDays(value) {
+  if (value === null || value === undefined || value === '') {
+    return '未设置时限';
+  }
   const days = Number(value);
   if (!Number.isFinite(days)) {
     return '未设置时限';

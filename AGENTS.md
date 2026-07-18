@@ -28,22 +28,29 @@ or validation commands change.
   rules and change descriptions.
 - `shared/projectOverviewUtils.js`: overview aggregation, risk detection, and trends.
 - `shared/workItemRealtimeUtils.js`: client/server realtime item helpers.
+- `shared/clientErrorUtils.js`: runtime-neutral client error redaction, truncation,
+  and diagnostic identifiers.
 - `shared/updateManifest.js`: update manifest and semantic version handling.
 
 Shared modules must remain runtime-neutral and importable from Node tests.
 
 ### Frontend
 
-- `src/main.jsx`: React bootstrap and aggregate stylesheet import.
+- `src/main.jsx`: React bootstrap, global runtime error reporting, and aggregate
+  stylesheet import.
 - `src/ui/App.jsx`: authentication shell, update checks, toolbar, and login states.
+- `src/ui/AppErrorBoundary.jsx`: root fallback for React render and effect errors.
 - `src/ui/workspace/PlatformWorkspace.jsx`: project/work-item orchestration.
 - `src/ui/workspace/ProjectNavigation.jsx`: project sidebar and home navigation.
 - `src/ui/ProjectOverview.jsx`: project overview dashboard.
+- `src/ui/projectOverviewDisplayUtils.js`: defensive normalization for overview
+  snapshots before rendering.
 - `src/ui/work-items/workItemFieldUtils.js`: pure Bitable field, attachment, person,
   and formatting helpers.
 - `src/ui/workItemListUtils.js`: pure list filtering, grouping, and sorting rules.
 - `src/ui/localCache.js`: browser cache, drafts, snapshots, and preferences.
-- `src/api/`: all frontend HTTP clients. Do not add direct `fetch` calls to UI files.
+- `src/api/`: all frontend HTTP clients, including sanitized client-error reporting.
+  Do not add direct `fetch` calls to UI files.
 - `src/integrations/feishuH5.js`: Feishu H5 SDK loading and authorization.
 - `src/styles.css`: stylesheet aggregator. Keep imports in cascade order.
 - `src/styles/`: base, overview, work-item, authentication, and responsive styles.
@@ -61,7 +68,8 @@ Shared modules must remain runtime-neutral and importable from Node tests.
   structure caches.
 - `server/integrations/wikiClient.js`: Wiki node lookup, creation, copying, polling,
   and caches.
-- `server/runtime/`: async cache, sessions, SSE hub, and network helpers.
+- `server/runtime/`: async cache, sessions, SSE hub, network helpers, and sanitized
+  client-error log entries.
 - `server/services/updateService.js`: remote update manifest retrieval.
 
 Keep Feishu HTTP details in `server/integrations/`, process-local state in
@@ -90,6 +98,9 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 - Use `config/config.example.json` for documented configuration changes.
 - The browser may receive `appId` and debug identity only; never expose `appSecret`
   or access tokens.
+- Client error reports may include only sanitized messages/stacks, component stacks,
+  page paths, browser identifiers, timestamps, and diagnostic IDs. Never attach
+  form values, work-item payloads, tokens, or runtime configuration.
 - `Publish/`, `.htybox/`, logs, and runtime config are generated/ignored artifacts.
 - Production packaging must copy the complete `server/` tree because the backend is
   modular.
