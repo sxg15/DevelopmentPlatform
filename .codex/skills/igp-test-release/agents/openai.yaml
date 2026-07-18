@@ -1,0 +1,4 @@
+interface:
+  display_name: "IGP Test and Release"
+  short_description: "Run tests, builds, secret checks, versioning, and release logs"
+  default_prompt: "Use $igp-test-release to verify and prepare an IGP change for release."

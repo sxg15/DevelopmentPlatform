@@ -1,0 +1,4 @@
+interface:
+  display_name: "IGP Work Item Domain"
+  short_description: "Maintain work-item fields, attachments, roles, and notices"
+  default_prompt: "Use $igp-work-item-domain to change requirement, Bug, or feedback workflow rules consistently."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "IGP Backend"
+  short_description: "Maintain Express routes, runtime, config, and Feishu clients"
+  default_prompt: "Use $igp-backend to implement a backend change while preserving IGP API contracts."

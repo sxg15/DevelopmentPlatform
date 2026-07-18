@@ -1,0 +1,4 @@
+interface:
+  display_name: "IGP Frontend"
+  short_description: "Maintain React workspace, overview, work items, and styles"
+  default_prompt: "Use $igp-frontend to implement a frontend change while preserving IGP workspace behavior."
