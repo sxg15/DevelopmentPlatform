@@ -1,5 +1,6 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
+import 'react-chrono/dist/style.css';
 import './styles.css';
 import { installGlobalErrorReporting } from './api/clientErrors.js';
 import { App } from './ui/App.jsx';

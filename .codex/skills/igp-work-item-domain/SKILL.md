@@ -33,6 +33,12 @@ Treat shared definitions as the canonical frontend/backend contract.
   before status update.
 - Attachment changes can notify proposers and must add an operation comment that
   describes added and removed files.
+- Detail timelines are frontend projections of `proposedAt`, `statusChangeLog`, and
+  `comments`; do not add a timeline field or API. Classify comments beginning with
+  `变更处理人：` and `提交附件变动：` as key changes, and keep other comments in
+  the comment category.
+- Timeline creation events must not claim an initial status or assignee because the
+  current stored data does not prove those historical values.
 - Empty assignees in detail views must remain visibly warned.
 - Feedback contact data remains normalized JSON in `联系信息数据`.
 - Comments and status change logs must retain their stored document schemas.

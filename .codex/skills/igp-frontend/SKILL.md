@@ -17,8 +17,11 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - Overview: `src/ui/ProjectOverview.jsx`, `src/api/overview.js`,
   `src/ui/projectOverviewDisplayUtils.js`, `shared/projectOverviewUtils.js`.
 - Work items: `src/ui/workspace/PlatformWorkspace.jsx`,
-  `src/ui/work-items/workItemFieldUtils.js`, `src/ui/workItemListUtils.js`,
-  `src/api/workItems.js`.
+  `src/ui/work-items/workItemFieldUtils.js`,
+  `src/ui/work-items/WorkItemTimelinePanel.jsx`,
+  `src/ui/work-items/WorkItemTimeline.jsx`,
+  `src/ui/work-items/workItemTimelineUtils.js`,
+  `src/ui/workItemListUtils.js`, `src/api/workItems.js`.
 - Cache/drafts: `src/ui/localCache.js`.
 - Styling: `src/styles.css` and `src/styles/`.
 
@@ -36,6 +39,10 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - Reuse `shared/workItemDefinitions.js` instead of duplicating route segments,
   labels, statuses, or field contracts.
 - Keep pure formatting/filtering logic outside JSX when it can be tested.
+- Keep React Chrono lazy-loaded behind `WorkItemTimelinePanel`; a timeline load or
+  render failure must not replace the work-item detail page.
+- Load React Chrono's global stylesheet before project styles so local base and
+  work-item rules retain cascade ownership.
 - Preserve local snapshot and draft keys when changing workspace state.
 - Keep stylesheet import order: base, overview, work items, auth, responsive.
 - Add component-specific CSS to the owning stylesheet; add cross-module responsive

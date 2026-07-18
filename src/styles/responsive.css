@@ -329,6 +329,44 @@
     border-bottom: 1px solid #b8c8c3;
   }
 
+  .work-item-timeline {
+    padding: 18px 0 6px;
+  }
+
+  .work-item-timeline-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .work-item-timeline-filters {
+    width: 100%;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .work-item-timeline-filters button {
+    min-width: 0;
+    padding: 0 6px;
+    white-space: normal;
+  }
+
+  .work-item-timeline-chrono .vertical-item-row {
+    padding: 5px 0;
+  }
+
+  .work-item-timeline-event {
+    padding: 12px;
+  }
+
+  .work-item-timeline-event time {
+    width: 100%;
+    white-space: normal;
+  }
+
+  .work-item-timeline-footer {
+    padding-left: 42px;
+  }
+
   .bitable-detail-fields {
     grid-template-columns: minmax(0, 1fr);
   }

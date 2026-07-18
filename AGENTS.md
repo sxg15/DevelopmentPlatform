@@ -47,6 +47,11 @@ Shared modules must remain runtime-neutral and importable from Node tests.
   snapshots before rendering.
 - `src/ui/work-items/workItemFieldUtils.js`: pure Bitable field, attachment, person,
   and formatting helpers.
+- `src/ui/work-items/WorkItemTimelinePanel.jsx`: lazy timeline boundary that isolates
+  loading and render failures from the work-item detail page.
+- `src/ui/work-items/WorkItemTimeline.jsx`: React Chrono work-item history view.
+- `src/ui/work-items/workItemTimelineUtils.js`: pure timeline event classification,
+  ordering, filtering, pagination, and timestamp helpers.
 - `src/ui/workItemListUtils.js`: pure list filtering, grouping, and sorting rules.
 - `src/ui/localCache.js`: browser cache, drafts, snapshots, and preferences.
 - `src/api/`: all frontend HTTP clients, including sanitized client-error reporting.
@@ -86,6 +91,9 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
   global super-admin capabilities.
 - Requirement templates include `需要提交附件` and `提交附件`. Attachment-required
   requirements must preserve the status-update confirmation workflow.
+- Work-item timelines derive creation, status, assignee, attachment, and comment
+  events from existing normalized record data. Assignee and attachment events use
+  the stored system-comment prefixes; do not create a separate timeline field.
 - Feedback stores normalized identity/contact data in `联系信息数据`.
 - Project overview reads existing work-item tables and must not create Wiki nodes or
   copy templates.

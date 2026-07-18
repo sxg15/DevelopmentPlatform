@@ -108,6 +108,7 @@ import {
   parseFeedbackContactInfoForClient,
   toEditableAttachmentPayload,
 } from '../work-items/workItemFieldUtils.js';
+import { WorkItemTimelinePanel } from '../work-items/WorkItemTimelinePanel.jsx';
 import {
   HomePanel,
   ProjectIcon,
@@ -2575,6 +2576,7 @@ function BitableRecordDetail({
             </DetailActionSection>
           </aside>
         </div>
+        <WorkItemTimelinePanel toolConfig={toolConfig} record={record} />
       </div>
     </section>
   );

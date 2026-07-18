@@ -13,7 +13,10 @@ const FRONTEND_MODULES = [
   'src/ui/projectOverviewDisplayUtils.js',
   'src/ui/workspace/PlatformWorkspace.jsx',
   'src/ui/workspace/ProjectNavigation.jsx',
+  'src/ui/work-items/WorkItemTimeline.jsx',
+  'src/ui/work-items/WorkItemTimelinePanel.jsx',
   'src/ui/work-items/workItemFieldUtils.js',
+  'src/ui/work-items/workItemTimelineUtils.js',
 ];
 const BROWSER_GLOBALS = new Set([
   'Array',
