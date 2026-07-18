@@ -203,6 +203,21 @@ export function formatWorkItemTimelineDateTime(timestamp) {
   }).format(new Date(normalizedTimestamp));
 }
 
+export function formatWorkItemTimelineTrackDate(timestamp) {
+  const normalizedTimestamp = normalizeWorkItemTimelineTimestamp(timestamp);
+  if (!normalizedTimestamp) {
+    return '';
+  }
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(normalizedTimestamp));
+}
+
 function buildCommentEventSummary(type, actorName) {
   if (type === WORK_ITEM_TIMELINE_EVENT_TYPES.ASSIGNEE_CHANGED) {
     return `${actorName}变更了处理人`;

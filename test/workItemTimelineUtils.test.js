@@ -4,6 +4,7 @@ import {
   buildWorkItemTimelineEvents,
   classifyWorkItemTimelineComment,
   filterWorkItemTimelineEvents,
+  formatWorkItemTimelineTrackDate,
   normalizeWorkItemTimelineTimestamp,
   sliceWorkItemTimelineEvents,
   sortWorkItemTimelineEvents,
@@ -132,4 +133,12 @@ test('empty and malformed event arrays produce an empty timeline safely', () => 
   }), []);
   assert.deepEqual(filterWorkItemTimelineEvents(null, 'all'), []);
   assert.deepEqual(sliceWorkItemTimelineEvents(undefined), []);
+});
+
+test('horizontal track dates stay compact and reject invalid timestamps', () => {
+  const formatted = formatWorkItemTimelineTrackDate('2026-07-18T09:08:00+08:00');
+
+  assert.match(formatted, /07[\/-]18/);
+  assert.match(formatted, /09:08/);
+  assert.equal(formatWorkItemTimelineTrackDate('invalid'), '');
 });

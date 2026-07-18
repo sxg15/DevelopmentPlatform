@@ -350,21 +350,44 @@
     white-space: normal;
   }
 
-  .work-item-timeline-chrono .vertical-item-row {
-    padding: 5px 0;
+  .work-item-timeline-chrono .timeline-wrapper {
+    height: 390px !important;
+  }
+
+  .work-item-timeline-chrono .timeline-main-wrapper.horizontal {
+    min-height: 108px;
+    padding: 12px 10px 5px;
+  }
+
+  .work-item-timeline-chrono .timeline-content-render {
+    min-height: 274px;
+    padding: 14px 12px 16px;
   }
 
   .work-item-timeline-event {
-    padding: 12px;
+    padding: 14px;
+  }
+
+  .work-item-timeline-event-header {
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 10px;
   }
 
   .work-item-timeline-event time {
-    width: 100%;
+    grid-column: 2;
+    width: auto;
     white-space: normal;
   }
 
+  .work-item-timeline-status-change,
+  .work-item-timeline-detail {
+    padding-left: 46px;
+  }
+
   .work-item-timeline-footer {
-    padding-left: 42px;
+    align-items: flex-start;
+    flex-direction: column;
+    padding-left: 0;
   }
 
   .bitable-detail-fields {

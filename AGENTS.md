@@ -94,8 +94,10 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 - Requirement templates include `需要提交附件` and `提交附件`. Attachment-required
   requirements must preserve the status-update confirmation workflow.
 - Work-item timelines derive creation, status, assignee, attachment, and comment
-  events from existing normalized record data. Assignee and attachment events use
-  the stored system-comment prefixes; do not create a separate timeline field.
+  events from existing normalized record data. They render as a horizontally
+  scrollable oldest-to-newest track with the latest loaded event selected by
+  default. Assignee and attachment events use the stored system-comment prefixes;
+  do not create a separate timeline field.
 - Feedback stores normalized identity/contact data in `联系信息数据`.
 - Project overview reads existing work-item tables and must not create Wiki nodes or
   copy templates.

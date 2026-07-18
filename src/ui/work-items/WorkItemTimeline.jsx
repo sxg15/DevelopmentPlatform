@@ -14,6 +14,7 @@ import {
   buildWorkItemTimelineEvents,
   filterWorkItemTimelineEvents,
   formatWorkItemTimelineDateTime,
+  formatWorkItemTimelineTrackDate,
   sliceWorkItemTimelineEvents,
   WORK_ITEM_TIMELINE_EVENT_TYPES,
   WORK_ITEM_TIMELINE_FILTERS,
@@ -21,23 +22,24 @@ import {
 } from './workItemTimelineUtils.js';
 
 const TIMELINE_THEME = {
-  primary: '#0f766e',
-  secondary: '#dbe7e3',
+  primary: '#1677ff',
+  secondary: '#dbeafe',
   cardBgColor: '#ffffff',
   cardDetailsBackGround: '#ffffff',
-  cardDetailsColor: '#20312d',
-  cardTitleColor: '#071411',
+  cardDetailsColor: '#172033',
+  cardTitleColor: '#101828',
   iconBackgroundColor: '#ffffff',
-  iconColor: '#0f766e',
-  textColor: '#425650',
-  titleColor: '#425650',
-  titleColorActive: '#071411',
-  timelineBgColor: '#ffffff',
+  iconColor: '#1677ff',
+  textColor: '#475467',
+  titleColor: '#667085',
+  titleColorActive: '#101828',
+  timelineBgColor: '#f7f9fc',
 };
 
 export default function WorkItemTimeline({ toolConfig, record }) {
   const [activeFilter, setActiveFilter] = useState('all');
   const [visibleCount, setVisibleCount] = useState(WORK_ITEM_TIMELINE_PAGE_SIZE);
+  const [selectedEventIndex, setSelectedEventIndex] = useState(0);
   const events = useMemo(
     () => buildWorkItemTimelineEvents(toolConfig, record),
     [toolConfig, record],
@@ -50,6 +52,11 @@ export default function WorkItemTimeline({ toolConfig, record }) {
     () => sliceWorkItemTimelineEvents(filteredEvents, visibleCount),
     [filteredEvents, visibleCount],
   );
+  const timelineEvents = useMemo(
+    () => [...visibleEvents].reverse(),
+    [visibleEvents],
+  );
+  const newestEventIndex = Math.max(0, timelineEvents.length - 1);
   const parseWarnings = [
     record?.statusChangeLogParseError,
     record?.commentsParseError,
@@ -58,7 +65,12 @@ export default function WorkItemTimeline({ toolConfig, record }) {
   useEffect(() => {
     setActiveFilter('all');
     setVisibleCount(WORK_ITEM_TIMELINE_PAGE_SIZE);
+    setSelectedEventIndex(0);
   }, [record?.recordId]);
+
+  useEffect(() => {
+    setSelectedEventIndex(newestEventIndex);
+  }, [activeFilter, visibleCount, newestEventIndex]);
 
   function handleFilterChange(filterId) {
     setActiveFilter(filterId);
@@ -94,33 +106,39 @@ export default function WorkItemTimeline({ toolConfig, record }) {
         </div>
       ) : null}
 
-      {visibleEvents.length > 0 ? (
+      {timelineEvents.length > 0 ? (
         <>
           <div className="work-item-timeline-chrono">
             <Chrono
-              items={visibleEvents.map((event) => ({
+              key={`${record?.recordId || 'record'}:${activeFilter}:${visibleCount}`}
+              items={timelineEvents.map((event) => ({
                 id: event.id,
-                title: '',
+                title: formatWorkItemTimelineTrackDate(event.occurredAt),
               }))}
-              mode="vertical"
+              mode="horizontal"
+              activeItemIndex={newestEventIndex}
               allowDynamicUpdate
               theme={TIMELINE_THEME}
               layout={{
-                cardWidth: 900,
-                lineWidth: 2,
-                pointSize: 30,
-                timelineHeight: 'auto',
+                cardWidth: 960,
+                cardHeight: 'auto',
+                itemWidth: 166,
+                lineWidth: 3,
+                pointSize: 34,
+                timelineHeight: 360,
                 responsive: {
-                  enabled: true,
-                  breakpoint: 720,
+                  enabled: false,
+                },
+                positioning: {
+                  cardPosition: 'bottom',
                 },
               }}
               interaction={{
-                autoScroll: false,
+                autoScroll: true,
                 cardHover: false,
                 focusOnLoad: false,
                 keyboardNavigation: true,
-                pointClick: false,
+                pointClick: true,
               }}
               content={{
                 allowHTML: false,
@@ -134,7 +152,9 @@ export default function WorkItemTimeline({ toolConfig, record }) {
               display={{
                 borderless: true,
                 pointShape: 'circle',
-                scrollable: false,
+                scrollable: {
+                  scrollbar: true,
+                },
                 toolbar: {
                   enabled: false,
                 },
@@ -148,19 +168,22 @@ export default function WorkItemTimeline({ toolConfig, record }) {
                 enabled: false,
                 showToggle: false,
               }}
+              onItemSelected={({ index }) => setSelectedEventIndex(index)}
             >
-              {visibleEvents.map((event) => (
+              {timelineEvents.map((event) => (
                 <TimelineEventContent key={event.id} event={event} />
               ))}
               <div className="chrono-icons">
-                {visibleEvents.map((event) => (
+                {timelineEvents.map((event) => (
                   <TimelineEventIcon key={event.id} type={event.type} />
                 ))}
               </div>
             </Chrono>
           </div>
           <footer className="work-item-timeline-footer">
-            <span>已显示 {visibleEvents.length} / {filteredEvents.length} 条</span>
+            <span>
+              当前第 {Math.min(selectedEventIndex + 1, timelineEvents.length)} 条，共显示 {timelineEvents.length} / {filteredEvents.length} 条
+            </span>
             {visibleEvents.length < filteredEvents.length ? (
               <button
                 type="button"
@@ -186,13 +209,16 @@ function TimelineEventContent({ event }) {
 
   return (
     <article className={`work-item-timeline-event is-${event.type}`}>
-      <time dateTime={new Date(event.occurredAt).toISOString()} title={occurredAtText}>
-        {occurredAtText}
-      </time>
-      <div className="work-item-timeline-event-heading">
-        <h4>{event.title}</h4>
-        <span>{event.summary}</span>
-      </div>
+      <header className="work-item-timeline-event-header">
+        <TimelineEventIcon type={event.type} />
+        <div className="work-item-timeline-event-heading">
+          <h4>{event.title}</h4>
+          <span>{event.summary}</span>
+        </div>
+        <time dateTime={new Date(event.occurredAt).toISOString()} title={occurredAtText}>
+          {occurredAtText}
+        </time>
+      </header>
       {event.type === WORK_ITEM_TIMELINE_EVENT_TYPES.STATUS_CHANGED ? (
         <div className="work-item-timeline-status-change" aria-label={`从${event.oldStatus}变更为${event.newStatus}`}>
           <span>{event.oldStatus}</span>

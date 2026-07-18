@@ -1640,8 +1640,8 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 14px;
-  padding: 22px 4px 8px;
+  gap: 16px;
+  padding: 24px 4px 10px;
   border-top: 1px solid #b8c8c3;
 }
 
@@ -1662,7 +1662,7 @@
 
 .work-item-timeline-header h3 {
   margin: 0;
-  color: #071411;
+  color: #101828;
   font-size: 18px;
   font-weight: 900;
   line-height: 24px;
@@ -1766,14 +1766,16 @@
 .work-item-timeline-chrono {
   min-width: 0;
   overflow: hidden;
+  background: #f7f9fc;
+  border: 1px solid #d8e0ec;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
 }
 
-.work-item-timeline-chrono .timeline-wrapper,
-.work-item-timeline-chrono .timeline-main-wrapper {
+.work-item-timeline-chrono .timeline-wrapper {
   width: 100%;
-  height: auto !important;
+  height: 360px !important;
   min-height: 0;
-  overflow: visible !important;
   background: transparent;
 }
 
@@ -1781,34 +1783,115 @@
   outline: 0;
 }
 
-.work-item-timeline-chrono .vertical-item-row {
-  min-height: 0;
-  padding: 6px 0;
+.work-item-timeline-chrono .timeline-main-wrapper.horizontal {
+  width: 100%;
+  min-height: 116px;
+  padding: 14px 18px 6px;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  background: #f7f9fc;
+  border-bottom: 1px solid #d8e0ec;
+  scrollbar-color: #b7c4d6 #eef2f7;
+}
+
+.work-item-timeline-chrono .timeline-main-wrapper.horizontal::-webkit-scrollbar {
+  height: 7px;
+}
+
+.work-item-timeline-chrono .timeline-main-wrapper.horizontal::-webkit-scrollbar-track {
+  background: #eef2f7;
+}
+
+.work-item-timeline-chrono .timeline-main-wrapper.horizontal::-webkit-scrollbar-thumb {
+  background: #b7c4d6;
+  border-radius: 999px;
+}
+
+.work-item-timeline-chrono .timeline-horizontal-container {
+  min-width: max-content;
+  padding: 0;
+}
+
+.work-item-timeline-chrono .timeline-horz-item-container {
+  min-height: 88px;
+}
+
+.work-item-timeline-chrono .timeline-horizontal-item .timeline-point-section {
+  min-height: 46px;
+  padding: 5px 8px;
+}
+
+.work-item-timeline-chrono .timeline-horizontal-item .timeline-point-section::before {
+  background: #bac7da;
+}
+
+.work-item-timeline-chrono .timeline-horizontal-item .timeline-title-section {
+  min-height: 34px;
+  padding: 2px 8px 6px;
+}
+
+.work-item-timeline-chrono .timeline-item-title {
+  margin: 0;
+  color: #667085 !important;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 17px;
+  white-space: nowrap;
+}
+
+.work-item-timeline-chrono .timeline-item-title.active {
+  color: #175cd3 !important;
+}
+
+.work-item-timeline-chrono .timeline-circle {
+  box-shadow: 0 0 0 3px #ffffff;
+}
+
+.work-item-timeline-chrono .timeline-circle.active {
+  box-shadow: 0 0 0 4px #dbeafe, 0 0 0 7px #ffffff;
+}
+
+.work-item-timeline-chrono .timeline-content-render {
+  display: flex;
+  min-height: 232px;
+  align-items: stretch;
+  padding: 18px 20px 20px;
+  overflow: hidden;
+  background: #ffffff;
 }
 
 .work-item-timeline-chrono .timeline-card-content {
   width: 100%;
+  max-width: 960px;
   min-height: 0;
   overflow: visible;
   background: #ffffff;
-  border: 1px solid #d7e3df;
+  border: 1px solid #d8e0ec;
   border-radius: 8px;
-  box-shadow: none;
+  box-shadow: 0 4px 14px rgba(16, 24, 40, 0.06);
 }
 
 .work-item-timeline-event {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 8px;
-  padding: 13px 15px;
-  color: #20312d;
+  gap: 12px;
+  padding: 16px 18px;
+  color: #172033;
+}
+
+.work-item-timeline-event-header {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  min-width: 0;
+  gap: 12px;
 }
 
 .work-item-timeline-event time {
   width: max-content;
   max-width: 100%;
-  color: #687a75;
+  color: #667085;
   font-size: 12px;
   font-weight: 800;
   line-height: 17px;
@@ -1817,25 +1900,24 @@
 
 .work-item-timeline-event-heading {
   display: flex;
-  align-items: baseline;
   min-width: 0;
-  flex-wrap: wrap;
-  gap: 4px 10px;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .work-item-timeline-event-heading h4 {
   margin: 0;
-  color: #071411;
-  font-size: 15px;
+  color: #101828;
+  font-size: 16px;
   font-weight: 900;
-  line-height: 21px;
+  line-height: 22px;
 }
 
 .work-item-timeline-event-heading span {
   min-width: 0;
-  color: #52645f;
+  color: #475467;
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 19px;
   overflow-wrap: anywhere;
 }
@@ -1846,6 +1928,7 @@
   min-width: 0;
   flex-wrap: wrap;
   gap: 7px;
+  padding-left: 50px;
 }
 
 .work-item-timeline-status-change span,
@@ -1888,13 +1971,14 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
+  padding-left: 50px;
 }
 
 .work-item-timeline-detail p {
   min-width: 0;
   max-width: 100%;
   margin: 0;
-  color: #30443f;
+  color: #344054;
   font-size: 13px;
   font-weight: 700;
   line-height: 20px;
@@ -1943,9 +2027,17 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   color: #0f766e;
+}
+
+.work-item-timeline-event-header > .work-item-timeline-icon {
+  width: 38px;
+  height: 38px;
+  background: #ecfdf8;
+  border: 1px solid #a7f3d0;
+  border-radius: 8px;
 }
 
 .work-item-timeline-icon svg {
@@ -1960,16 +2052,36 @@
   color: #2563eb;
 }
 
+.work-item-timeline-event-header > .work-item-timeline-icon.is-status-changed {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
 .work-item-timeline-icon.is-assignee-changed {
   color: #7c3aed;
+}
+
+.work-item-timeline-event-header > .work-item-timeline-icon.is-assignee-changed {
+  background: #f5f3ff;
+  border-color: #ddd6fe;
 }
 
 .work-item-timeline-icon.is-attachments-changed {
   color: #b45309;
 }
 
+.work-item-timeline-event-header > .work-item-timeline-icon.is-attachments-changed {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
 .work-item-timeline-icon.is-comment-added {
   color: #475569;
+}
+
+.work-item-timeline-event-header > .work-item-timeline-icon.is-comment-added {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
 }
 
 .work-item-timeline-footer {
@@ -1978,7 +2090,7 @@
   justify-content: space-between;
   min-width: 0;
   gap: 12px;
-  padding: 0 10px 0 54px;
+  padding: 0 2px;
 }
 
 .work-item-timeline-empty {
