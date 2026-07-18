@@ -65,6 +65,12 @@ import {
 import { ProjectOverview } from '../ProjectOverview.jsx';
 import { VersionManagement } from '../versions/VersionManagement.jsx';
 import {
+  getProjectToolPendingCount,
+  isProjectToolPendingCountTool,
+  normalizeRelatedWorkItemCounts,
+} from './projectToolDisplayUtils.js';
+import { getProjectToolIcon } from './projectToolIcons.js';
+import {
   buildDisplayFields,
   buildDisplayUserKeys,
   buildDisplayUserSetKey,
@@ -334,6 +340,7 @@ export function PlatformWorkspace({ user, cacheUserKey }) {
             project={selectedProject}
             user={user}
             cacheUserKey={cacheUserKey}
+            relatedWorkItemCounts={relatedWorkItemCounts?.[selectedProject.projectId]}
             realtimeEvent={realtimeEvent}
             onRelatedCountChange={handleRelatedCountChange}
             directTarget={directTarget}
@@ -354,7 +361,7 @@ export function PlatformWorkspace({ user, cacheUserKey }) {
         projectId
           ? {
               ...current,
-              [projectId]: nextCounts[projectId] || { requirements: 0, bugs: 0 },
+              [projectId]: nextCounts[projectId] || { requirements: 0, bugs: 0, feedback: 0 },
             }
           : nextCounts
       ));
@@ -366,7 +373,7 @@ export function PlatformWorkspace({ user, cacheUserKey }) {
   function handleRelatedCountChange(projectId, toolId, count) {
     const normalizedProjectId = String(projectId || '').trim();
     const normalizedToolId = String(toolId || '').trim();
-    if (!normalizedProjectId || !['requirements', 'bugs'].includes(normalizedToolId)) {
+    if (!normalizedProjectId || !isProjectToolPendingCountTool(normalizedToolId)) {
       return;
     }
 
@@ -375,6 +382,7 @@ export function PlatformWorkspace({ user, cacheUserKey }) {
       [normalizedProjectId]: {
         requirements: Number(current[normalizedProjectId]?.requirements || 0),
         bugs: Number(current[normalizedProjectId]?.bugs || 0),
+        feedback: Number(current[normalizedProjectId]?.feedback || 0),
         [normalizedToolId]: Math.max(0, Number(count) || 0),
       },
     }));
@@ -401,6 +409,7 @@ function ProjectWorkspace({
   project,
   user,
   cacheUserKey,
+  relatedWorkItemCounts,
   realtimeEvent,
   onRelatedCountChange,
   directTarget,
@@ -741,17 +750,30 @@ function ProjectWorkspace({
           </div>
 
           <nav className="project-tool-nav" aria-label="项目功能">
-            {visibleTools.map((tool) => (
-              <button
-                key={tool.id}
-                type="button"
-                className={`project-tool-button ${activeToolId === tool.id ? 'is-active' : ''}`}
-                aria-pressed={activeToolId === tool.id}
-                onClick={() => handleToolClick(tool.id)}
-              >
-                <span className="project-tool-label">{tool.label}</span>
-              </button>
-            ))}
+            {visibleTools.map((tool) => {
+              const ToolIcon = getProjectToolIcon(tool.iconKey);
+              const pendingCount = getProjectToolPendingCount(relatedWorkItemCounts, tool.id);
+              return (
+                <button
+                  key={tool.id}
+                  type="button"
+                  className={[
+                    'project-tool-button',
+                    activeToolId === tool.id ? 'is-active' : '',
+                    pendingCount > 0 ? 'has-pending-count' : '',
+                  ].filter(Boolean).join(' ')}
+                  aria-label={pendingCount > 0 ? `${tool.label}，${pendingCount}项未处理` : tool.label}
+                  aria-pressed={activeToolId === tool.id}
+                  onClick={() => handleToolClick(tool.id)}
+                >
+                  <ToolIcon className="project-tool-icon" aria-hidden="true" />
+                  <span className="project-tool-label">{tool.label}</span>
+                  {pendingCount > 0 ? (
+                    <span className="project-tool-pending-badge">{pendingCount}未处理</span>
+                  ) : null}
+                </button>
+              );
+            })}
           </nav>
         </aside>
 
@@ -4068,22 +4090,6 @@ function updateRequirementInState(state, requirement, toolConfig = getWorkItemTo
       requirements: toolConfig.toolId === 'requirements' ? nextRequirements : state.result.requirements,
     },
   };
-}
-
-function normalizeRelatedWorkItemCounts(counts) {
-  if (!counts || typeof counts !== 'object') {
-    return {};
-  }
-
-  return Object.fromEntries(
-    Object.entries(counts).map(([projectId, value]) => [
-      String(projectId || '').trim(),
-      {
-        requirements: Math.max(0, Number(value?.requirements) || 0),
-        bugs: Math.max(0, Number(value?.bugs) || 0),
-      },
-    ]).filter(([projectId]) => Boolean(projectId)),
-  );
 }
 
 function mergeCreatedWorkItemsIntoState(state, payload, toolConfig) {

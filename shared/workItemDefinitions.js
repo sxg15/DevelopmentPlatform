@@ -1,13 +1,13 @@
 export const REQUIREMENT_PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4'];
 
 export const PROJECT_TOOL_DEFINITIONS = Object.freeze([
-  { id: 'overview', label: '项目总览' },
-  { id: 'versions', label: '版本管理' },
-  { id: 'requirements', label: '需求列表' },
-  { id: 'bugs', label: 'Bug列表' },
-  { id: 'feedback', label: '反馈列表' },
-  { id: 'builds', label: '打包列表' },
-  { id: 'review', label: '内容审查' },
+  { id: 'overview', label: '项目总览', iconKey: 'LayoutDashboard' },
+  { id: 'versions', label: '版本管理', iconKey: 'Tags' },
+  { id: 'requirements', label: '需求列表', iconKey: 'ClipboardList' },
+  { id: 'bugs', label: 'Bug列表', iconKey: 'Bug' },
+  { id: 'feedback', label: '反馈列表', iconKey: 'MessageSquare' },
+  { id: 'builds', label: '打包列表', iconKey: 'PackageCheck' },
+  { id: 'review', label: '内容审查', iconKey: 'ScanSearch' },
 ]);
 
 export const WORK_ITEM_TOOL_DEFINITIONS = Object.freeze({

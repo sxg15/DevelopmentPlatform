@@ -15,6 +15,8 @@ const FRONTEND_MODULES = [
   'src/ui/versions/versionManagementDisplayUtils.js',
   'src/ui/workspace/PlatformWorkspace.jsx',
   'src/ui/workspace/ProjectNavigation.jsx',
+  'src/ui/workspace/projectToolDisplayUtils.js',
+  'src/ui/workspace/projectToolIcons.js',
   'src/ui/work-items/WorkItemTimeline.jsx',
   'src/ui/work-items/WorkItemTimelinePanel.jsx',
   'src/ui/work-items/workItemFieldUtils.js',
@@ -114,4 +116,13 @@ test('version management renders a local snapshot before refreshing it', () => {
   assert.match(versionSource, /normalizeVersionManagementPayload\(cachedSnapshot\.value\)/);
   assert.match(versionSource, /saveCachedSnapshot\(cacheUserKey,\s*snapshotKey,\s*payload\)/s);
   assert.match(workspaceSource, /<VersionManagement[\s\S]*cacheUserKey=\{cacheUserKey\}/);
+});
+
+test('project tool navigation renders icons and pending work item badges', () => {
+  const source = fs.readFileSync('src/ui/workspace/PlatformWorkspace.jsx', 'utf8');
+
+  assert.match(source, /getProjectToolIcon\(tool\.iconKey\)/);
+  assert.match(source, /project-tool-pending-badge/);
+  assert.match(source, /\{pendingCount\}未处理/);
+  assert.match(source, /isProjectToolPendingCountTool\(normalizedToolId\)/);
 });

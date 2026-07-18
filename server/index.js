@@ -1020,14 +1020,21 @@ async function handleRelatedWorkItemCounts(request, response) {
 
     const entries = await mapWithConcurrency(projects, 4, async (project) => {
       const allowedToolIds = new Set((project.allowedTools || []).map((tool) => tool.id));
-      const requirements = allowedToolIds.has('requirements')
-        ? await getProjectWaitingWorkItemCount(token, project, session.user, getWorkItemToolConfig('requirements'))
-        : 0;
-      const bugs = allowedToolIds.has('bugs')
-        ? await getProjectWaitingWorkItemCount(token, project, session.user, getWorkItemToolConfig('bugs'))
-        : 0;
+      const counts = Object.fromEntries(await Promise.all(
+        [...WORK_ITEM_TOOL_IDS].map(async (toolId) => [
+          toolId,
+          allowedToolIds.has(toolId)
+            ? await getProjectWaitingWorkItemCount(
+                token,
+                project,
+                session.user,
+                getWorkItemToolConfig(toolId),
+              )
+            : 0,
+        ]),
+      ));
 
-      return [project.projectId, { requirements, bugs }];
+      return [project.projectId, counts];
     });
 
     response.json({

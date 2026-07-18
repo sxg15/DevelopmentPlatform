@@ -50,6 +50,9 @@ Treat shared definitions as the canonical frontend/backend contract.
   fails.
 - Reminder cards show a three-tool count summary and at most ten urgency-sorted
   direct-detail links.
+- Project tool badges count assigned initial-waiting items across requirements,
+  Bugs, and feedback. Use `待处理` for requirements/feedback and `未处理` for Bugs,
+  hide zero counts, and refresh the values after realtime work-item events.
 - Opening the authenticated app silently creates a missing personal-settings
   record with notifications disabled. Record creation must not delay or fail the
   normal workspace startup path.

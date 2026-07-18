@@ -15,7 +15,9 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - Personal settings: `src/ui/settings/PersonalSettingsDialog.jsx`,
   `src/api/personalSettings.js`, `src/styles/settings.css`.
 - Project loading/navigation: `src/ui/workspace/PlatformWorkspace.jsx`,
-  `src/ui/workspace/ProjectNavigation.jsx`, `src/api/projects.js`.
+  `src/ui/workspace/ProjectNavigation.jsx`,
+  `src/ui/workspace/projectToolDisplayUtils.js`,
+  `src/ui/workspace/projectToolIcons.js`, `src/api/projects.js`.
 - Overview: `src/ui/ProjectOverview.jsx`, `src/api/overview.js`,
   `src/ui/projectOverviewDisplayUtils.js`, `shared/projectOverviewUtils.js`.
 - Version management: `src/ui/versions/VersionManagement.jsx`,
@@ -66,6 +68,8 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - Load React Chrono's global stylesheet before project styles so local base and
   work-item rules retain cascade ownership.
 - Preserve local snapshot and draft keys when changing workspace state.
+- Render every project tool with its required shared `iconKey`; keep a generic
+  Lucide fallback for stale cached tool definitions.
 - Keep stylesheet import order: base, overview, work items, auth, settings,
   responsive.
 - Add component-specific CSS to the owning stylesheet; add cross-module responsive

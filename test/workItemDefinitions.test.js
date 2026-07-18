@@ -7,6 +7,10 @@ import {
   WORK_ITEM_TOOL_DEFINITIONS,
   getWorkItemToolDefinition,
 } from '../shared/workItemDefinitions.js';
+import {
+  getProjectToolIcon,
+  hasProjectToolIcon,
+} from '../src/ui/workspace/projectToolIcons.js';
 
 test('project tools keep overview first and use unique identifiers', () => {
   assert.equal(PROJECT_TOOL_DEFINITIONS[0].id, 'overview');
@@ -15,6 +19,11 @@ test('project tools keep overview first and use unique identifiers', () => {
     new Set(PROJECT_TOOL_DEFINITIONS.map((tool) => tool.id)).size,
     PROJECT_TOOL_DEFINITIONS.length,
   );
+  for (const tool of PROJECT_TOOL_DEFINITIONS) {
+    assert.ok(tool.iconKey);
+    assert.equal(hasProjectToolIcon(tool.iconKey), true);
+  }
+  assert.ok(getProjectToolIcon('unknown-icon'));
 });
 
 test('work item definitions provide stable route and item metadata', () => {

@@ -49,6 +49,10 @@ Shared modules must remain runtime-neutral and importable from Node tests.
 - `src/ui/AppErrorBoundary.jsx`: root fallback for React render and effect errors.
 - `src/ui/workspace/PlatformWorkspace.jsx`: project/work-item orchestration.
 - `src/ui/workspace/ProjectNavigation.jsx`: project sidebar and home navigation.
+- `src/ui/workspace/projectToolDisplayUtils.js`: defensive project-tool pending
+  count normalization and badge eligibility.
+- `src/ui/workspace/projectToolIcons.js`: project-tool `iconKey` to Lucide mapping
+  with a generic fallback for stale definitions.
 - `src/ui/ProjectOverview.jsx`: project overview dashboard.
 - `src/ui/versions/VersionManagement.jsx`: version matrix, list/detail workflow,
   administrator mutations, status history, associations, and comments.
@@ -108,6 +112,8 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 
 - Requirements, Bugs, and feedback share route and field contracts through
   `shared/workItemDefinitions.js`; update frontend and backend consumers together.
+- Every project tool definition includes an `iconKey`; the project navigation maps
+  it to a Lucide icon and uses a generic icon only for stale or unknown tool data.
 - Explicit "不知道该由谁处理" routing is supported only for requirements and Bugs.
   It sends assignment cards to the project's `研发超级管理员`.
 - `研发超级管理员` can assign requirement/Bug handlers but does not inherit all
@@ -131,6 +137,9 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 - Daily pending notifications include assigned requirement, Bug, and feedback
   records whose statuses are not in the configured completed groups. Missing
   work-item tables count as empty; blocked and unset statuses remain pending.
+- Project navigation pending badges count only work assigned to the current user in
+  the tool's initial waiting status: `待处理` for requirements/feedback and
+  `未处理` for Bugs.
 - Notification checks run in `Asia/Shanghai` at second five of each minute, do not
   catch up after downtime, and send at most once per user and calendar day.
 - Project overview reads existing work-item tables and must not create Wiki nodes or

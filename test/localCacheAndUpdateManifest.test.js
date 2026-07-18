@@ -169,4 +169,5 @@ test('related project counts only include the current assignee waiting for each 
 
   assert.equal(countWaitingAssignedWorkItems('requirements', items, user), 1);
   assert.equal(countWaitingAssignedWorkItems('bugs', items, user), 1);
+  assert.equal(countWaitingAssignedWorkItems('feedback', items, user), 1);
 });
