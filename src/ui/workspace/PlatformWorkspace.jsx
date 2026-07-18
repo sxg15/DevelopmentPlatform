@@ -63,6 +63,7 @@ import {
   updateWorkItemStatus as updateRequirementStatus,
 } from '../../api/workItems.js';
 import { ProjectOverview } from '../ProjectOverview.jsx';
+import { VersionManagement } from '../versions/VersionManagement.jsx';
 import {
   buildDisplayFields,
   buildDisplayUserKeys,
@@ -411,6 +412,7 @@ function ProjectWorkspace({
   const [statusCollapseOverrides, setStatusCollapseOverrides] = useState(() => getInitialWorkspacePreferences(cacheUserKey, project).statusCollapseOverrides);
   const [workItemFilters, setWorkItemFilters] = useState(() => getInitialWorkspacePreferences(cacheUserKey, project).workItemFilters);
   const [selectedWorkItemId, setSelectedWorkItemId] = useState('');
+  const [selectedVersionId, setSelectedVersionId] = useState('');
   const [highlightCommentId, setHighlightCommentId] = useState('');
   const processedDirectKeyRef = useRef('');
   const processedRealtimeEventRef = useRef('');
@@ -431,6 +433,7 @@ function ProjectWorkspace({
     setStatusCollapseOverrides(preferences.statusCollapseOverrides);
     setWorkItemFilters(preferences.workItemFilters);
     setSelectedWorkItemId('');
+    setSelectedVersionId('');
     setHighlightCommentId('');
     processedDirectKeyRef.current = '';
     processedRealtimeEventRef.current = '';
@@ -712,6 +715,17 @@ function ProjectWorkspace({
     await loadWorkItems(toolConfig);
   }
 
+  function handleOverviewVersionOpen(version) {
+    const recordId = String(version?.recordId || '').trim();
+    if (!recordId || !visibleTools.some((tool) => tool.id === 'versions')) {
+      onDirectNotice?.({ type: 'error', message: '没有权限查看该版本' });
+      return;
+    }
+    setSelectedVersionId(recordId);
+    setActiveToolId('versions');
+    onDirectNotice?.({ type: 'idle', message: '' });
+  }
+
   return (
     <section className="workspace-content workspace-content-project" aria-label={`${projectName}项目内容`}>
       <div className="project-workspace">
@@ -746,8 +760,9 @@ function ProjectWorkspace({
             'project-detail-surface',
             activeWorkItemConfig ? 'project-detail-surface-requirements' : '',
             activeToolId === 'overview' ? 'project-detail-surface-overview' : '',
+            activeToolId === 'versions' ? 'project-detail-surface-versions' : '',
           ].filter(Boolean).join(' ')}>
-            {!activeWorkItemConfig && activeToolId !== 'overview' ? (
+            {!activeWorkItemConfig && !['overview', 'versions'].includes(activeToolId) ? (
               <>
                 <p className="project-detail-eyebrow">{activeTool.label}</p>
                 <h1>{projectName}</h1>
@@ -761,6 +776,17 @@ function ProjectWorkspace({
                 realtimeEvent={realtimeEvent}
                 onOpenItem={handleOverviewItemOpen}
                 onOpenStatus={handleOverviewStatusOpen}
+                onOpenVersion={handleOverviewVersionOpen}
+              />
+            ) : null}
+            {activeToolId === 'versions' ? (
+              <VersionManagement
+                project={project}
+                user={user}
+                realtimeEvent={realtimeEvent}
+                directTarget={directTarget}
+                targetRecordId={selectedVersionId}
+                onDirectNotice={onDirectNotice}
               />
             ) : null}
             {activeWorkItemConfig ? (
@@ -3765,6 +3791,10 @@ function getDefaultDirectToolId(targetType) {
     return 'feedback';
   }
 
+  if (direct === 'version-detail' || direct === 'version-comment') {
+    return 'versions';
+  }
+
   return 'overview';
 }
 
@@ -4401,7 +4431,11 @@ function getProjectTools(project) {
     .filter((tool) => tool?.id && tool?.label);
 
   if (!normalizedTools.some((tool) => tool.id === 'overview')) {
-    return [PROJECT_TOOLS[0], ...normalizedTools];
+    normalizedTools.unshift(PROJECT_TOOLS[0]);
+  }
+  const versionTool = PROJECT_TOOLS.find((tool) => tool.id === 'versions');
+  if (versionTool && !normalizedTools.some((tool) => tool.id === 'versions')) {
+    normalizedTools.splice(1, 0, versionTool);
   }
 
   return normalizedTools;

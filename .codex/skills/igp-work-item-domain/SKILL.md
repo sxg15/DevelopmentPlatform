@@ -14,6 +14,7 @@ Read `AGENTS.md` and these files before changing workflow behavior:
 - `shared/requirementSubmissionAttachmentUtils.js`
 - `shared/workItemRealtimeUtils.js`
 - `shared/projectOverviewUtils.js`
+- `shared/versionManagementUtils.js`
 - `src/ui/workspace/PlatformWorkspace.jsx`
 - `server/index.js`
 
@@ -55,6 +56,11 @@ Treat shared definitions as the canonical frontend/backend contract.
 - Comments and status change logs must retain their stored document schemas.
 - Realtime updates retain `projectId`, `toolId`, and `recordId`.
 - Opening project overview must not create or copy work-item tables.
+- Version associations may add only requirements, Bugs, and feedback currently in a
+  configured completed group. Store record ID, business ID, and title snapshots;
+  retain existing snapshots if the work item is later reopened.
+- Project overview may display version data but must read existing version tables
+  only. Version Management itself owns first-open provisioning.
 
 ## Change Sequence
 

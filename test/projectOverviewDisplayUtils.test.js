@@ -33,6 +33,24 @@ test('overview display data tolerates malformed cached values', () => {
       occurredAt: null,
     }],
     unavailableTools: 'invalid',
+    versions: {
+      initialized: true,
+      platforms: [{
+        platform: 'IGP',
+        active: {
+          正式发布: {
+            recordId: 'ver-1',
+            versionNumber: '1.0.0',
+          },
+        },
+      }],
+      recentFormalReleases: [{
+        recordId: 'ver-1',
+        versionNumber: '1.0.0',
+        platform: 'IGP',
+        releasedAt: 'invalid',
+      }],
+    },
   }, 5000);
 
   assert.equal(normalized.generatedAt, 5000);
@@ -63,4 +81,7 @@ test('overview display data tolerates malformed cached values', () => {
   assert.equal(normalized.risks[0].title, '未命名工作项');
   assert.equal(normalized.recentActivity[0].occurredAt, 0);
   assert.deepEqual(normalized.unavailableTools, []);
+  assert.equal(normalized.versions.initialized, true);
+  assert.equal(normalized.versions.platforms[0].active['正式发布'].versionNumber, '1.0.0');
+  assert.equal(normalized.versions.recentFormalReleases[0].releasedAt, 0);
 });

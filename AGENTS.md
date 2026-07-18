@@ -27,6 +27,9 @@ or validation commands change.
 - `shared/requirementSubmissionAttachmentUtils.js`: requirement delivery attachment
   rules and change descriptions.
 - `shared/projectOverviewUtils.js`: overview aggregation, risk detection, and trends.
+- `shared/versionManagementUtils.js`: version fields, JSON documents, active-slot
+  uniqueness, association snapshots, previous-version validation, permissions, and
+  overview projections.
 - `shared/workItemRealtimeUtils.js`: client/server realtime item helpers.
 - `shared/personalSettingsUtils.js`: personal notification time normalization,
   scheduled reminder matching, pending-item filtering, sorting, and summaries.
@@ -47,6 +50,10 @@ Shared modules must remain runtime-neutral and importable from Node tests.
 - `src/ui/workspace/PlatformWorkspace.jsx`: project/work-item orchestration.
 - `src/ui/workspace/ProjectNavigation.jsx`: project sidebar and home navigation.
 - `src/ui/ProjectOverview.jsx`: project overview dashboard.
+- `src/ui/versions/VersionManagement.jsx`: version matrix, list/detail workflow,
+  administrator mutations, status history, associations, and comments.
+- `src/ui/versions/versionManagementDisplayUtils.js`: defensive version payload
+  normalization, filtering, mutation merging, and active matrix projection.
 - `src/ui/projectOverviewDisplayUtils.js`: defensive normalization for overview
   snapshots before rendering.
 - `src/ui/work-items/workItemFieldUtils.js`: pure Bitable field, attachment, person,
@@ -59,7 +66,7 @@ Shared modules must remain runtime-neutral and importable from Node tests.
 - `src/ui/workItemListUtils.js`: pure list filtering, grouping, and sorting rules.
 - `src/ui/localCache.js`: browser cache, drafts, snapshots, and preferences.
 - `src/api/`: all frontend HTTP clients, including personal settings and sanitized
-  client-error reporting.
+  client-error reporting. Version requests belong in `src/api/versions.js`.
   Do not add direct `fetch` calls to UI files.
 - `src/integrations/feishuH5.js`: Feishu H5 SDK loading and authorization.
 - `src/styles.css`: stylesheet aggregator. Keep imports in cascade order.
@@ -87,6 +94,9 @@ Shared modules must remain runtime-neutral and importable from Node tests.
 - `server/services/updateService.js`: remote update manifest retrieval.
 - `server/services/personalSettingsService.js`: Wiki-backed personal settings
   schema validation, record lookup, creation, and updates.
+- `server/services/versionManagementService.js`: Wiki template provisioning,
+  version Bitable schema validation, project-keyed mutations, active-slot
+  replacement/rollback, references, associations, status history, and comments.
 - `server/services/todoNotificationScheduler.js`: minute-aligned scheduled reminder
   execution.
 
@@ -124,8 +134,23 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 - Notification checks run in `Asia/Shanghai` at second five of each minute, do not
   catch up after downtime, and send at most once per user and calendar day.
 - Project overview reads existing work-item tables and must not create Wiki nodes or
-  copy templates.
+  copy templates. Version overview is also read-only and reports an uninitialized
+  state when the project version table does not exist.
 - Realtime events use `projectId`, `toolId`, and `recordId`; preserve this payload.
+- Version management is always visible to project members. Only global
+  `超级管理员` and project `研发超级管理员` may create, edit, change status, or
+  delete versions; all project members may view and comment.
+- Per platform, `测试开发`, `测试发布`, and `正式发布` each have one active slot.
+  Occupying a used slot automatically moves the previous version to `过时`; perform
+  this under the project-keyed queue and restore the previous record if the target
+  write fails.
+- Version associations store snapshots of completed/closed requirements, Bugs, and
+  feedback. Existing snapshots remain valid after a work item is reopened.
+- `上个版本` is manual and may cross platforms, but must not self-reference or form
+  a cycle. Block deletion while another version references the target.
+- Version association, previous-version, status-history, and comment text fields use
+  versioned JSON. Surface malformed documents and never overwrite malformed status
+  or comment history during a mutation.
 
 ## Configuration And Secrets
 
@@ -134,6 +159,9 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 - Use `config/config.example.json` for documented configuration changes.
 - Personal settings configuration lives under `bitable.personalSettings`; keep the
   Wiki node token and exact table field names configurable.
+- Version template configuration lives under `bitable.versionManagement`. The
+  default Wiki template token is `UVqFwm4EIiBcoPkoz9JcOLNfnVg`; keep field names
+  configurable and never add the `versions` tool to the department tool matrix.
 - The browser may receive `appId` and debug identity only; never expose `appSecret`
   or access tokens.
 - Client error reports may include only sanitized messages/stacks, component stacks,

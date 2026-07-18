@@ -165,6 +165,23 @@
         "todoNotificationTime": "待办事项通知时间"
       }
     },
+    "versionManagement": {
+      "wikiNodeToken": "UVqFwm4EIiBcoPkoz9JcOLNfnVg",
+      "parentName": "版本管理",
+      "tableId": "",
+      "viewId": "",
+      "fieldNames": {
+        "versionNumber": "版本号",
+        "status": "状态",
+        "requirements": "已处理需求",
+        "bugs": "已处理Bug",
+        "feedback": "已处理反馈",
+        "statusHistory": "状态变动记录",
+        "comments": "留言",
+        "previousVersion": "上个版本",
+        "platform": "平台"
+      }
+    },
     "links": []
   }
 }

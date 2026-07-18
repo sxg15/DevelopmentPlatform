@@ -1,5 +1,6 @@
 @import './styles/base.css';
 @import './styles/projectOverview.css';
+@import './styles/versionManagement.css';
 @import './styles/workItems.css';
 @import './styles/auth.css';
 @import './styles/settings.css';

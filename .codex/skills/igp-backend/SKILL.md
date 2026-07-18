@@ -19,6 +19,8 @@ Read `AGENTS.md`, then locate the owning layer.
 - Update manifest fetch: `server/services/updateService.js`.
 - Personal settings Bitable workflow:
   `server/services/personalSettingsService.js`.
+- Version management provisioning and mutations:
+  `server/services/versionManagementService.js`.
 - Daily reminder timing: `server/services/todoNotificationScheduler.js`;
   reminder orchestration and cards remain in `server/index.js`.
 
@@ -55,6 +57,17 @@ Read `AGENTS.md`, then locate the owning layer.
 - Serialize ensure and save operations for the same Open ID through
   `server/runtime/keyedTaskQueue.js` so concurrent app tabs cannot create
   duplicates; different users must remain concurrent.
+- Keep version APIs under `/api/projects/:projectId/versions`. All project members
+  may ensure/read/comment; require global or development super-admin access for
+  create/edit/status/delete.
+- Provision a project version Bitable from the configured Wiki template only when
+  Version Management is opened. Project overview must call the read-only version
+  overview path and never provision it.
+- Serialize version mutations by project. For active-slot replacement, move the
+  current occupant to `过时`, write the target, and restore the occupant's exact
+  status/history only if the target write fails.
+- Publish version changes through the existing SSE hub with `toolId: 'versions'`.
+- Treat malformed version status/comment JSON as a conflict and do not overwrite it.
 
 ## Validate
 

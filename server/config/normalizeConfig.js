@@ -1,4 +1,5 @@
 import { normalizeProjectOverviewConfig } from '../../shared/projectOverviewUtils.js';
+import { normalizeVersionFieldNames } from '../../shared/versionManagementUtils.js';
 import { DEFAULT_DEVELOPMENT_SUPER_ADMIN_FIELD } from '../../shared/workItemAssignmentUtils.js';
 
 export function normalizeConfig(config) {
@@ -12,6 +13,7 @@ export function normalizeConfig(config) {
   const toolPermissionFieldNames = config?.bitable?.toolPermission?.fieldNames || {};
   const toolPermissionToolFields = toolPermissionFieldNames.tools || {};
   const personalSettingsFieldNames = config?.bitable?.personalSettings?.fieldNames || {};
+  const versionManagementConfig = config?.bitable?.versionManagement || {};
 
   return {
     server: {
@@ -159,6 +161,16 @@ export function normalizeConfig(config) {
             personalSettingsFieldNames.todoNotificationTime || '待办事项通知时间',
           ),
         },
+      },
+      versionManagement: {
+        wikiNodeToken: String(
+          versionManagementConfig.wikiNodeToken
+          || 'UVqFwm4EIiBcoPkoz9JcOLNfnVg',
+        ),
+        parentName: String(versionManagementConfig.parentName || '版本管理'),
+        tableId: String(versionManagementConfig.tableId || ''),
+        viewId: String(versionManagementConfig.viewId || ''),
+        fieldNames: normalizeVersionFieldNames(versionManagementConfig.fieldNames),
       },
       links: Array.isArray(config?.bitable?.links) ? config.bitable.links : [],
     },

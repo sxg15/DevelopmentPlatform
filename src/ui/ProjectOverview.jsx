@@ -19,7 +19,9 @@ import {
   Clock3,
   ListTodo,
   LoaderCircle,
+  PackageOpen,
   RefreshCw,
+  Rocket,
   TriangleAlert,
   UserRoundX,
   Users,
@@ -79,6 +81,7 @@ export function ProjectOverview({
   realtimeEvent,
   onOpenItem,
   onOpenStatus,
+  onOpenVersion,
 }) {
   const projectId = String(project?.projectId || '').trim();
   const preferenceName = `project-overview:${projectId}`;
@@ -272,6 +275,8 @@ export function ProjectOverview({
         </div>
       ) : null}
 
+      <OverviewVersions versions={data.versions} onOpenVersion={onOpenVersion} />
+
       <div className="project-overview-kpis">
         <OverviewKpi icon={ListTodo} label="活跃工作项" value={data.summary?.active} />
         <OverviewKpi icon={Clock3} label="待处理" value={data.summary?.waiting} />
@@ -440,6 +445,66 @@ export function ProjectOverview({
             ))}
           </div>
         </OverviewPanel>
+      </div>
+    </section>
+  );
+}
+
+function OverviewVersions({ versions, onOpenVersion }) {
+  if (!versions.initialized) {
+    return (
+      <section className="project-overview-versions is-uninitialized">
+        <div className="project-overview-versions-heading">
+          <div><PackageOpen aria-hidden="true" /><h2>项目版本</h2></div>
+          <span>尚未初始化版本管理</span>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="project-overview-versions" aria-label="项目当前版本">
+      <div className="project-overview-versions-heading">
+        <div><Rocket aria-hidden="true" /><h2>项目版本</h2></div>
+        <span>当前开发、测试发布与正式发布</span>
+      </div>
+      {versions.warnings.length > 0 ? (
+        <p className="project-overview-version-warning">{versions.warnings.join('；')}</p>
+      ) : null}
+      <div className="project-overview-version-platforms">
+        {versions.platforms.map((platform) => (
+          <div className="project-overview-version-platform" key={platform.platform}>
+            <strong>{platform.platform}</strong>
+            {['测试开发', '测试发布', '正式发布'].map((status) => {
+              const version = platform.active[status];
+              return (
+                <button
+                  key={status}
+                  type="button"
+                  disabled={!version}
+                  onClick={() => version && onOpenVersion?.(version)}
+                >
+                  <small>{status}</small>
+                  <span>{version?.versionNumber || '未设置'}</span>
+                  {version ? <ChevronRight aria-hidden="true" /> : null}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+      <div className="project-overview-version-releases">
+        <span>近期正式发布</span>
+        {versions.recentFormalReleases.length > 0 ? versions.recentFormalReleases.map((release) => (
+          <button
+            key={`${release.recordId}:${release.releasedAt}`}
+            type="button"
+            onClick={() => onOpenVersion?.(release)}
+          >
+            <strong>{release.versionNumber}</strong>
+            <small>{release.platform} · {formatDateTime(release.releasedAt)}</small>
+          </button>
+        )) : <span className="project-overview-version-empty">暂无正式发布记录</span>}
       </div>
     </section>
   );

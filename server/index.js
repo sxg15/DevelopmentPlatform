@@ -27,13 +27,17 @@ import {
 import {
   PROJECT_OVERVIEW_TOOL_ORDER,
   buildProjectOverviewData,
-  normalizeProjectOverviewConfig,
 } from '../shared/projectOverviewUtils.js';
 import {
   PROJECT_TOOL_DEFINITIONS,
   REQUIREMENT_PRIORITIES,
   getWorkItemToolDefinition,
 } from '../shared/workItemDefinitions.js';
+import {
+  VERSION_ASSOCIATION_TOOL_IDS,
+  VERSION_MANAGEMENT_TOOL_ID,
+  canManageVersions,
+} from '../shared/versionManagementUtils.js';
 import {
   blockDirectConfigAccess,
   clientDir,
@@ -45,6 +49,7 @@ import {
   validateProjectBaseConfig,
   validateProjectPermissionConfig,
   validateToolPermissionConfig,
+  validateVersionManagementConfig,
 } from './config/runtimeConfig.js';
 import { getLocalUrls } from './runtime/network.js';
 import {
@@ -69,6 +74,7 @@ import {
   savePersonalSettingsForUser,
 } from './services/personalSettingsService.js';
 import { createTodoNotificationScheduler } from './services/todoNotificationScheduler.js';
+import { createVersionManagementService } from './services/versionManagementService.js';
 import {
   exchangeCodeForAccessToken,
   fetchFeishuJson,
@@ -115,7 +121,9 @@ const STRUCTURE_CACHE_TTL_MS = 5 * 60 * 1000;
 const LONG_STRUCTURE_CACHE_TTL_MS = 10 * 60 * 1000;
 const SUPER_ADMIN_DEPARTMENT = '超级管理员';
 const WORK_ITEM_TOOL_IDS = new Set(['requirements', 'bugs', 'feedback']);
-const PERMISSION_TOOL_DEFINITIONS = PROJECT_TOOL_DEFINITIONS.filter((tool) => tool.id !== 'overview');
+const PERMISSION_TOOL_DEFINITIONS = PROJECT_TOOL_DEFINITIONS.filter(
+  (tool) => !['overview', VERSION_MANAGEMENT_TOOL_ID].includes(tool.id),
+);
 const resolvedBitableTableConfigCache = new Map();
 const workItemNodeCache = new Map();
 const workItemTableContextCache = new Map();
@@ -127,6 +135,9 @@ const {
   subscribe: subscribeToWorkItemUpdates,
 } = createWorkItemRealtimeHub({
   onPublish: ({ projectId }) => invalidateProjectOverviewCache(projectId),
+});
+const versionManagementService = createVersionManagementService({
+  loadCompletedWorkItemCandidates: loadCompletedVersionWorkItemCandidates,
 });
 const todoNotificationScheduler = createTodoNotificationScheduler({
   run: runTodoNotificationTick,
@@ -307,6 +318,38 @@ app.get('/api/projects/:projectId/overview', async (request, response) => {
   await handleProjectOverview(request, response);
 });
 
+app.post('/api/projects/:projectId/versions/ensure', async (request, response) => {
+  await handleVersionManagementEnsure(request, response);
+});
+
+app.get('/api/projects/:projectId/versions/:recordId', async (request, response) => {
+  await handleVersionRead(request, response);
+});
+
+app.post('/api/projects/:projectId/versions', async (request, response) => {
+  await handleVersionCreate(request, response);
+});
+
+app.put('/api/projects/:projectId/versions/:recordId', async (request, response) => {
+  await handleVersionUpdate(request, response);
+});
+
+app.post('/api/projects/:projectId/versions/:recordId/status', async (request, response) => {
+  await handleVersionStatusUpdate(request, response);
+});
+
+app.delete('/api/projects/:projectId/versions/:recordId', async (request, response) => {
+  await handleVersionDelete(request, response);
+});
+
+app.post('/api/projects/:projectId/versions/:recordId/comments', async (request, response) => {
+  await handleVersionCommentCreate(request, response);
+});
+
+app.delete('/api/projects/:projectId/versions/:recordId/comments/:commentId', async (request, response) => {
+  await handleVersionCommentDelete(request, response);
+});
+
 app.get('/api/realtime/stream', async (request, response) => {
   await handleRealtimeStream(request, response);
 });
@@ -484,6 +527,277 @@ app.delete('/api/projects/:projectId/bugs/:recordId', async (request, response) 
 app.delete('/api/projects/:projectId/feedback/:recordId', async (request, response) => {
   await handleWorkItemDelete(request, response, 'feedback');
 });
+
+async function handleVersionManagementEnsure(request, response) {
+  try {
+    const context = await getVersionRequestContext(request);
+    const result = await versionManagementService.ensure(
+      context.token,
+      context.project,
+      context.session.user,
+    );
+    response.json({
+      ...result,
+      canManageVersions: canManageProjectVersions(context.projectAccess),
+      mentionableUsers: context.projectAccess.mentionableUsersByTool.versions || [],
+    });
+  } catch (error) {
+    sendVersionError(response, error, '准备版本管理失败');
+  }
+}
+
+async function handleVersionRead(request, response) {
+  try {
+    const recordId = String(request.params.recordId || '').trim();
+    if (!recordId) {
+      response.status(400).json({ message: '缺少版本记录ID' });
+      return;
+    }
+    const context = await getVersionRequestContext(request);
+    const result = await versionManagementService.readOne(context.token, context.project, recordId);
+    response.json({
+      ...result,
+      canManageVersions: canManageProjectVersions(context.projectAccess),
+      mentionableUsers: context.projectAccess.mentionableUsersByTool.versions || [],
+    });
+  } catch (error) {
+    sendVersionError(response, error, '读取版本失败');
+  }
+}
+
+async function handleVersionCreate(request, response) {
+  try {
+    const context = await getVersionRequestContext(request, { requireManager: true });
+    const result = await versionManagementService.createVersion(
+      context.token,
+      context.project,
+      context.session.user,
+      request.body,
+    );
+    publishVersionUpdate(context.project.projectId, result.version?.recordId);
+    if (result.replacedVersion?.recordId) {
+      publishVersionUpdate(context.project.projectId, result.replacedVersion.recordId);
+    }
+    response.status(201).json(result);
+  } catch (error) {
+    sendVersionError(response, error, '创建版本失败');
+  }
+}
+
+async function handleVersionUpdate(request, response) {
+  try {
+    const recordId = String(request.params.recordId || '').trim();
+    if (!recordId) {
+      response.status(400).json({ message: '缺少版本记录ID' });
+      return;
+    }
+    const context = await getVersionRequestContext(request, { requireManager: true });
+    const result = await versionManagementService.updateVersion(
+      context.token,
+      context.project,
+      context.session.user,
+      recordId,
+      request.body,
+    );
+    publishVersionUpdate(context.project.projectId, recordId);
+    if (result.replacedVersion?.recordId) {
+      publishVersionUpdate(context.project.projectId, result.replacedVersion.recordId);
+    }
+    response.json(result);
+  } catch (error) {
+    sendVersionError(response, error, '更新版本失败');
+  }
+}
+
+async function handleVersionStatusUpdate(request, response) {
+  try {
+    const recordId = String(request.params.recordId || '').trim();
+    if (!recordId) {
+      response.status(400).json({ message: '缺少版本记录ID' });
+      return;
+    }
+    const context = await getVersionRequestContext(request, { requireManager: true });
+    const result = await versionManagementService.changeStatus(
+      context.token,
+      context.project,
+      context.session.user,
+      recordId,
+      request.body,
+    );
+    publishVersionUpdate(context.project.projectId, recordId);
+    if (result.replacedVersion?.recordId) {
+      publishVersionUpdate(context.project.projectId, result.replacedVersion.recordId);
+    }
+    response.json(result);
+  } catch (error) {
+    sendVersionError(response, error, '变更版本状态失败');
+  }
+}
+
+async function handleVersionDelete(request, response) {
+  try {
+    const recordId = String(request.params.recordId || '').trim();
+    if (!recordId) {
+      response.status(400).json({ message: '缺少版本记录ID' });
+      return;
+    }
+    const context = await getVersionRequestContext(request, { requireManager: true });
+    const result = await versionManagementService.deleteVersion(
+      context.token,
+      context.project,
+      recordId,
+    );
+    publishVersionUpdate(context.project.projectId, recordId);
+    response.json(result);
+  } catch (error) {
+    sendVersionError(response, error, '删除版本失败');
+  }
+}
+
+async function handleVersionCommentCreate(request, response) {
+  try {
+    const recordId = String(request.params.recordId || '').trim();
+    if (!recordId) {
+      response.status(400).json({ message: '缺少版本记录ID' });
+      return;
+    }
+    const context = await getVersionRequestContext(request);
+    const requestedMentions = normalizeMentionedUsers(
+      request.body?.mentionedUsers || request.body?.mentions || [],
+    );
+    const mentionedUsers = filterMentionedUsersByCandidates(
+      requestedMentions,
+      context.projectAccess.mentionableUsersByTool.versions || [],
+    );
+    const result = await versionManagementService.createComment(
+      context.token,
+      context.project,
+      context.session.user,
+      recordId,
+      {
+        ...request.body,
+        mentionedUsers,
+      },
+    );
+    publishVersionUpdate(context.project.projectId, recordId);
+    const notificationResults = request.body?.notifyMentioned
+      ? await notifyVersionMentionedUsers(context.token, mentionedUsers, {
+          project: context.project,
+          version: result.version,
+          comment: result.comment,
+          request,
+        })
+      : [];
+    response.json({
+      ...result,
+      notificationResults,
+    });
+  } catch (error) {
+    sendVersionError(response, error, '发送版本留言失败');
+  }
+}
+
+async function handleVersionCommentDelete(request, response) {
+  try {
+    const recordId = String(request.params.recordId || '').trim();
+    const commentId = String(request.params.commentId || '').trim();
+    if (!recordId || !commentId) {
+      response.status(400).json({ message: '缺少版本留言信息' });
+      return;
+    }
+    const context = await getVersionRequestContext(request);
+    const result = await versionManagementService.deleteComment(
+      context.token,
+      context.project,
+      context.session.user,
+      recordId,
+      commentId,
+    );
+    publishVersionUpdate(context.project.projectId, recordId);
+    response.json(result);
+  } catch (error) {
+    sendVersionError(response, error, '删除版本留言失败');
+  }
+}
+
+async function getVersionRequestContext(request, { requireManager = false } = {}) {
+  validateProjectBaseConfig();
+  validateProjectPermissionConfig();
+  validateToolPermissionConfig();
+  validateKnowledgeBaseConfig();
+  validateVersionManagementConfig();
+  if (!appId || !appSecret) {
+    throw new Error('缺少飞书应用配置');
+  }
+  const session = getSession(request);
+  if (!session) {
+    const error = new Error('请先登录飞书');
+    error.statusCode = 401;
+    throw error;
+  }
+  const projectId = String(request.params.projectId || '').trim();
+  if (!projectId) {
+    const error = new Error('缺少项目ID');
+    error.statusCode = 400;
+    throw error;
+  }
+  const token = await getTenantAccessToken();
+  const { project, projectAccess } = await getAuthorizedProjectAccess(
+    token,
+    projectId,
+    session.user,
+    VERSION_MANAGEMENT_TOOL_ID,
+  );
+  if (requireManager && !canManageProjectVersions(projectAccess)) {
+    const error = new Error('只有研发超级管理员或超级管理员可以变更版本');
+    error.statusCode = 403;
+    throw error;
+  }
+  return { token, session, project, projectAccess };
+}
+
+function canManageProjectVersions(projectAccess) {
+  return canManageVersions(projectAccess);
+}
+
+function publishVersionUpdate(projectId, recordId) {
+  if (!recordId) {
+    return;
+  }
+  publishWorkItemUpdated({
+    projectId,
+    toolId: VERSION_MANAGEMENT_TOOL_ID,
+    recordId,
+  });
+}
+
+function sendVersionError(response, error, fallbackMessage) {
+  const message = error instanceof Error ? error.message : fallbackMessage;
+  const status = Number(error?.statusCode) || (
+    message.includes('请先登录')
+      ? 401
+      : message.includes('权限') || message.includes('只有') || message.includes('只能')
+        ? 403
+        : message.includes('不存在') || message.includes('尚未初始化')
+          ? 404
+          : message.includes('JSON') || message.includes('回滚失败')
+            ? 409
+            : message.includes('缺少') || message.includes('模板')
+              ? 500
+              : message.includes('不能为空')
+                || message.includes('不能超过')
+                || message.includes('没有变化')
+                || message.includes('可选范围')
+                || message.includes('不能重复')
+                || message.includes('不能引用')
+                || message.includes('循环')
+                || message.includes('已完成')
+                || message.includes('仍引用')
+                ? 400
+                : 502
+  );
+  response.status(status).json({ message });
+}
 
 async function handleWorkItemEnsure(request, response, toolId) {
   const toolConfig = getWorkItemToolConfig(toolId);
@@ -811,8 +1125,18 @@ async function handleProjectOverview(request, response) {
             .filter((item) => Array.isArray(item.items))
             .map((item) => [item.toolId, item.items]),
         );
-
-        return buildProjectOverviewData({
+        let versions = null;
+        try {
+          versions = await versionManagementService.readOverview(token, project.projectId);
+        } catch (error) {
+          versions = {
+            initialized: false,
+            platforms: [],
+            recentFormalReleases: [],
+            warnings: [error instanceof Error ? error.message : '读取版本信息失败'],
+          };
+        }
+        const overview = buildProjectOverviewData({
           toolItems,
           currentUser: session.user,
           scope,
@@ -820,6 +1144,10 @@ async function handleProjectOverview(request, response) {
           config: runtimeConfig.dashboard,
           unavailableTools: toolResults.map((item) => item.unavailable).filter(Boolean),
         });
+        return {
+          ...overview,
+          versions,
+        };
       },
     );
 
@@ -2158,6 +2486,41 @@ async function getProjectWorkItems(token, project, user, toolConfig) {
   }
 }
 
+async function loadCompletedVersionWorkItemCandidates(token, project, user) {
+  const entries = await mapWithConcurrency(VERSION_ASSOCIATION_TOOL_IDS, 3, async (toolId) => {
+    const toolConfig = getWorkItemToolConfig(toolId);
+    try {
+      const items = await getProjectWorkItems(token, project, user, toolConfig);
+      const completedStatuses = new Set(runtimeConfig.dashboard.statusGroups?.[toolId]?.completed || []);
+      return {
+        toolId,
+        items: items
+          .filter((item) => completedStatuses.has(String(item.itemStatus || item.requirementStatus || '').trim()))
+          .map((item) => ({
+            recordId: String(item.recordId || '').trim(),
+            itemId: String(item.itemId || item[toolConfig.itemIdKey] || '').trim(),
+            title: String(item.title || toolConfig.unnamedTitle).trim(),
+            status: String(item.itemStatus || item.requirementStatus || '').trim(),
+            completed: true,
+          }))
+          .filter((item) => item.recordId),
+        warning: '',
+      };
+    } catch (error) {
+      return {
+        toolId,
+        items: [],
+        warning: `${toolConfig.listLabel}读取失败：${error instanceof Error ? error.message : '未知错误'}`,
+      };
+    }
+  });
+
+  return {
+    candidates: Object.fromEntries(entries.map((entry) => [entry.toolId, entry.items])),
+    warnings: entries.map((entry) => entry.warning).filter(Boolean),
+  };
+}
+
 function isMissingWorkItemListError(error, toolConfig) {
   const message = error instanceof Error ? error.message : String(error || '');
   return message.includes(toolConfig.missingNodeText)
@@ -2389,7 +2752,7 @@ function isUserInKeySet(user, userKeys) {
 }
 
 function buildAllowedToolIds(departments, toolMatrix, isSuperAdmin, isDevelopmentSuperAdmin) {
-  const allowedToolIds = new Set(['overview']);
+  const allowedToolIds = new Set(['overview', VERSION_MANAGEMENT_TOOL_ID]);
   const roleGrantedToolIds = getRoleGrantedWorkItemToolIds({
     isSuperAdmin,
     isDevelopmentSuperAdmin,
@@ -2444,7 +2807,10 @@ function isAllowedToolValue(value) {
 }
 
 function buildMentionableUsersByTool(projectPermission, toolMatrix) {
-  const result = Object.fromEntries(PERMISSION_TOOL_DEFINITIONS.map((tool) => [tool.id, []]));
+  const result = Object.fromEntries([
+    ...PERMISSION_TOOL_DEFINITIONS.map((tool) => [tool.id, []]),
+    [VERSION_MANAGEMENT_TOOL_ID, []],
+  ]);
   const admins = projectPermission.usersByDepartment[SUPER_ADMIN_DEPARTMENT] || [];
   const developmentSuperAdminField = getDevelopmentSuperAdminFieldName();
   const developmentSuperAdmins = projectPermission.usersByDepartment[developmentSuperAdminField] || [];
@@ -2470,6 +2836,9 @@ function buildMentionableUsersByTool(projectPermission, toolMatrix) {
 
     result[tool.id] = uniqueUsers(users).map(toMentionableUser);
   }
+  result[VERSION_MANAGEMENT_TOOL_ID] = uniqueUsers(
+    Object.values(projectPermission.usersByDepartment).flat(),
+  ).map(toMentionableUser);
 
   return result;
 }
@@ -4498,6 +4867,29 @@ async function notifyMentionedUsers(token, mentionedUsers, context) {
   return results;
 }
 
+async function notifyVersionMentionedUsers(token, mentionedUsers, context) {
+  const uniqueUsers = normalizeMentionedUsers(mentionedUsers);
+  const results = [];
+  for (const user of uniqueUsers) {
+    try {
+      await sendFeishuInteractiveMessage(
+        token,
+        user.openId,
+        buildVersionCommentNotificationCard(user, context),
+      );
+      results.push({ openId: user.openId, name: user.name, ok: true, message: '' });
+    } catch (error) {
+      results.push({
+        openId: user.openId,
+        name: user.name,
+        ok: false,
+        message: error instanceof Error ? error.message : '通知失败',
+      });
+    }
+  }
+  return results;
+}
+
 async function notifyWorkItemCreationRecipients(token, recipients, context) {
   const uniqueUsers = normalizeMentionedUsers(recipients);
   const results = [];
@@ -4742,6 +5134,46 @@ function buildCommentNotificationCard(_user, context) {
         tag: 'action',
         actions: [
           buildCardLinkButton('跳转至留言', link),
+        ],
+      },
+    ],
+  };
+}
+
+function buildVersionCommentNotificationCard(_user, context) {
+  const projectName = context.project?.projectName || '未命名项目';
+  const versionNumber = context.version?.versionNumber || '未命名版本';
+  const authorName = context.comment?.authorName || context.comment?.authorOpenId || '未知用户';
+  const link = buildPlatformExternalLink('version-comment', {
+    projectId: context.project?.projectId || '',
+    tool: VERSION_MANAGEMENT_TOOL_ID,
+    recordId: context.version?.recordId || '',
+    commentId: context.comment?.id || '',
+  }, context.request);
+
+  return {
+    config: {
+      wide_screen_mode: true,
+    },
+    header: {
+      template: 'turquoise',
+      title: {
+        tag: 'plain_text',
+        content: `${authorName}在版本“${versionNumber}”中给您留言`,
+      },
+    },
+    elements: [
+      buildCardLargeTextElement('留言内容', context.comment?.content || '无'),
+      buildCardTextElement('项目名称', `${projectName} (${context.project?.projectId || '无ID'})`),
+      buildCardTextElement('版本', `${versionNumber} · ${context.version?.platform || '未设置平台'}`),
+      buildCardPersonElement('留言人', {
+        openId: context.comment?.authorOpenId,
+        name: authorName,
+      }),
+      {
+        tag: 'action',
+        actions: [
+          buildCardLinkButton('跳转至版本留言', link),
         ],
       },
     ],

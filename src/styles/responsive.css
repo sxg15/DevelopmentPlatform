@@ -116,6 +116,89 @@
     padding: 0;
   }
 
+  .project-detail-surface-versions {
+    min-height: 0;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .version-management {
+    gap: 14px;
+  }
+
+  .version-management-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .project-detail-surface .version-management-header h1 {
+    max-width: 100%;
+    white-space: normal;
+  }
+
+  .version-management-header-actions {
+    justify-content: flex-end;
+  }
+
+  .version-active-section {
+    overflow-x: auto;
+  }
+
+  .version-management-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .version-list-pane {
+    max-height: 420px;
+    border-right: 0;
+    border-bottom: 1px solid #d8e0e7;
+  }
+
+  .version-detail-pane {
+    overflow: visible;
+  }
+
+  .version-detail {
+    padding: 18px 14px 26px;
+  }
+
+  .version-detail-header {
+    flex-direction: column;
+  }
+
+  .version-detail-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .version-association-columns,
+  .version-form-associations,
+  .version-form-grid,
+  .version-metadata-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .version-metadata-grid > div:nth-last-child(-n + 2) {
+    border-bottom: 1px solid #edf1f5;
+  }
+
+  .version-metadata-grid > div:last-child {
+    border-bottom: 0;
+  }
+
+  .version-dialog-backdrop {
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .version-dialog {
+    width: 100%;
+    max-height: calc(100vh - 24px);
+  }
+
   .project-overview {
     gap: 14px;
   }
@@ -151,6 +234,21 @@
   .project-overview-secondary-grid,
   .project-overview-bottom-grid {
     gap: 12px;
+  }
+
+  .project-overview-version-platforms {
+    grid-template-columns: minmax(640px, 1fr);
+    overflow-x: auto;
+  }
+
+  .project-overview-versions-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .project-overview-versions-heading > span {
+    white-space: normal;
   }
 
   .project-overview-kpi {

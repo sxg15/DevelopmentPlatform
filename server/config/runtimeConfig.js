@@ -67,6 +67,13 @@ export function validatePersonalSettingsConfig() {
   }
 }
 
+export function validateVersionManagementConfig() {
+  const versionManagement = runtimeConfig.bitable.versionManagement;
+  if (!versionManagement.wikiNodeToken || !versionManagement.parentName) {
+    throw new Error('缺少版本管理模板配置');
+  }
+}
+
 export function validateKnowledgeBaseConfig() {
   const knowledgeBase = runtimeConfig.knowledgeBase;
   if (!knowledgeBase.spaceId) {

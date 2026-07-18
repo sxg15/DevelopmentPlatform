@@ -18,6 +18,9 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
   `src/ui/workspace/ProjectNavigation.jsx`, `src/api/projects.js`.
 - Overview: `src/ui/ProjectOverview.jsx`, `src/api/overview.js`,
   `src/ui/projectOverviewDisplayUtils.js`, `shared/projectOverviewUtils.js`.
+- Version management: `src/ui/versions/VersionManagement.jsx`,
+  `src/ui/versions/versionManagementDisplayUtils.js`, `src/api/versions.js`,
+  `src/styles/versionManagement.css`, `shared/versionManagementUtils.js`.
 - Work items: `src/ui/workspace/PlatformWorkspace.jsx`,
   `src/ui/work-items/workItemFieldUtils.js`,
   `src/ui/work-items/WorkItemTimelinePanel.jsx`,
@@ -69,6 +72,15 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
   overrides to `responsive.css`.
 - Maintain existing dense operational UI patterns and verify text does not truncate
   or overlap on desktop and mobile.
+- Keep Version Management outside `PlatformWorkspace.jsx`. Render its per-platform
+  active matrix, filterable list, details, associations, history, and comments in
+  the owning component.
+- Show create/edit/status/delete controls only when `canManageVersions` is true.
+  Comments remain available to all project members.
+- Support `version-detail` and `version-comment` direct targets plus realtime
+  refresh events with `toolId: 'versions'`.
+- Normalize cached overview version data before rendering. An absent version table
+  is a quiet uninitialized state, not an error and not a provisioning trigger.
 
 ## Validate
 

@@ -62,6 +62,45 @@ export function normalizeProjectOverviewDisplayData(value, now = Date.now()) {
       toolId: normalizeText(item.toolId),
       label: normalizeText(item.label, '工作项'),
     })),
+    versions: normalizeOverviewVersions(source.versions),
+  };
+}
+
+function normalizeOverviewVersions(value) {
+  const source = isRecord(value) ? value : {};
+  return {
+    initialized: Boolean(source.initialized),
+    platforms: normalizeObjectArray(source.platforms).map((item) => ({
+      platform: normalizeText(item.platform, '未设置平台'),
+      active: Object.fromEntries(['测试开发', '测试发布', '正式发布'].map((status) => [
+        status,
+        normalizeOverviewVersion(item.active?.[status]),
+      ])),
+    })),
+    recentFormalReleases: normalizeObjectArray(source.recentFormalReleases).map((item) => ({
+      recordId: normalizeText(item.recordId),
+      versionNumber: normalizeText(item.versionNumber, '未命名版本'),
+      platform: normalizeText(item.platform, '未设置平台'),
+      releasedAt: normalizeTimestamp(item.releasedAt, 0),
+      operatorName: normalizeText(item.operatorName, '未知用户'),
+    })).filter((item) => item.recordId),
+    warnings: normalizeTextArray(source.warnings),
+  };
+}
+
+function normalizeOverviewVersion(value) {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const recordId = normalizeText(value.recordId);
+  if (!recordId) {
+    return null;
+  }
+  return {
+    recordId,
+    versionNumber: normalizeText(value.versionNumber, '未命名版本'),
+    platform: normalizeText(value.platform, '未设置平台'),
+    status: normalizeText(value.status, '未设置状态'),
   };
 }
 
@@ -110,8 +149,12 @@ function normalizeNumber(value) {
 }
 
 function normalizeTimestamp(value, fallback) {
-  const timestamp = Number(value);
-  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : fallback;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric;
+  }
+  const parsed = typeof value === 'string' ? Date.parse(value) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function isRecord(value) {

@@ -11,6 +11,8 @@ const FRONTEND_MODULES = [
   'src/ui/AppErrorBoundary.jsx',
   'src/ui/ProjectOverview.jsx',
   'src/ui/projectOverviewDisplayUtils.js',
+  'src/ui/versions/VersionManagement.jsx',
+  'src/ui/versions/versionManagementDisplayUtils.js',
   'src/ui/workspace/PlatformWorkspace.jsx',
   'src/ui/workspace/ProjectNavigation.jsx',
   'src/ui/work-items/WorkItemTimeline.jsx',
