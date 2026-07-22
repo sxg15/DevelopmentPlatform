@@ -67,6 +67,9 @@ Treat shared definitions as the canonical frontend/backend contract.
 - Requirement and Bug detail pages may open a private Codex planning conversation.
   Conversation history is owner-only; submitted Markdown revisions are project
   shared and remain filtered by the viewer's underlying requirement/Bug access.
+- If AI planning is globally enabled but the current project lacks a model
+  connection or code-root mapping, requirement and Bug details retain a disabled
+  AI status action so the configuration issue is visible.
 
 ## Change Sequence
 

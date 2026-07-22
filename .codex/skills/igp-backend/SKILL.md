@@ -97,6 +97,12 @@ Read `AGENTS.md`, then locate the owning layer.
 - Default AI planning to enabled with model `5.6sol`. Missing Codex credentials or
   project roots must not block general backend startup; validate them before
   creating or running AI conversations and shared-plan operations.
+- Return only a non-sensitive AI unavailable reason for requirement/Bug projects
+  that the current user can access. A missing model connection or project mapping
+  must not be represented as an enabled AI action.
+- Validate the existing portable config when the editor loads and return field
+  paths/messages without returning secret values. Missing AI project mappings must
+  remain visible before the user attempts another save.
 - Remove Codex thread, turn, run, and conversation-owner identifiers from browser
   payloads. Redact configured absolute project roots from generated text and
   submitted Markdown before persistence or sharing.

@@ -187,7 +187,7 @@ function ConfigEditorApp() {
     setSecretChanges(nextSecretChanges);
     setLinksText(nextLinksText);
     setWarnings(payload.warnings || []);
-    setErrors([]);
+    setErrors(Array.isArray(payload.errors) ? payload.errors : []);
     setMessage('');
     setBaseline(JSON.stringify({
       config: payload.config,
@@ -198,7 +198,7 @@ function ConfigEditorApp() {
 
   function updateConfig(fieldPath, value) {
     setConfig((current) => setPathValue(current, fieldPath, value));
-    setErrors((current) => current.filter((item) => item.path !== fieldPath));
+    setErrors((current) => current.filter((item) => !areRelatedFieldPaths(item.path, fieldPath)));
     setMessage('');
   }
 
@@ -257,6 +257,7 @@ function ConfigEditorApp() {
       setSecretState(nextSecretState);
       setSecretChanges(nextChanges);
       setWarnings(payload.warnings || []);
+      setErrors([]);
       setLinksText(JSON.stringify(parsedLinks, null, 2));
       setStatus('ready');
       setMessage('配置已保存。请关闭本工具，并重新运行 StartWebBackend.bat。');
@@ -768,13 +769,19 @@ function AiSection({
   onChooseDirectory,
 }) {
   const projects = config.aiPlanning.projects || [];
+  const enabledProjects = projects.filter((project) => project?.enabled !== false);
+  const projectConfigurationError = errors['aiPlanning.projects']
+    || (
+      config.aiPlanning.enabled && enabledProjects.length === 0
+        ? 'AI 计划已启用，但还没有可用的项目映射。请填写飞书项目 ID 和后端设备上的代码目录。'
+        : ''
+    );
 
   function addProject() {
-    const index = projects.length + 1;
     onChange('aiPlanning.projects', [
       ...projects,
       {
-        projectId: `PROJECT-${String(index).padStart(3, '0')}`,
+        projectId: '',
         enabled: true,
         roots: [{ id: 'main', path: '', profile: 'auto' }],
       },
@@ -878,11 +885,22 @@ function AiSection({
         </button>
       </div>
 
+      {projectConfigurationError ? (
+        <div className="ai-project-config-error" data-field-path="aiPlanning.projects">
+          <AlertTriangle size={17} aria-hidden="true" />
+          <FieldError>{projectConfigurationError}</FieldError>
+        </div>
+      ) : null}
+
       {projects.length === 0 ? (
         <div className="empty-panel">
           <FolderOpen size={24} aria-hidden="true" />
           <strong>尚未配置 AI 项目</strong>
-          <span>添加项目后，使用与飞书项目完全一致的项目 ID。</span>
+          <span>项目 ID 必须与项目表中的“项目ID”字段完全一致。</span>
+          <button type="button" className="outline-button" onClick={addProject}>
+            <Plus size={16} aria-hidden="true" />
+            <span>添加项目映射</span>
+          </button>
         </div>
       ) : projects.map((project, projectIndex) => (
         <section className="ai-project-panel" key={`${project.projectId}-${projectIndex}`}>
@@ -1336,6 +1354,14 @@ function setPathValue(value, fieldPath, nextValue) {
 
 function buildMessageMap(items) {
   return Object.fromEntries((items || []).map((item) => [item.path, item.message]));
+}
+
+function areRelatedFieldPaths(leftPath = '', rightPath = '') {
+  return (
+    leftPath === rightPath
+    || leftPath.startsWith(`${rightPath}.`)
+    || rightPath.startsWith(`${leftPath}.`)
+  );
 }
 
 function getSectionForPath(fieldPath = '') {

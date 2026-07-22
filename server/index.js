@@ -3453,6 +3453,7 @@ function toMentionableUser(user) {
 
 function attachProjectAccess(project, projectAccess) {
   const allowedAiToolIds = getAllowedAiPlanToolIds(projectAccess.allowedToolIds);
+  const aiPlanningEnabled = projectAccess.allowedToolIds.has(AI_PLAN_TOOL_ID);
   return {
     ...project,
     departments: projectAccess.departments,
@@ -3461,19 +3462,41 @@ function attachProjectAccess(project, projectAccess) {
     allowedTools: projectAccess.allowedTools,
     mentionableUsersByTool: projectAccess.mentionableUsersByTool,
     aiPlanning: {
-      enabled: projectAccess.allowedToolIds.has(AI_PLAN_TOOL_ID),
+      enabled: aiPlanningEnabled,
       supportedToolIds: allowedAiToolIds,
+      unavailableReason: getAiPlanningUnavailableReason(
+        project.projectId,
+        allowedAiToolIds,
+        aiPlanningEnabled,
+      ),
     },
   };
 }
 
 function isAiPlanningProjectEnabled(projectId) {
   return Boolean(
-    runtimeConfig.aiPlanning.enabled
+    codexRuntimeReady
     && runtimeConfig.aiPlanning.projects.some(
       (project) => project.enabled && project.projectId === projectId && project.roots.length > 0,
     )
   );
+}
+
+function getAiPlanningUnavailableReason(projectId, supportedToolIds, enabled) {
+  if (
+    enabled
+    || !runtimeConfig.aiPlanning.enabled
+    || supportedToolIds.length === 0
+  ) {
+    return '';
+  }
+  if (!codexRuntimeReady) {
+    return 'AI 模型连接尚未完整配置';
+  }
+  if (!isAiPlanningProjectEnabled(projectId)) {
+    return '当前项目未配置 AI 代码目录';
+  }
+  return 'AI 计划当前不可用';
 }
 
 function filterMentionedUsersByCandidates(mentionedUsers, candidates) {

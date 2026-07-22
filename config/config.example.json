@@ -26,12 +26,12 @@
     },
     "projects": [
       {
-        "projectId": "PROJECT-001",
+        "projectId": "",
         "enabled": true,
         "roots": [
           {
             "id": "main",
-            "path": "D:\\Projects\\PROJECT-001",
+            "path": "",
             "profile": "auto"
           }
         ]

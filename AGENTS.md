@@ -177,6 +177,10 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 - AI planning defaults to enabled with Codex model `5.6sol`; incomplete Codex
   credentials or project roots must not prevent the rest of the backend from
   starting, but AI endpoints still require complete validation.
+- When AI is globally enabled but a project lacks a runnable mapping, requirement
+  and Bug details show a disabled AI status instead of silently hiding the action.
+  The configuration editor validates existing files on load and must surface the
+  missing project mapping next to the project controls.
 - Personal settings configuration lives under `bitable.personalSettings`; keep the
   Wiki node token and exact table field names configurable.
 - Version template configuration lives under `bitable.versionManagement`. The

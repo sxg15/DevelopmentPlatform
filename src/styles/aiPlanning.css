@@ -40,11 +40,18 @@
   border: 1px solid #9cc9e8;
 }
 
-.bitable-ai-plan-button:hover,
-.bitable-ai-plan-button:focus-visible {
+.bitable-ai-plan-button:not(:disabled):hover,
+.bitable-ai-plan-button:not(:disabled):focus-visible {
   color: #0b2e48;
   background: #dcefff;
   border-color: #5ba3d2;
+}
+
+.bitable-ai-plan-button:disabled {
+  cursor: not-allowed;
+  color: #646d75;
+  background: #f2f4f5;
+  border-color: #c8cdd2;
 }
 
 .ai-primary-button,

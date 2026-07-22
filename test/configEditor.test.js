@@ -193,6 +193,49 @@ test('config editor store saves transactionally, creates a backup, and detects c
   }
 });
 
+test('config editor reports an enabled AI configuration without project mappings on load', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-config-editor-ai-errors-'));
+  try {
+    fs.writeFileSync(
+      path.join(rootDir, 'config.json'),
+      `${JSON.stringify({
+        server: { host: '127.0.0.1', port: 3000 },
+        feishu: { appId: 'app-id', appSecret: 'app-secret' },
+        aiPlanning: {
+          enabled: true,
+          codex: {
+            model: 'codex-test',
+            apiBaseUrl: 'https://example.test/v1',
+            apiKey: 'codex-secret',
+          },
+          projects: [],
+        },
+      }, null, 2)}\n`,
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(rootDir, 'config.example.json'),
+      `${JSON.stringify({ server: { port: 3000 } }, null, 2)}\n`,
+      'utf8',
+    );
+
+    const loaded = createConfigEditorStore(rootDir).read();
+    assert.equal(loaded.ok, true);
+    assert.ok(loaded.errors.some((error) => error.path === 'aiPlanning.projects'));
+    assert.equal(loaded.config.feishu.appSecret, '');
+    assert.equal(loaded.config.aiPlanning.codex.apiKey, '');
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('config editor renders missing AI project mappings as an actionable inline error', () => {
+  const source = fs.readFileSync('config-editor/main.jsx', 'utf8');
+  assert.match(source, /data-field-path="aiPlanning\.projects"/);
+  assert.match(source, /添加项目映射/);
+  assert.match(source, /payload\.errors/);
+});
+
 test('config editor store can recover malformed JSON from the example config', () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-config-editor-recovery-'));
   try {

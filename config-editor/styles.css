@@ -673,6 +673,21 @@ button:disabled {
   padding: 16px;
 }
 
+.ai-project-config-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #dfaaaa;
+  border-radius: 6px;
+  background: #fff3f3;
+}
+
+.ai-project-config-error > svg {
+  flex: 0 0 auto;
+  color: #a53737;
+}
+
 .ai-project-panel > header {
   display: flex;
   align-items: center;
@@ -776,6 +791,10 @@ button:disabled {
 
 .empty-panel span {
   font-size: 12px;
+}
+
+.empty-panel .outline-button {
+  margin-top: 4px;
 }
 
 .config-actions {

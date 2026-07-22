@@ -854,6 +854,11 @@ function ProjectWorkspace({
                   project.aiPlanning?.enabled
                   && project.aiPlanning?.supportedToolIds?.includes(activeWorkItemConfig.toolId)
                 )}
+                aiPlanningUnavailableReason={
+                  project.aiPlanning?.supportedToolIds?.includes(activeWorkItemConfig.toolId)
+                    ? project.aiPlanning?.unavailableReason || ''
+                    : ''
+                }
                 onWorkItemCreated={(payload) => {
                   const createdItem = payload.item || payload.requirement;
                   updateWorkItemState(
@@ -915,6 +920,7 @@ function RequirementsStatus({
   isSuperAdmin,
   isDevelopmentSuperAdmin,
   aiPlanningEnabled,
+  aiPlanningUnavailableReason,
   onWorkItemCreated,
   onRequirementUpdated,
   onRequirementDeleted,
@@ -1000,6 +1006,7 @@ function RequirementsStatus({
         isSuperAdmin={isSuperAdmin}
         isDevelopmentSuperAdmin={isDevelopmentSuperAdmin}
         aiPlanningEnabled={aiPlanningEnabled}
+        aiPlanningUnavailableReason={aiPlanningUnavailableReason}
         onBack={onRequirementBack}
       />
     );
@@ -2412,6 +2419,7 @@ function BitableRecordDetail({
   isSuperAdmin,
   isDevelopmentSuperAdmin,
   aiPlanningEnabled,
+  aiPlanningUnavailableReason,
   onRequirementUpdated,
   onRequirementDeleted,
   onBack,
@@ -2516,6 +2524,16 @@ function BitableRecordDetail({
             >
               <Bot aria-hidden="true" />
               AI 计划
+            </button>
+          ) : aiPlanningUnavailableReason ? (
+            <button
+              type="button"
+              className="bitable-ai-plan-button"
+              disabled
+              title={aiPlanningUnavailableReason}
+            >
+              <Bot aria-hidden="true" />
+              AI 计划未配置
             </button>
           ) : null}
           {canEditContent ? (

@@ -145,6 +145,10 @@ test('project tool navigation renders icons and pending work item badges', () =>
 
 test('AI planning separates private conversations from shared submissions', () => {
   const workspaceSource = fs.readFileSync('src/ui/ai/AiPlanningWorkspace.jsx', 'utf8');
+  const platformWorkspaceSource = fs.readFileSync(
+    'src/ui/workspace/PlatformWorkspace.jsx',
+    'utf8',
+  );
   const librarySource = fs.readFileSync('src/ui/ai/AiPlanLibrary.jsx', 'utf8');
   const buildSource = fs.readFileSync('scripts/build.ps1', 'utf8');
   const dependencyInstallerSource = fs.readFileSync(
@@ -156,6 +160,8 @@ test('AI planning separates private conversations from shared submissions', () =
   assert.match(workspaceSource, /这里的对话仅你可见/);
   assert.match(workspaceSource, /submitAiPlan/);
   assert.match(workspaceSource, /subscribeAiConversation/);
+  assert.match(platformWorkspaceSource, /AI 计划未配置/);
+  assert.match(platformWorkspaceSource, /aiPlanningUnavailableReason/);
   assert.match(librarySource, /getAiPlanRawUrl/);
   assert.match(librarySource, /adoptAiPlan/);
   assert.match(buildSource, /runtime\\node\.exe/);

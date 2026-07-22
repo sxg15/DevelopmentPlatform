@@ -95,6 +95,9 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
   explicitly submitted Markdown revisions appear in the project AI plan library.
 - Stream conversation updates through the AI API module; do not create EventSource
   connections directly in workspace components.
+- When AI is globally enabled but the selected requirement/Bug project is not
+  runnable, show a disabled `AI 计划未配置` action with the server-provided
+  non-sensitive reason instead of silently removing the action.
 
 ## Validate
 

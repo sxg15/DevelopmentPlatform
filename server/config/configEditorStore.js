@@ -22,12 +22,16 @@ export function createConfigEditorStore(rootDir) {
       }
 
       const editable = createEditableConfig(state.config);
+      const validationCandidate = applyConfigUpdate(state.config, editable.config);
       return {
         ok: true,
         revision: state.revision,
         config: editable.config,
         secretState: editable.secretState,
         warnings: editable.warnings,
+        errors: validateConfigDocument(validationCandidate, {
+          checkDirectory: isExistingDirectory,
+        }),
         backupAvailable: fs.existsSync(backupPath),
         exampleAvailable: fs.existsSync(examplePath),
       };
