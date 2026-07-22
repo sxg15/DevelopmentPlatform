@@ -100,6 +100,15 @@ test('work item timeline overrides React Chrono card minimum widths', () => {
   );
 });
 
+test('editable text keeps a visible selection highlight in embedded browsers', () => {
+  const baseStyles = fs.readFileSync('src/styles/base.css', 'utf8');
+
+  assert.match(
+    baseStyles,
+    /input::selection,\s*textarea::selection,\s*\[contenteditable="true"\]::selection,\s*\.allow-text-select::selection\s*\{[^}]*color:\s*#ffffff;[^}]*background-color:\s*#1677ff;[^}]*text-shadow:\s*none;/s,
+  );
+});
+
 test('app initializes personal settings without awaiting workspace startup', () => {
   const source = fs.readFileSync('src/ui/App.jsx', 'utf8');
 

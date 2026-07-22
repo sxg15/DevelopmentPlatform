@@ -24,6 +24,15 @@ textarea,
   -webkit-user-select: text;
 }
 
+input::selection,
+textarea::selection,
+[contenteditable="true"]::selection,
+.allow-text-select::selection {
+  color: #ffffff;
+  background-color: #1677ff;
+  text-shadow: none;
+}
+
 body {
   margin: 0;
   min-width: 320px;
