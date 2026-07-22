@@ -45,10 +45,11 @@ function Test-DependenciesReady {
 }
 
 if (Test-DependenciesReady) {
-    Write-Host 'Backend dependencies are ready.'
+    Write-Host '[1/3] Dependency check complete: existing files are current.'
     exit 0
 }
 
+Write-Host '[1/3] Checking the dependency installation state...'
 $lockStream = $null
 $lockDeadline = [DateTime]::UtcNow.AddMinutes(15)
 $waitNoticeShown = $false
@@ -74,22 +75,26 @@ while (-not $lockStream) {
 
 try {
     if (Test-DependenciesReady) {
-        Write-Host 'Backend dependencies are ready.'
+        Write-Host '[1/3] Dependency check complete: another process finished the installation.'
         exit 0
     }
 
-    Write-Host 'Downloading backend production dependencies...'
+    Write-Host '[2/3] Downloading backend production dependencies...'
+    Write-Host '      npm will print each network request and its download status below.'
     & $nodeExecutable $npmCli `
         'ci' `
         '--omit=dev' `
         '--ignore-scripts' `
         '--no-audit' `
         '--no-fund' `
+        '--progress=true' `
+        '--loglevel=http' `
         '--prefix' $resolvedRoot
     if ($LASTEXITCODE -ne 0) {
         throw "Dependency installation failed with exit code $LASTEXITCODE."
     }
 
+    Write-Host '[3/3] Verifying downloaded dependencies...'
     foreach ($requiredFile in $requiredDependencyFiles) {
         if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
             throw "Downloaded dependencies are incomplete: $requiredFile"
@@ -103,7 +108,7 @@ try {
         "$expectedStamp`n",
         $utf8WithoutBom
     )
-    Write-Host 'Backend dependencies downloaded successfully.'
+    Write-Host '[3/3] Backend dependencies downloaded and verified successfully.'
 } finally {
     if ($lockStream) {
         $lockStream.Dispose()

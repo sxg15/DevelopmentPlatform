@@ -101,7 +101,9 @@ if (Test-Path -LiteralPath (Join-Path $publishDir 'node_modules')) {
 $startBat = @'
 @echo off
 setlocal
+title IGP Web Backend Setup
 cd /d "%~dp0"
+echo Preparing IGP Web Backend...
 if not exist runtime\node.exe (
   echo Bundled Node runtime is missing.
   pause
@@ -117,12 +119,15 @@ if not exist EnsureDependencies.ps1 (
   pause
   exit /b 1
 )
+echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0EnsureDependencies.ps1" -RootDir "%CD%"
 if errorlevel 1 (
   echo Failed to prepare backend dependencies.
   pause
   exit /b 1
 )
+echo.
+echo Starting IGP Web Backend...
 set NODE_ENV=production
 start "IGP Web Backend" /min cmd /c "runtime\node.exe --disable-warning=ExperimentalWarning server\index.js > server.log 2> server.err.log"
 echo Web backend service started.

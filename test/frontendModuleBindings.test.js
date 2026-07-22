@@ -156,8 +156,11 @@ test('AI planning separates private conversations from shared submissions', () =
   assert.match(librarySource, /adoptAiPlan/);
   assert.match(buildSource, /runtime\\node\.exe/);
   assert.match(buildSource, /runtime\\npm\\bin\\npm-cli\.js/);
+  assert.match(buildSource, /title IGP Web Backend Setup/);
   assert.doesNotMatch(buildSource, /npm\.cmd ci --omit=dev/);
   assert.match(dependencyInstallerSource, /npm-cli\.js/);
   assert.match(dependencyInstallerSource, /'ci'/);
+  assert.match(dependencyInstallerSource, /'--progress=true'/);
+  assert.match(dependencyInstallerSource, /'--loglevel=http'/);
   assert.match(dependencyInstallerSource, /codex-win32-x64/);
 });

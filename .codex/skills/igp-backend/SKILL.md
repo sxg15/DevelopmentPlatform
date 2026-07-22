@@ -49,6 +49,8 @@ Read `AGENTS.md`, then locate the owning layer.
   `server/` tree.
 - Keep the portable package lightweight: bundle Node and npm, but install locked
   production dependencies on first launch through `EnsureDependencies.ps1`.
+  Keep first-launch npm progress and network fetch status visible in the startup
+  console.
 - Prefer `getCachedValue` for shared promise-aware TTL cache behavior.
 - Resolve personal settings through the configured Wiki node token, validate the
   exact `用户`, `接收待办事项通知`, and `待办事项通知时间` fields, and reject

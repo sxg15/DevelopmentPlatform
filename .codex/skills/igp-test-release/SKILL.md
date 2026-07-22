@@ -60,6 +60,8 @@ the dependency lock stamp, and the packaged planning Skill. Do not preinstall
 application `node_modules` during packaging. `StartWebBackend.bat` must run the
 bundled dependency installer, which uses `npm ci --omit=dev` and downloads the
 locked Express and Codex production dependencies only when missing or stale.
+Keep npm attached to the visible startup console with native progress enabled and
+HTTP fetch status output so first-launch downloads never look stalled.
 Use `scripts/smoke-portable.ps1` to copy `Publish` to a temporary relocated path,
 verify that dependencies are initially absent, install them through the bundled
 npm runtime, start with a generated non-secret config, and verify `/api/health`.
