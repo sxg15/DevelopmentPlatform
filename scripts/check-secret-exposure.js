@@ -7,7 +7,13 @@ const configPaths = [
   path.join(rootDir, 'Publish/config.json'),
 ];
 const secrets = readConfiguredSecrets(configPaths);
-const scanRoots = ['src', 'public', 'Publish/client']
+const scanRoots = [
+  'src',
+  'public',
+  'config-editor',
+  'Publish/client',
+  'Publish/config-editor',
+]
   .map((item) => path.join(rootDir, item))
   .filter((item) => fs.existsSync(item));
 

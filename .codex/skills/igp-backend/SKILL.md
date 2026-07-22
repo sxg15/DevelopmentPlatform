@@ -12,6 +12,10 @@ Read `AGENTS.md`, then locate the owning layer.
 - Route and workflow orchestration: `server/index.js`.
 - Config defaults: `server/config/normalizeConfig.js`.
 - Config discovery/validation: `server/config/runtimeConfig.js`.
+- Portable runtime configuration editor:
+  `server/config/configEditorServer.js`,
+  `server/config/configEditorStore.js`, and
+  `server/config/configEditorUtils.js`.
 - Feishu auth and generic requests: `server/integrations/feishuClient.js`.
 - Bitable CRUD and caches: `server/integrations/bitableClient.js`.
 - Wiki nodes and copy tasks: `server/integrations/wikiClient.js`.
@@ -51,6 +55,11 @@ Read `AGENTS.md`, then locate the owning layer.
   production dependencies on first launch through `EnsureDependencies.ps1`.
   Keep first-launch npm progress and network fetch status visible in the startup
   console.
+- Keep `ConfigureWebBackend.bat` independent from application `node_modules`.
+  The editor must bind only to `127.0.0.1`, require its random session token,
+  validate write origins, redact existing `feishu.appSecret` and Codex API keys,
+  preserve unknown config keys, detect revision conflicts, and save through a
+  backup-and-rollback transaction.
 - Prefer `getCachedValue` for shared promise-aware TTL cache behavior.
 - Resolve personal settings through the configured Wiki node token, validate the
   exact `用户`, `接收待办事项通知`, and `待办事项通知时间` fields, and reject

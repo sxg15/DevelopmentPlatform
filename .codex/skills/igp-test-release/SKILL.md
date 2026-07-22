@@ -35,7 +35,8 @@ commit `Publish/config.json`.
 - Frontend module binding regression: `test/frontendModuleBindings.test.js`.
 - Client runtime diagnostics and redaction: `test/clientErrorUtils.test.js`.
 - Backend config/runtime/integrations: `test/serverConfig.test.js`,
-  `test/serverRuntime.test.js`, `test/wikiClient.test.js`.
+  `test/serverRuntime.test.js`, `test/configEditor.test.js`,
+  `test/wikiClient.test.js`.
 - Personal settings and reminder scheduling:
   `test/personalSettingsUtils.test.js`.
 - Version contracts and workflows: `test/versionManagementUtils.test.js`,
@@ -62,9 +63,15 @@ bundled dependency installer, which uses `npm ci --omit=dev` and downloads the
 locked Express and Codex production dependencies only when missing or stale.
 Keep npm attached to the visible startup console with native progress enabled and
 HTTP fetch status output so first-launch downloads never look stalled.
+Production packages must also contain `ConfigureWebBackend.bat`,
+`config-editor/`, `config.example.json`, and the config editor server and folder
+picker under `server/config/`. The config editor must start before dependencies
+are installed and must not create `node_modules`.
 Use `scripts/smoke-portable.ps1` to copy `Publish` to a temporary relocated path,
-verify that dependencies are initially absent, install them through the bundled
-npm runtime, start with a generated non-secret config, and verify `/api/health`.
+verify that dependencies are initially absent, exercise the token-protected config
+editor without exposing an existing secret or installing dependencies, then
+install dependencies through the bundled npm runtime, start with a generated
+non-secret config, and verify `/api/health`.
 
 ## Release Log
 

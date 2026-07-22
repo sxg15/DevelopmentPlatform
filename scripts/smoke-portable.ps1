@@ -10,6 +10,9 @@ $tempRoot = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
 $smokeDir = Join-Path $env:TEMP ("IGP Portable Smoke " + [guid]::NewGuid().ToString('N'))
 $resolvedSmokeDir = [System.IO.Path]::GetFullPath($smokeDir)
 $serverProcessId = 0
+$configEditorProcessId = 0
+$configEditorPort = $Port + 1
+$configEditorToken = 'portable-smoke-config-token'
 
 if (-not $resolvedSmokeDir.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Smoke path escaped temp directory: $resolvedSmokeDir"
@@ -19,6 +22,9 @@ if (-not (Test-Path -LiteralPath $publishDir -PathType Container)) {
 }
 if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {
     throw "Smoke port $Port is already in use"
+}
+if (Get-NetTCPConnection -LocalPort $configEditorPort -State Listen -ErrorAction SilentlyContinue) {
+    throw "Config editor smoke port $configEditorPort is already in use"
 }
 
 try {
@@ -36,7 +42,7 @@ try {
         }
         feishu = @{
             appId = ''
-            appSecret = ''
+            appSecret = 'portable-smoke-secret'
         }
         aiPlanning = @{
             enabled = $false
@@ -52,6 +58,122 @@ try {
     if (Test-Path -LiteralPath (Join-Path $smokeDir 'node_modules')) {
         throw 'Portable package unexpectedly contains preinstalled application dependencies'
     }
+    foreach ($requiredConfigEditorFile in @(
+        (Join-Path $smokeDir 'ConfigureWebBackend.bat'),
+        (Join-Path $smokeDir 'config-editor\index.html'),
+        (Join-Path $smokeDir 'server\config\configEditorServer.js'),
+        (Join-Path $smokeDir 'server\config\selectFolder.ps1'),
+        (Join-Path $smokeDir 'config.example.json')
+    )) {
+        if (-not (Test-Path -LiteralPath $requiredConfigEditorFile -PathType Leaf)) {
+            throw "Portable config editor file is missing: $requiredConfigEditorFile"
+        }
+    }
+
+    $previousEditorPort = $env:IGP_CONFIG_EDITOR_PORT
+    $previousEditorToken = $env:IGP_CONFIG_EDITOR_TOKEN
+    $previousEditorNoBrowser = $env:IGP_CONFIG_EDITOR_NO_BROWSER
+    try {
+        $env:IGP_CONFIG_EDITOR_PORT = [string]$configEditorPort
+        $env:IGP_CONFIG_EDITOR_TOKEN = $configEditorToken
+        $env:IGP_CONFIG_EDITOR_NO_BROWSER = '1'
+        $editorScriptArgument = '"{0}"' -f (Join-Path $smokeDir 'server\config\configEditorServer.js')
+        $editorRootArgument = '"{0}"' -f $smokeDir
+        $configEditorProcess = Start-Process `
+            -FilePath (Join-Path $smokeDir 'runtime\node.exe') `
+            -ArgumentList @(
+                $editorScriptArgument,
+                '--root',
+                $editorRootArgument
+            ) `
+            -WorkingDirectory $smokeDir `
+            -WindowStyle Hidden `
+            -PassThru
+        $configEditorProcessId = $configEditorProcess.Id
+    } finally {
+        $env:IGP_CONFIG_EDITOR_PORT = $previousEditorPort
+        $env:IGP_CONFIG_EDITOR_TOKEN = $previousEditorToken
+        $env:IGP_CONFIG_EDITOR_NO_BROWSER = $previousEditorNoBrowser
+    }
+
+    $editorHeaders = @{
+        'X-Config-Editor-Token' = $configEditorToken
+    }
+    $editorOrigin = "http://127.0.0.1:$configEditorPort"
+    $editorConfig = $null
+    for ($attempt = 0; $attempt -lt 40; $attempt += 1) {
+        Start-Sleep -Milliseconds 250
+        try {
+            $editorConfig = Invoke-RestMethod `
+                -Uri "$editorOrigin/api/config" `
+                -Headers $editorHeaders `
+                -TimeoutSec 2
+            if ($editorConfig.ok -eq $true) {
+                break
+            }
+        } catch {
+            $editorConfig = $null
+        }
+    }
+    if ($editorConfig.ok -ne $true) {
+        throw 'Portable config editor did not become ready'
+    }
+    $unauthorizedBlocked = $false
+    try {
+        Invoke-RestMethod `
+            -Uri "$editorOrigin/api/config" `
+            -TimeoutSec 2 | Out-Null
+    } catch {
+        $statusCode = [int]$_.Exception.Response.StatusCode
+        if ($statusCode -eq 403) {
+            $unauthorizedBlocked = $true
+        } else {
+            throw
+        }
+    }
+    if (-not $unauthorizedBlocked) {
+        throw 'Portable config editor accepted a request without its session token'
+    }
+    $editorResponseText = $editorConfig | ConvertTo-Json -Depth 20
+    if ($editorResponseText.Contains('portable-smoke-secret')) {
+        throw 'Portable config editor exposed an existing secret'
+    }
+    $editorConfig.config.debug.userName = 'Portable Config Smoke'
+    $savePayload = @{
+        revision = $editorConfig.revision
+        config = $editorConfig.config
+        secretChanges = @{
+            'feishu.appSecret' = @{ action = 'keep' }
+            'aiPlanning.codex.apiKey' = @{ action = 'keep' }
+        }
+    } | ConvertTo-Json -Depth 20
+    $saveHeaders = @{
+        'X-Config-Editor-Token' = $configEditorToken
+        Origin = $editorOrigin
+    }
+    $saveResult = Invoke-RestMethod `
+        -Uri "$editorOrigin/api/config" `
+        -Method Put `
+        -Headers $saveHeaders `
+        -ContentType 'application/json' `
+        -Body $savePayload `
+        -TimeoutSec 10
+    if ($saveResult.ok -ne $true -or $saveResult.restartRequired -ne $true) {
+        throw 'Portable config editor failed to save the config'
+    }
+    if (Test-Path -LiteralPath (Join-Path $smokeDir 'node_modules')) {
+        throw 'Portable config editor unexpectedly installed application dependencies'
+    }
+    Invoke-RestMethod `
+        -Uri "$editorOrigin/api/shutdown" `
+        -Method Post `
+        -Headers $saveHeaders `
+        -ContentType 'application/json' `
+        -Body '{}' `
+        -TimeoutSec 5 | Out-Null
+    Wait-Process -Id $configEditorProcessId -Timeout 5 -ErrorAction SilentlyContinue
+    $configEditorProcessId = 0
+
     Push-Location $smokeDir
     try {
         & (Join-Path $smokeDir 'StartWebBackend.bat')
@@ -98,6 +220,9 @@ try {
     )
     Write-Host "Portable smoke passed from relocated path: $nodeInfo"
 } finally {
+    if ($configEditorProcessId -gt 0) {
+        Stop-Process -Id $configEditorProcessId -Force -ErrorAction SilentlyContinue
+    }
     if ($serverProcessId -gt 0) {
         Stop-Process -Id $serverProcessId -Force -ErrorAction SilentlyContinue
     } else {

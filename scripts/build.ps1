@@ -7,6 +7,7 @@ $publishConfigFile = Join-Path $publishDir 'config.json'
 $publishServerDir = Join-Path $publishDir 'server'
 $publishRuntimeDir = Join-Path $publishDir 'runtime'
 $dependencyInstallerFile = Join-Path $rootDir 'scripts\ensure-publish-dependencies.ps1'
+$exampleConfigFile = Join-Path $rootDir 'config\config.example.json'
 $resolvedPublishDir = [System.IO.Path]::GetFullPath($publishDir)
 $workspacePrefix = [System.IO.Path]::GetFullPath($rootDir).TrimEnd('\') + '\'
 
@@ -21,6 +22,9 @@ if (-not (Test-Path -LiteralPath $configFile)) {
 }
 if (-not (Test-Path -LiteralPath $dependencyInstallerFile -PathType Leaf)) {
     throw '缺少便携依赖安装脚本'
+}
+if (-not (Test-Path -LiteralPath $exampleConfigFile -PathType Leaf)) {
+    throw '缺少 config/config.example.json'
 }
 
 if (Test-Path -LiteralPath (Join-Path $publishDir 'StopWebBackend.bat')) {
@@ -39,10 +43,16 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+npx vite build --config vite.config.config-editor.js
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 node scripts/copy-config.js
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
+Copy-Item -LiteralPath $exampleConfigFile -Destination (Join-Path $publishDir 'config.example.json') -Force
 
 New-Item -ItemType Directory -Path $publishServerDir | Out-Null
 Copy-Item -Path (Join-Path $rootDir 'server\*') -Destination $publishServerDir -Recurse -Force
@@ -88,7 +98,11 @@ foreach ($requiredFile in @(
     (Join-Path $publishRuntimeDir 'npm\bin\npm-cli.js'),
     (Join-Path $publishRuntimeDir 'dependency-version.txt'),
     (Join-Path $publishDir 'EnsureDependencies.ps1'),
-    (Join-Path $publishServerDir 'ai\skills\work-item-plan\SKILL.md')
+    (Join-Path $publishServerDir 'ai\skills\work-item-plan\SKILL.md'),
+    (Join-Path $publishServerDir 'config\configEditorServer.js'),
+    (Join-Path $publishServerDir 'config\selectFolder.ps1'),
+    (Join-Path $publishDir 'config-editor\index.html'),
+    (Join-Path $publishDir 'config.example.json')
 )) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         throw "便携发布缺少运行文件：$requiredFile"
@@ -146,7 +160,40 @@ echo Web backend service stopped.
 endlocal
 '@
 
+$configureBat = @'
+@echo off
+setlocal
+title IGP Runtime Configuration
+cd /d "%~dp0"
+if not exist runtime\node.exe (
+  echo Bundled Node runtime is missing.
+  pause
+  exit /b 1
+)
+if not exist server\config\configEditorServer.js (
+  echo Runtime configuration tool is missing.
+  pause
+  exit /b 1
+)
+if not exist config-editor\index.html (
+  echo Runtime configuration page is missing.
+  pause
+  exit /b 1
+)
+echo Starting IGP Runtime Configuration...
+echo.
+runtime\node.exe server\config\configEditorServer.js --root "%CD%"
+if errorlevel 1 (
+  echo.
+  echo Runtime configuration tool exited with an error.
+  pause
+  exit /b 1
+)
+endlocal
+'@
+
 Set-Content -LiteralPath (Join-Path $publishDir 'StartWebBackend.bat') -Value $startBat -Encoding ASCII
 Set-Content -LiteralPath (Join-Path $publishDir 'StopWebBackend.bat') -Value $stopBat -Encoding ASCII
+Set-Content -LiteralPath (Join-Path $publishDir 'ConfigureWebBackend.bat') -Value $configureBat -Encoding ASCII
 
 Write-Host "Build completed: $publishDir"

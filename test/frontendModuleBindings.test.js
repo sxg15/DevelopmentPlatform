@@ -6,6 +6,7 @@ import traverseModule from '@babel/traverse';
 
 const traverse = traverseModule.default || traverseModule;
 const FRONTEND_MODULES = [
+  'config-editor/main.jsx',
   'src/api/aiConversations.js',
   'src/api/aiPlans.js',
   'src/api/clientErrors.js',
@@ -31,6 +32,7 @@ const BROWSER_GLOBALS = new Set([
   'Array',
   'Blob',
   'Boolean',
+  'CSS',
   'Date',
   'Error',
   'EventSource',
@@ -54,6 +56,7 @@ const BROWSER_GLOBALS = new Set([
   'console',
   'document',
   'encodeURIComponent',
+  'fetch',
   'navigator',
   'setTimeout',
   'structuredClone',
@@ -148,6 +151,7 @@ test('AI planning separates private conversations from shared submissions', () =
     'scripts/ensure-publish-dependencies.ps1',
     'utf8',
   );
+  const secretExposureSource = fs.readFileSync('scripts/check-secret-exposure.js', 'utf8');
 
   assert.match(workspaceSource, /这里的对话仅你可见/);
   assert.match(workspaceSource, /submitAiPlan/);
@@ -157,10 +161,15 @@ test('AI planning separates private conversations from shared submissions', () =
   assert.match(buildSource, /runtime\\node\.exe/);
   assert.match(buildSource, /runtime\\npm\\bin\\npm-cli\.js/);
   assert.match(buildSource, /title IGP Web Backend Setup/);
+  assert.match(buildSource, /ConfigureWebBackend\.bat/);
+  assert.match(buildSource, /config-editor\\index\.html/);
+  assert.match(buildSource, /config\.example\.json/);
   assert.doesNotMatch(buildSource, /npm\.cmd ci --omit=dev/);
   assert.match(dependencyInstallerSource, /npm-cli\.js/);
   assert.match(dependencyInstallerSource, /'ci'/);
   assert.match(dependencyInstallerSource, /'--progress=true'/);
   assert.match(dependencyInstallerSource, /'--loglevel=http'/);
   assert.match(dependencyInstallerSource, /codex-win32-x64/);
+  assert.match(secretExposureSource, /config-editor/);
+  assert.match(secretExposureSource, /Publish\/config-editor/);
 });

@@ -83,6 +83,11 @@ Shared modules must remain runtime-neutral and importable from Node tests.
 - `server/config/normalizeConfig.js`: pure config schema normalization and defaults.
 - `server/config/runtimeConfig.js`: config discovery, runtime paths, validation, and
   config-file access blocking.
+- `server/config/configEditorServer.js`: loopback-only portable runtime
+  configuration editor server.
+- `server/config/configEditorStore.js` and `configEditorUtils.js`: secret-redacted
+  config editing, validation, revision conflicts, backups, recovery, and
+  transactional writes.
 - `server/integrations/feishuClient.js`: Feishu auth, tenant token cache, and JSON API
   helpers.
 - `server/integrations/bitableClient.js`: Bitable records/tables/fields CRUD and
@@ -182,6 +187,10 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 - `Publish/`, `.htybox/`, logs, and runtime config are generated/ignored artifacts.
 - Production packaging must copy the complete `server/` tree because the backend is
   modular.
+- Portable packages include `ConfigureWebBackend.bat`, a static configuration
+  editor, and `config.example.json`. The configuration editor must run with the
+  bundled Node runtime before application dependencies are installed, bind only to
+  loopback, and never return existing secrets to the browser.
 
 ## Change Workflow
 
