@@ -15,6 +15,7 @@ import {
 test('project tools keep overview first and use unique identifiers', () => {
   assert.equal(PROJECT_TOOL_DEFINITIONS[0].id, 'overview');
   assert.equal(PROJECT_TOOL_DEFINITIONS[1].id, 'versions');
+  assert.equal(PROJECT_TOOL_DEFINITIONS[2].id, 'aiPlans');
   assert.equal(
     new Set(PROJECT_TOOL_DEFINITIONS.map((tool) => tool.id)).size,
     PROJECT_TOOL_DEFINITIONS.length,

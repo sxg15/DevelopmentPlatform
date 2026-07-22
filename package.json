@@ -1,6 +1,6 @@
 {
   "name": "igp-development-platform",
-  "version": "0.1.88",
+  "version": "0.1.89",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,17 +13,20 @@
     "log-change": "node scripts/log-change.js"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^5.0.0",
-    "echarts": "^6.1.0",
-    "express": "^5.1.0",
-    "lucide-react": "^1.25.0",
-    "react": "^19.2.3",
-    "react-chrono": "^3.3.3",
-    "react-dom": "^19.2.3",
-    "vite": "^7.2.7"
+    "@openai/codex": "0.145.0",
+    "express": "^5.1.0"
   },
   "devDependencies": {
     "@babel/parser": "^7.29.7",
-    "@babel/traverse": "^7.29.7"
+    "@babel/traverse": "^7.29.7",
+    "@vitejs/plugin-react": "^5.2.0",
+    "echarts": "^6.1.0",
+    "lucide-react": "^1.25.0",
+    "react": "^19.2.8",
+    "react-chrono": "^3.3.3",
+    "react-dom": "^19.2.8",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
+    "vite": "^7.3.6"
   }
 }

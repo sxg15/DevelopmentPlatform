@@ -64,6 +64,9 @@ Treat shared definitions as the canonical frontend/backend contract.
   retain existing snapshots if the work item is later reopened.
 - Project overview may display version data but must read existing version tables
   only. Version Management itself owns first-open provisioning.
+- Requirement and Bug detail pages may open a private Codex planning conversation.
+  Conversation history is owner-only; submitted Markdown revisions are project
+  shared and remain filtered by the viewer's underlying requirement/Bug access.
 
 ## Change Sequence
 

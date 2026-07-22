@@ -122,6 +122,31 @@
     padding: 0;
   }
 
+  .project-detail-surface-ai-plans {
+    height: min(720px, calc(100vh - 96px));
+    min-height: 540px;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  .ai-plan-filters {
+    grid-template-columns: minmax(0, 1fr) repeat(2, minmax(120px, 0.42fr));
+  }
+
+  .ai-plan-library-layout {
+    grid-template-columns: 300px minmax(0, 1fr);
+  }
+
+  .ai-plan-detail-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ai-plan-detail-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
   .version-management {
     gap: 14px;
   }
@@ -572,6 +597,156 @@
 }
 
 @media (max-width: 640px) {
+  .ai-planning-backdrop,
+  .ai-submit-backdrop {
+    align-items: stretch;
+    padding: 0;
+  }
+
+  .ai-planning-workspace,
+  .ai-submit-dialog {
+    width: 100vw;
+    height: 100vh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .ai-planning-header {
+    padding-right: 10px;
+    padding-left: 14px;
+  }
+
+  .ai-planning-heading span {
+    max-width: calc(100vw - 110px);
+  }
+
+  .ai-private-notice {
+    align-items: flex-start;
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .ai-planning-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .ai-conversation-sidebar {
+    max-height: 132px;
+    border-right: 0;
+    border-bottom: 1px solid #dce6e2;
+  }
+
+  .ai-conversation-sidebar-header {
+    min-height: 46px;
+  }
+
+  .ai-conversation-list {
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .ai-conversation-row {
+    width: 176px;
+    min-width: 176px;
+    min-height: 54px;
+  }
+
+  .ai-conversation-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .ai-conversation-toolbar strong {
+    max-width: calc(100vw - 40px);
+  }
+
+  .ai-toolbar-actions {
+    justify-content: flex-start;
+  }
+
+  .ai-message-list {
+    padding: 14px 10px;
+  }
+
+  .ai-message {
+    width: 96%;
+  }
+
+  .ai-plan-draft {
+    max-height: 32%;
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+
+  .ai-composer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-composer .ai-primary-button,
+  .ai-composer .ai-danger-button {
+    width: 100%;
+  }
+
+  .ai-submit-dialog form {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .project-detail-surface-ai-plans {
+    height: 760px;
+    min-height: 620px;
+  }
+
+  .ai-plan-library-header {
+    min-height: 66px;
+    padding: 12px 14px;
+  }
+
+  .ai-plan-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 10px;
+  }
+
+  .ai-plan-search {
+    grid-column: 1 / -1;
+  }
+
+  .ai-plan-library-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 250px minmax(0, 1fr);
+  }
+
+  .ai-plan-list {
+    border-right: 0;
+    border-bottom: 1px solid #dce6e2;
+  }
+
+  .ai-plan-detail-header {
+    padding: 16px 14px;
+  }
+
+  .ai-plan-detail h2 {
+    font-size: 19px;
+    line-height: 26px;
+  }
+
+  .ai-plan-detail-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-plan-detail-actions > * {
+    width: 100%;
+  }
+
+  .ai-plan-document,
+  .ai-source-references {
+    width: calc(100% - 28px);
+  }
+
   .personal-settings-backdrop {
     align-items: stretch;
     padding: 12px;
@@ -617,6 +792,7 @@
 @media (prefers-reduced-motion: reduce) {
   .loading-ring,
   .loading-core,
+  .ai-loading svg,
   .project-button,
   .project-tool-button,
   .project-overview .is-spinning {

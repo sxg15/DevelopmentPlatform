@@ -21,6 +21,10 @@ Read `AGENTS.md`, then locate the owning layer.
   `server/services/personalSettingsService.js`.
 - Version management provisioning and mutations:
   `server/services/versionManagementService.js`.
+- Codex read-only planning: `server/integrations/codexAppServerClient.js`,
+  `server/services/aiPlanningService.js`,
+  `server/repositories/aiPlanningRepository.js`, and
+  `server/runtime/aiDataPaths.js`.
 - Daily reminder timing: `server/services/todoNotificationScheduler.js`;
   reminder orchestration and cards remain in `server/index.js`.
 
@@ -68,6 +72,17 @@ Read `AGENTS.md`, then locate the owning layer.
   status/history only if the target write fails.
 - Publish version changes through the existing SSE hub with `toolId: 'versions'`.
 - Treat malformed version status/comment JSON as a conflict and do not overwrite it.
+- Store private AI conversations and shared plan revisions under the fixed
+  `D:\DevelopmentPlatformDB` root. Another user's conversation must resolve as
+  not found even for administrators.
+- Run Codex with `read-only`, no approvals, and no tool network access. Keep the
+  API key out of generated Codex config, browser payloads, logs, errors, and shell
+  tool environments.
+- Remove Codex thread, turn, run, and conversation-owner identifiers from browser
+  payloads. Redact configured absolute project roots from generated text and
+  submitted Markdown before persistence or sharing.
+- Derive `aiPlans` visibility from requirement/Bug access plus configured project
+  roots; do not add it to the Feishu department tool matrix.
 
 ## Validate
 

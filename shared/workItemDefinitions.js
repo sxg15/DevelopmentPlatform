@@ -3,6 +3,7 @@ export const REQUIREMENT_PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4'];
 export const PROJECT_TOOL_DEFINITIONS = Object.freeze([
   { id: 'overview', label: '项目总览', iconKey: 'LayoutDashboard' },
   { id: 'versions', label: '版本管理', iconKey: 'Tags' },
+  { id: 'aiPlans', label: 'AI方案', iconKey: 'FileText' },
   { id: 'requirements', label: '需求列表', iconKey: 'ClipboardList' },
   { id: 'bugs', label: 'Bug列表', iconKey: 'Bug' },
   { id: 'feedback', label: '反馈列表', iconKey: 'MessageSquare' },

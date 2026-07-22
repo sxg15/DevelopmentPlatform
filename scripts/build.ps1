@@ -1,12 +1,19 @@
 $ErrorActionPreference = 'Stop'
 
-$rootDir = Resolve-Path (Join-Path $PSScriptRoot '..')
+$rootDir = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $publishDir = Join-Path $rootDir 'Publish'
 $configFile = Join-Path $rootDir 'config\config.json'
 $publishConfigFile = Join-Path $publishDir 'config.json'
 $publishServerDir = Join-Path $publishDir 'server'
+$publishRuntimeDir = Join-Path $publishDir 'runtime'
+$resolvedPublishDir = [System.IO.Path]::GetFullPath($publishDir)
+$workspacePrefix = [System.IO.Path]::GetFullPath($rootDir).TrimEnd('\') + '\'
 
 Set-Location $rootDir
+
+if (-not $resolvedPublishDir.StartsWith($workspacePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Publish path escaped workspace: $resolvedPublishDir"
+}
 
 if (-not (Test-Path -LiteralPath $configFile)) {
     throw '缺少 config/config.json'
@@ -39,21 +46,50 @@ Copy-Item -LiteralPath (Join-Path $rootDir 'shared') -Destination (Join-Path $pu
 Copy-Item -LiteralPath (Join-Path $rootDir 'package.json') -Destination (Join-Path $publishDir 'package.json') -Force
 Copy-Item -LiteralPath (Join-Path $rootDir 'package-lock.json') -Destination (Join-Path $publishDir 'package-lock.json') -Force
 
+$nodeRuntime = & node -p "JSON.stringify({path:process.execPath,platform:process.platform,arch:process.arch,major:Number(process.versions.node.split('.')[0]),version:process.versions.node})" | ConvertFrom-Json
+if ($nodeRuntime.platform -ne 'win32' -or $nodeRuntime.arch -ne 'x64' -or $nodeRuntime.major -ne 24) {
+    throw "便携发布要求 Windows x64 Node 24，当前为 $($nodeRuntime.platform)/$($nodeRuntime.arch) Node $($nodeRuntime.version)"
+}
+
+& npm.cmd ci --omit=dev --ignore-scripts --no-audit --no-fund --prefix $publishDir
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+New-Item -ItemType Directory -Path $publishRuntimeDir | Out-Null
+Copy-Item -LiteralPath $nodeRuntime.path -Destination (Join-Path $publishRuntimeDir 'node.exe') -Force
+
+$codexPackageFile = Join-Path $publishDir 'node_modules\@openai\codex\package.json'
+$codexNativePackageFile = Join-Path $publishDir 'node_modules\@openai\codex-win32-x64\package.json'
+$codexNativeExecutable = Join-Path $publishDir 'node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe'
+foreach ($requiredFile in @(
+    (Join-Path $publishRuntimeDir 'node.exe'),
+    $codexPackageFile,
+    $codexNativePackageFile,
+    $codexNativeExecutable,
+    (Join-Path $publishServerDir 'ai\skills\work-item-plan\SKILL.md')
+)) {
+    if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
+        throw "便携发布缺少运行文件：$requiredFile"
+    }
+}
+
 $startBat = @'
 @echo off
 setlocal
 cd /d "%~dp0"
-if not exist node_modules\express\package.json (
-  echo Installing backend dependencies...
-  call npm install --omit=dev
-  if errorlevel 1 (
-    echo Failed to install dependencies.
-    pause
-    exit /b 1
-  )
+if not exist runtime\node.exe (
+  echo Bundled Node runtime is missing.
+  pause
+  exit /b 1
+)
+if not exist node_modules\@openai\codex-win32-x64\package.json (
+  echo Bundled Codex runtime is missing.
+  pause
+  exit /b 1
 )
 set NODE_ENV=production
-start "IGP Web Backend" /min cmd /c "node server\index.js > server.log 2> server.err.log"
+start "IGP Web Backend" /min cmd /c "runtime\node.exe --disable-warning=ExperimentalWarning server\index.js > server.log 2> server.err.log"
 echo Web backend service started.
 echo Please open http://172.16.20.205:3000/
 endlocal

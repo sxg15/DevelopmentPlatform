@@ -23,6 +23,9 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - Version management: `src/ui/versions/VersionManagement.jsx`,
   `src/ui/versions/versionManagementDisplayUtils.js`, `src/api/versions.js`,
   `src/styles/versionManagement.css`, `shared/versionManagementUtils.js`.
+- AI planning: `src/ui/ai/AiPlanningWorkspace.jsx`,
+  `src/ui/ai/AiPlanLibrary.jsx`, `src/api/aiConversations.js`,
+  `src/api/aiPlans.js`, and `src/styles/aiPlanning.css`.
 - Work items: `src/ui/workspace/PlatformWorkspace.jsx`,
   `src/ui/work-items/workItemFieldUtils.js`,
   `src/ui/work-items/WorkItemTimelinePanel.jsx`,
@@ -70,7 +73,7 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - Preserve local snapshot and draft keys when changing workspace state.
 - Render every project tool with its required shared `iconKey`; keep a generic
   Lucide fallback for stale cached tool definitions.
-- Keep stylesheet import order: base, overview, work items, auth, settings,
+- Keep stylesheet import order: base, overview, work items, AI planning, auth, settings,
   responsive.
 - Add component-specific CSS to the owning stylesheet; add cross-module responsive
   overrides to `responsive.css`.
@@ -88,6 +91,10 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - Version Management uses a user/project-isolated IndexedDB snapshot for its
   normalized payload. Render the snapshot first, refresh it in the background, and
   update the snapshot after successful version mutations.
+- Keep work-item AI conversations private and scoped to the current user. Only
+  explicitly submitted Markdown revisions appear in the project AI plan library.
+- Stream conversation updates through the AI API module; do not create EventSource
+  connections directly in workspace components.
 
 ## Validate
 

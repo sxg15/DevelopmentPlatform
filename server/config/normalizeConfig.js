@@ -5,6 +5,8 @@ import { DEFAULT_DEVELOPMENT_SUPER_ADMIN_FIELD } from '../../shared/workItemAssi
 export function normalizeConfig(config) {
   const parsedPort = Number(config?.server?.port ?? 3000);
   const dashboardConfig = config?.dashboard || {};
+  const aiPlanningConfig = config?.aiPlanning || {};
+  const codexConfig = aiPlanningConfig.codex || {};
   const requirementsFieldNames = config?.knowledgeBase?.requirementsFieldNames || {};
   const bugsFieldNames = config?.knowledgeBase?.bugsFieldNames || {};
   const feedbackFieldNames = config?.knowledgeBase?.feedbackFieldNames || {};
@@ -30,6 +32,18 @@ export function normalizeConfig(config) {
     },
     updates: {
       manifestUrl: String(config?.updates?.manifestUrl || '').trim(),
+    },
+    aiPlanning: {
+      enabled: aiPlanningConfig.enabled === true,
+      codex: {
+        model: String(codexConfig.model || '').trim(),
+        apiBaseUrl: normalizeBaseUrl(codexConfig.apiBaseUrl),
+        apiKey: String(codexConfig.apiKey || '').trim(),
+        reasoningEffort: String(codexConfig.reasoningEffort || 'high').trim() || 'high',
+        requestTimeoutMs: normalizePositiveInteger(codexConfig.requestTimeoutMs, 600000),
+        maxConcurrentRuns: normalizePositiveInteger(codexConfig.maxConcurrentRuns, 3),
+      },
+      projects: normalizeAiPlanningProjects(aiPlanningConfig.projects),
     },
     dashboard: normalizeProjectOverviewConfig(dashboardConfig),
     knowledgeBase: {
@@ -180,4 +194,49 @@ export function normalizeConfig(config) {
 function normalizePositiveInteger(value, fallback) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : fallback;
+}
+
+function normalizeBaseUrl(value) {
+  return String(value || '').trim().replace(/\/+$/, '');
+}
+
+function normalizeAiPlanningProjects(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((project) => {
+      const projectId = String(project?.projectId || '').trim();
+      if (!projectId) {
+        return null;
+      }
+
+      const roots = (Array.isArray(project?.roots) ? project.roots : [])
+        .map((root) => {
+          const id = String(root?.id || '').trim();
+          const rootPath = String(root?.path || '').trim();
+          if (!id || !rootPath) {
+            return null;
+          }
+          return {
+            id,
+            path: rootPath,
+            profile: normalizeAiProjectProfile(root?.profile),
+          };
+        })
+        .filter(Boolean);
+
+      return {
+        projectId,
+        enabled: project?.enabled !== false,
+        roots,
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeAiProjectProfile(value) {
+  const profile = String(value || 'auto').trim().toLowerCase();
+  return ['auto', 'web', 'unity', 'generic'].includes(profile) ? profile : 'auto';
 }

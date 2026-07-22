@@ -28,6 +28,9 @@ test('server config normalization preserves workflow field defaults', () => {
   );
   assert.equal(config.bitable.versionManagement.wikiNodeToken, 'UVqFwm4EIiBcoPkoz9JcOLNfnVg');
   assert.equal(config.bitable.versionManagement.fieldNames.statusHistory, '状态变动记录');
+  assert.equal(config.aiPlanning.enabled, false);
+  assert.equal(config.aiPlanning.codex.reasoningEffort, 'high');
+  assert.equal(config.aiPlanning.codex.requestTimeoutMs, 600000);
 });
 
 test('server config normalization accepts custom work item and permission fields', () => {
@@ -59,6 +62,19 @@ test('server config normalization accepts custom work item and permission fields
         },
       },
     },
+    aiPlanning: {
+      enabled: true,
+      codex: {
+        model: 'codex-custom',
+        apiBaseUrl: 'https://example.test/v1/',
+        apiKey: 'not-a-real-key',
+        maxConcurrentRuns: 5,
+      },
+      projects: [{
+        projectId: 'P1',
+        roots: [{ id: 'main', path: 'D:\\Projects\\P1', profile: 'unity' }],
+      }],
+    },
   });
 
   assert.equal(config.server.port, 4100);
@@ -76,4 +92,9 @@ test('server config normalization accepts custom work item and permission fields
   assert.equal(config.bitable.personalSettings.fieldNames.todoNotificationTime, '提醒时间');
   assert.equal(config.bitable.versionManagement.wikiNodeToken, 'wikcn_version');
   assert.equal(config.bitable.versionManagement.fieldNames.versionNumber, '发布版本');
+  assert.equal(config.aiPlanning.enabled, true);
+  assert.equal(config.aiPlanning.codex.model, 'codex-custom');
+  assert.equal(config.aiPlanning.codex.apiBaseUrl, 'https://example.test/v1');
+  assert.equal(config.aiPlanning.codex.maxConcurrentRuns, 5);
+  assert.equal(config.aiPlanning.projects[0].roots[0].profile, 'unity');
 });

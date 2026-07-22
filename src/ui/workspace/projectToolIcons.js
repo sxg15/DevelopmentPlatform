@@ -1,6 +1,7 @@
 import {
   Bug,
   ClipboardList,
+  FileText,
   LayoutDashboard,
   MessageSquare,
   PackageCheck,
@@ -12,6 +13,7 @@ import {
 const PROJECT_TOOL_ICONS = Object.freeze({
   Bug,
   ClipboardList,
+  FileText,
   LayoutDashboard,
   MessageSquare,
   PackageCheck,

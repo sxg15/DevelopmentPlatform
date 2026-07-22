@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Bot } from 'lucide-react';
 import {
   DEADLINE_FILTER_OPTIONS,
   compareWorkItemStatus,
@@ -64,6 +65,8 @@ import {
 } from '../../api/workItems.js';
 import { ProjectOverview } from '../ProjectOverview.jsx';
 import { VersionManagement } from '../versions/VersionManagement.jsx';
+import { AiPlanLibrary } from '../ai/AiPlanLibrary.jsx';
+import { AiPlanningWorkspace } from '../ai/AiPlanningWorkspace.jsx';
 import {
   getProjectToolPendingCount,
   isProjectToolPendingCountTool,
@@ -783,8 +786,9 @@ function ProjectWorkspace({
             activeWorkItemConfig ? 'project-detail-surface-requirements' : '',
             activeToolId === 'overview' ? 'project-detail-surface-overview' : '',
             activeToolId === 'versions' ? 'project-detail-surface-versions' : '',
+            activeToolId === 'aiPlans' ? 'project-detail-surface-ai-plans' : '',
           ].filter(Boolean).join(' ')}>
-            {!activeWorkItemConfig && !['overview', 'versions'].includes(activeToolId) ? (
+            {!activeWorkItemConfig && !['overview', 'versions', 'aiPlans'].includes(activeToolId) ? (
               <>
                 <p className="project-detail-eyebrow">{activeTool.label}</p>
                 <h1>{projectName}</h1>
@@ -811,6 +815,9 @@ function ProjectWorkspace({
                 targetRecordId={selectedVersionId}
                 onDirectNotice={onDirectNotice}
               />
+            ) : null}
+            {activeToolId === 'aiPlans' ? (
+              <AiPlanLibrary project={project} />
             ) : null}
             {activeWorkItemConfig ? (
               <RequirementsStatus
@@ -843,6 +850,10 @@ function ProjectWorkspace({
                 mentionableUsers={mentionableUsersByTool[activeWorkItemConfig.toolId] || activeWorkItemState.result?.mentionableUsers || []}
                 isSuperAdmin={Boolean(project.isSuperAdmin)}
                 isDevelopmentSuperAdmin={Boolean(project.isDevelopmentSuperAdmin)}
+                aiPlanningEnabled={Boolean(
+                  project.aiPlanning?.enabled
+                  && project.aiPlanning?.supportedToolIds?.includes(activeWorkItemConfig.toolId)
+                )}
                 onWorkItemCreated={(payload) => {
                   const createdItem = payload.item || payload.requirement;
                   updateWorkItemState(
@@ -903,6 +914,7 @@ function RequirementsStatus({
   mentionableUsers,
   isSuperAdmin,
   isDevelopmentSuperAdmin,
+  aiPlanningEnabled,
   onWorkItemCreated,
   onRequirementUpdated,
   onRequirementDeleted,
@@ -987,6 +999,7 @@ function RequirementsStatus({
         canDelete={isSuperAdmin}
         isSuperAdmin={isSuperAdmin}
         isDevelopmentSuperAdmin={isDevelopmentSuperAdmin}
+        aiPlanningEnabled={aiPlanningEnabled}
         onBack={onRequirementBack}
       />
     );
@@ -2398,6 +2411,7 @@ function BitableRecordDetail({
   canDelete,
   isSuperAdmin,
   isDevelopmentSuperAdmin,
+  aiPlanningEnabled,
   onRequirementUpdated,
   onRequirementDeleted,
   onBack,
@@ -2427,6 +2441,7 @@ function BitableRecordDetail({
   const [editOpen, setEditOpen] = useState(false);
   const [editStatus, setEditStatus] = useState({ type: 'idle', message: '' });
   const [activeAction, setActiveAction] = useState('comments');
+  const [aiPlanningOpen, setAiPlanningOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.add('requirement-detail-scroll-lock');
@@ -2493,6 +2508,16 @@ function BitableRecordDetail({
           ) : null}
         </div>
         <div className="bitable-detail-actions">
+          {aiPlanningEnabled ? (
+            <button
+              type="button"
+              className="bitable-ai-plan-button"
+              onClick={() => setAiPlanningOpen(true)}
+            >
+              <Bot aria-hidden="true" />
+              AI 计划
+            </button>
+          ) : null}
           {canEditContent ? (
             <button type="button" className="bitable-edit-button" onClick={() => setEditOpen(true)}>
               编辑内容
@@ -2522,6 +2547,14 @@ function BitableRecordDetail({
           mentionableUsers={mentionableUsers}
           onClose={() => setEditOpen(false)}
           onSaved={handleEditSaved}
+        />
+      ) : null}
+      {aiPlanningOpen ? (
+        <AiPlanningWorkspace
+          projectId={projectId}
+          toolConfig={toolConfig}
+          record={record}
+          onClose={() => setAiPlanningOpen(false)}
         />
       ) : null}
 
@@ -4435,7 +4468,11 @@ function getProjectTools(project) {
     : PROJECT_TOOLS;
   const normalizedTools = tools
     .map((tool) => PROJECT_TOOLS.find((item) => item.id === tool.id) || tool)
-    .filter((tool) => tool?.id && tool?.label);
+    .filter((tool) => (
+      tool?.id
+      && tool?.label
+      && (tool.id !== 'aiPlans' || project?.aiPlanning?.enabled)
+    ));
 
   if (!normalizedTools.some((tool) => tool.id === 'overview')) {
     normalizedTools.unshift(PROJECT_TOOLS[0]);

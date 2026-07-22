@@ -41,6 +41,9 @@ commit `Publish/config.json`.
 - Version contracts and workflows: `test/versionManagementUtils.test.js`,
   `test/versionManagementService.test.js`,
   `test/versionManagementDisplayUtils.test.js`.
+- AI persistence, ownership, scheduling, structured output, and realtime:
+  `test/aiPlanning.test.js`; Codex JSON-RPC and key isolation:
+  `test/codexAppServerClient.test.js`.
 - Same-user settings mutation serialization is covered by
   `test/serverRuntime.test.js`; non-blocking frontend initialization is covered by
   `test/frontendModuleBindings.test.js`.
@@ -51,6 +54,12 @@ changes and local API smoke tests for route changes.
 For version management, cover active-slot replacement/rollback, provisioning
 concurrency, completed-only associations, reference cycles/deletion, overview
 read-only behavior, defensive frontend normalization, and direct/realtime bindings.
+
+Production packages must contain `runtime/node.exe`, production `node_modules`,
+the `@openai/codex-win32-x64` native package, and the packaged planning Skill.
+Startup must not run npm or install dependencies.
+Use `scripts/smoke-portable.ps1` to copy `Publish` to a temporary relocated path,
+start it with a generated non-secret config, and verify `/api/health`.
 
 ## Release Log
 

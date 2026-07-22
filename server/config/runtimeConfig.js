@@ -81,6 +81,45 @@ export function validateKnowledgeBaseConfig() {
   }
 }
 
+export function validateAiPlanningConfig() {
+  const aiPlanning = runtimeConfig.aiPlanning;
+  if (!aiPlanning.enabled) {
+    return;
+  }
+  if (!aiPlanning.codex.model) {
+    throw new Error('缺少 Codex 模型名称配置');
+  }
+  if (!aiPlanning.codex.apiBaseUrl) {
+    throw new Error('缺少 Codex API URL 配置');
+  }
+  if (!aiPlanning.codex.apiKey) {
+    throw new Error('缺少 Codex API Key 配置');
+  }
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(aiPlanning.codex.apiBaseUrl);
+  } catch {
+    throw new Error('Codex API URL 格式不正确');
+  }
+  if (!['https:', 'http:'].includes(parsedUrl.protocol)) {
+    throw new Error('Codex API URL 只支持 HTTP 或 HTTPS');
+  }
+  if (aiPlanning.projects.some((project) => project.enabled && project.roots.length === 0)) {
+    throw new Error('启用 AI 计划的项目必须配置至少一个代码目录');
+  }
+  const projectIds = aiPlanning.projects.map((project) => project.projectId);
+  if (new Set(projectIds).size !== projectIds.length) {
+    throw new Error('AI 计划项目ID不能重复');
+  }
+  for (const project of aiPlanning.projects) {
+    const rootIds = project.roots.map((root) => root.id);
+    if (new Set(rootIds).size !== rootIds.length) {
+      throw new Error(`AI 计划代码目录ID不能重复：${project.projectId}`);
+    }
+  }
+}
+
 export function blockDirectConfigAccess(request, response, next) {
   const requestPath = request.path.replaceAll('\\', '/');
   const blockedPaths = new Set(['/config.json', '/Publish/config.json']);

@@ -12,7 +12,7 @@ const scanRoots = ['src', 'public', 'Publish/client']
   .filter((item) => fs.existsSync(item));
 
 if (secrets.length === 0) {
-  console.log('未配置飞书 App Secret，跳过真实密钥泄露检查');
+  console.log('未配置运行时密钥，跳过真实密钥泄露检查');
   process.exit(0);
 }
 
@@ -31,14 +31,14 @@ for (const scanRoot of scanRoots) {
 }
 
 if (hits.length > 0) {
-  console.error('发现 FEISHU_APP_SECRET 出现在浏览器可见文件中：');
+  console.error('发现运行时密钥出现在浏览器可见文件中：');
   for (const hit of hits) {
     console.error(`- ${hit}`);
   }
   process.exit(1);
 }
 
-console.log('未发现 FEISHU_APP_SECRET 暴露到浏览器可见文件');
+console.log('未发现运行时密钥暴露到浏览器可见文件');
 
 function scanFiles(dirPath, onFile) {
   for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
@@ -64,9 +64,15 @@ function readConfiguredSecrets(filePaths) {
     }
 
     const config = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    const secret = String(config?.feishu?.appSecret || '');
-    if (secret) {
-      secrets.add(secret);
+    const configuredSecrets = [
+      config?.feishu?.appSecret,
+      config?.aiPlanning?.codex?.apiKey,
+    ];
+    for (const value of configuredSecrets) {
+      const secret = String(value || '');
+      if (secret) {
+        secrets.add(secret);
+      }
     }
   }
 

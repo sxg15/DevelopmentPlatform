@@ -6,9 +6,13 @@ import traverseModule from '@babel/traverse';
 
 const traverse = traverseModule.default || traverseModule;
 const FRONTEND_MODULES = [
+  'src/api/aiConversations.js',
+  'src/api/aiPlans.js',
   'src/api/clientErrors.js',
   'src/ui/App.jsx',
   'src/ui/AppErrorBoundary.jsx',
+  'src/ui/ai/AiPlanLibrary.jsx',
+  'src/ui/ai/AiPlanningWorkspace.jsx',
   'src/ui/ProjectOverview.jsx',
   'src/ui/projectOverviewDisplayUtils.js',
   'src/ui/versions/VersionManagement.jsx',
@@ -134,4 +138,19 @@ test('project tool navigation renders icons and pending work item badges', () =>
   assert.match(source, /project-tool-pending-badge/);
   assert.match(source, /\{pendingCount\}未处理/);
   assert.match(source, /isProjectToolPendingCountTool\(normalizedToolId\)/);
+});
+
+test('AI planning separates private conversations from shared submissions', () => {
+  const workspaceSource = fs.readFileSync('src/ui/ai/AiPlanningWorkspace.jsx', 'utf8');
+  const librarySource = fs.readFileSync('src/ui/ai/AiPlanLibrary.jsx', 'utf8');
+  const buildSource = fs.readFileSync('scripts/build.ps1', 'utf8');
+
+  assert.match(workspaceSource, /这里的对话仅你可见/);
+  assert.match(workspaceSource, /submitAiPlan/);
+  assert.match(workspaceSource, /subscribeAiConversation/);
+  assert.match(librarySource, /getAiPlanRawUrl/);
+  assert.match(librarySource, /adoptAiPlan/);
+  assert.match(buildSource, /runtime\\node\.exe/);
+  assert.match(buildSource, /codex-win32-x64/);
+  assert.doesNotMatch(buildSource, /Installing backend dependencies/);
 });
