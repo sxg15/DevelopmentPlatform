@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createConfigEditorStore } from './configEditorStore.js';
 
@@ -73,8 +73,8 @@ server.listen(requestedPort, LOOPBACK_HOST, () => {
   console.log('IGP 运行配置工具已启动。');
   console.log(`访问地址：${editorUrl}`);
   console.log('保存配置后，请关闭本工具并重新运行 StartWebBackend.bat。');
-  if (!noBrowser) {
-    openBrowser(editorUrl);
+  if (!noBrowser && !openBrowser(editorUrl)) {
+    console.log('无法自动打开浏览器，请手动复制上方地址。');
   }
 });
 
@@ -295,7 +295,10 @@ function acquireEditorLock(filePath) {
       if (existing?.pid && isProcessRunning(existing.pid)) {
         console.log('IGP 运行配置工具已经在运行。');
         if (existing.url && !noBrowser) {
-          openBrowser(existing.url);
+          if (!openBrowser(existing.url)) {
+            throw new Error(`无法自动打开浏览器，请手动访问：${existing.url}`);
+          }
+          console.log('正在打开已有配置页面。');
         }
         return null;
       }
@@ -350,14 +353,18 @@ function shutdown() {
 
 function openBrowser(url) {
   try {
-    const child = spawn('explorer.exe', [url], {
-      detached: true,
+    const safeUrl = String(url || '').replaceAll('"', '');
+    const result = spawnSync('rundll32.exe', [
+      'url.dll,FileProtocolHandler',
+      safeUrl,
+    ], {
       stdio: 'ignore',
       windowsHide: true,
+      timeout: 10_000,
     });
-    child.unref();
+    return !result.error && result.status === 0;
   } catch {
-    console.log('无法自动打开浏览器，请手动访问上方地址。');
+    return false;
   }
 }
 

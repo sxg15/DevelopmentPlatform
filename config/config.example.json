@@ -15,9 +15,9 @@
     "manifestUrl": ""
   },
   "aiPlanning": {
-    "enabled": false,
+    "enabled": true,
     "codex": {
-      "model": "",
+      "model": "5.6sol",
       "apiBaseUrl": "https://api.openai.com/v1",
       "apiKey": "",
       "reasoningEffort": "high",

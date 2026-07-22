@@ -34,10 +34,10 @@ export function normalizeConfig(config) {
       manifestUrl: String(config?.updates?.manifestUrl || '').trim(),
     },
     aiPlanning: {
-      enabled: aiPlanningConfig.enabled === true,
+      enabled: aiPlanningConfig.enabled !== false,
       codex: {
-        model: String(codexConfig.model || '').trim(),
-        apiBaseUrl: normalizeBaseUrl(codexConfig.apiBaseUrl),
+        model: String(codexConfig.model || '5.6sol').trim(),
+        apiBaseUrl: normalizeBaseUrl(codexConfig.apiBaseUrl || 'https://api.openai.com/v1'),
         apiKey: String(codexConfig.apiKey || '').trim(),
         reasoningEffort: String(codexConfig.reasoningEffort || 'high').trim() || 'high',
         requestTimeoutMs: normalizePositiveInteger(codexConfig.requestTimeoutMs, 600000),

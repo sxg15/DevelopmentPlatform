@@ -60,6 +60,9 @@ Read `AGENTS.md`, then locate the owning layer.
   validate write origins, redact existing `feishu.appSecret` and Codex API keys,
   preserve unknown config keys, detect revision conflicts, and save through a
   backup-and-rollback transaction.
+- Stop the portable configuration editor through
+  `StopConfigureWebBackend.bat` and its token-authenticated loopback shutdown
+  helper. Do not stop arbitrary processes by scanning ports.
 - Prefer `getCachedValue` for shared promise-aware TTL cache behavior.
 - Resolve personal settings through the configured Wiki node token, validate the
   exact `用户`, `接收待办事项通知`, and `待办事项通知时间` fields, and reject
@@ -91,6 +94,9 @@ Read `AGENTS.md`, then locate the owning layer.
 - Run Codex with `read-only`, no approvals, and no tool network access. Keep the
   API key out of generated Codex config, browser payloads, logs, errors, and shell
   tool environments.
+- Default AI planning to enabled with model `5.6sol`. Missing Codex credentials or
+  project roots must not block general backend startup; validate them before
+  creating or running AI conversations and shared-plan operations.
 - Remove Codex thread, turn, run, and conversation-owner identifiers from browser
   payloads. Redact configured absolute project roots from generated text and
   submitted Markdown before persistence or sharing.

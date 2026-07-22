@@ -163,7 +163,6 @@ const todoNotificationScheduler = createTodoNotificationScheduler({
   },
 });
 const aiDataPaths = ensureAiDataDirectories();
-validateAiPlanningConfig();
 const aiPlanningRepository = new AiPlanningRepository(aiDataPaths.database);
 const aiPlanningRealtimeHub = createAiPlanningRealtimeHub();
 const aiPlanningScheduler = createBoundedTaskScheduler({
@@ -171,7 +170,13 @@ const aiPlanningScheduler = createBoundedTaskScheduler({
   maxPerUser: 1,
   maxPerProject: 2,
 });
-const codexAppServerClient = runtimeConfig.aiPlanning.enabled
+const codexRuntimeReady = Boolean(
+  runtimeConfig.aiPlanning.enabled
+  && runtimeConfig.aiPlanning.codex.model
+  && runtimeConfig.aiPlanning.codex.apiBaseUrl
+  && runtimeConfig.aiPlanning.codex.apiKey,
+);
+const codexAppServerClient = codexRuntimeReady
   ? createCodexAppServerClient({
       rootDir,
       codexHome: aiDataPaths.codexHome,
@@ -963,6 +968,7 @@ async function handleAiConversationArchive(request, response) {
 
 async function handleAiConversationMessage(request, response) {
   try {
+    validateAiPlanningConfig();
     const context = await getAiConversationRequestContext(request, { loadWorkItem: true });
     const result = aiPlanningService.sendMessage({
       user: context.session.user,

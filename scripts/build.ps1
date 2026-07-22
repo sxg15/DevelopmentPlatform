@@ -31,6 +31,10 @@ if (Test-Path -LiteralPath (Join-Path $publishDir 'StopWebBackend.bat')) {
     cmd /c (Join-Path $publishDir 'StopWebBackend.bat') | Out-Null
     Start-Sleep -Seconds 1
 }
+if (Test-Path -LiteralPath (Join-Path $publishDir 'StopConfigureWebBackend.bat')) {
+    cmd /c (Join-Path $publishDir 'StopConfigureWebBackend.bat') | Out-Null
+    Start-Sleep -Milliseconds 500
+}
 
 if (Test-Path -LiteralPath $publishDir) {
     Remove-Item -LiteralPath $publishDir -Recurse -Force
@@ -100,6 +104,7 @@ foreach ($requiredFile in @(
     (Join-Path $publishDir 'EnsureDependencies.ps1'),
     (Join-Path $publishServerDir 'ai\skills\work-item-plan\SKILL.md'),
     (Join-Path $publishServerDir 'config\configEditorServer.js'),
+    (Join-Path $publishServerDir 'config\stopConfigEditor.js'),
     (Join-Path $publishServerDir 'config\selectFolder.ps1'),
     (Join-Path $publishDir 'config-editor\index.html'),
     (Join-Path $publishDir 'config.example.json')
@@ -189,11 +194,40 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+echo.
+echo Runtime configuration tool stopped.
+powershell -NoProfile -Command "Start-Sleep -Milliseconds 1500" >nul 2>nul
+endlocal
+'@
+
+$stopConfigureBat = @'
+@echo off
+setlocal
+title Stop IGP Runtime Configuration
+cd /d "%~dp0"
+if not exist runtime\node.exe (
+  echo Bundled Node runtime is missing.
+  pause
+  exit /b 1
+)
+if not exist server\config\stopConfigEditor.js (
+  echo Runtime configuration stop tool is missing.
+  pause
+  exit /b 1
+)
+runtime\node.exe server\config\stopConfigEditor.js --root "%CD%"
+if errorlevel 1 (
+  echo.
+  pause
+  exit /b 1
+)
+powershell -NoProfile -Command "Start-Sleep -Milliseconds 1500" >nul 2>nul
 endlocal
 '@
 
 Set-Content -LiteralPath (Join-Path $publishDir 'StartWebBackend.bat') -Value $startBat -Encoding ASCII
 Set-Content -LiteralPath (Join-Path $publishDir 'StopWebBackend.bat') -Value $stopBat -Encoding ASCII
 Set-Content -LiteralPath (Join-Path $publishDir 'ConfigureWebBackend.bat') -Value $configureBat -Encoding ASCII
+Set-Content -LiteralPath (Join-Path $publishDir 'StopConfigureWebBackend.bat') -Value $stopConfigureBat -Encoding ASCII
 
 Write-Host "Build completed: $publishDir"

@@ -60,8 +60,10 @@ try {
     }
     foreach ($requiredConfigEditorFile in @(
         (Join-Path $smokeDir 'ConfigureWebBackend.bat'),
+        (Join-Path $smokeDir 'StopConfigureWebBackend.bat'),
         (Join-Path $smokeDir 'config-editor\index.html'),
         (Join-Path $smokeDir 'server\config\configEditorServer.js'),
+        (Join-Path $smokeDir 'server\config\stopConfigEditor.js'),
         (Join-Path $smokeDir 'server\config\selectFolder.ps1'),
         (Join-Path $smokeDir 'config.example.json')
     )) {
@@ -164,14 +166,14 @@ try {
     if (Test-Path -LiteralPath (Join-Path $smokeDir 'node_modules')) {
         throw 'Portable config editor unexpectedly installed application dependencies'
     }
-    Invoke-RestMethod `
-        -Uri "$editorOrigin/api/shutdown" `
-        -Method Post `
-        -Headers $saveHeaders `
-        -ContentType 'application/json' `
-        -Body '{}' `
-        -TimeoutSec 5 | Out-Null
+    & (Join-Path $smokeDir 'StopConfigureWebBackend.bat')
+    if ($LASTEXITCODE -ne 0) {
+        throw "Portable config editor stop command failed with exit code $LASTEXITCODE"
+    }
     Wait-Process -Id $configEditorProcessId -Timeout 5 -ErrorAction SilentlyContinue
+    if (Get-Process -Id $configEditorProcessId -ErrorAction SilentlyContinue) {
+        throw 'Portable config editor process remained active after the stop command'
+    }
     $configEditorProcessId = 0
 
     Push-Location $smokeDir

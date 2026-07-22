@@ -174,6 +174,9 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 - `config/config.json` and `Publish/config.json` contain runtime secrets. Never print,
   inspect in responses, commit, or copy their values into tests/docs.
 - Use `config/config.example.json` for documented configuration changes.
+- AI planning defaults to enabled with Codex model `5.6sol`; incomplete Codex
+  credentials or project roots must not prevent the rest of the backend from
+  starting, but AI endpoints still require complete validation.
 - Personal settings configuration lives under `bitable.personalSettings`; keep the
   Wiki node token and exact table field names configurable.
 - Version template configuration lives under `bitable.versionManagement`. The
@@ -187,10 +190,11 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 - `Publish/`, `.htybox/`, logs, and runtime config are generated/ignored artifacts.
 - Production packaging must copy the complete `server/` tree because the backend is
   modular.
-- Portable packages include `ConfigureWebBackend.bat`, a static configuration
-  editor, and `config.example.json`. The configuration editor must run with the
-  bundled Node runtime before application dependencies are installed, bind only to
-  loopback, and never return existing secrets to the browser.
+- Portable packages include `ConfigureWebBackend.bat`,
+  `StopConfigureWebBackend.bat`, a static configuration editor, and
+  `config.example.json`. The configuration editor must run with the bundled Node
+  runtime before application dependencies are installed, bind only to loopback,
+  and never return existing secrets to the browser.
 
 ## Change Workflow
 

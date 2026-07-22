@@ -28,7 +28,9 @@ test('server config normalization preserves workflow field defaults', () => {
   );
   assert.equal(config.bitable.versionManagement.wikiNodeToken, 'UVqFwm4EIiBcoPkoz9JcOLNfnVg');
   assert.equal(config.bitable.versionManagement.fieldNames.statusHistory, '状态变动记录');
-  assert.equal(config.aiPlanning.enabled, false);
+  assert.equal(config.aiPlanning.enabled, true);
+  assert.equal(config.aiPlanning.codex.model, '5.6sol');
+  assert.equal(config.aiPlanning.codex.apiBaseUrl, 'https://api.openai.com/v1');
   assert.equal(config.aiPlanning.codex.reasoningEffort, 'high');
   assert.equal(config.aiPlanning.codex.requestTimeoutMs, 600000);
 });

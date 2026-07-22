@@ -70,6 +70,7 @@ test('config editor updates preserve unknown keys and apply explicit secret acti
 
 test('config editor allows incomplete disabled AI settings but validates enabled workspaces', () => {
   const disabled = createEditableConfig({}).config;
+  disabled.aiPlanning.enabled = false;
   disabled.aiPlanning.projects = [{
     projectId: '',
     enabled: true,
@@ -81,9 +82,9 @@ test('config editor allows incomplete disabled AI settings but validates enabled
   );
 
   disabled.aiPlanning.enabled = true;
+  assert.equal(disabled.aiPlanning.codex.model, '5.6sol');
+  assert.equal(disabled.aiPlanning.codex.apiBaseUrl, 'https://api.openai.com/v1');
   const enabledErrors = validateConfigDocument(disabled);
-  assert.ok(enabledErrors.some((error) => error.path === 'aiPlanning.codex.model'));
-  assert.ok(enabledErrors.some((error) => error.path === 'aiPlanning.codex.apiBaseUrl'));
   assert.ok(enabledErrors.some((error) => error.path === 'aiPlanning.codex.apiKey'));
   assert.ok(enabledErrors.some((error) => error.path.endsWith('.projectId')));
   assert.ok(enabledErrors.some((error) => error.path.endsWith('.roots')));

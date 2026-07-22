@@ -64,9 +64,10 @@ locked Express and Codex production dependencies only when missing or stale.
 Keep npm attached to the visible startup console with native progress enabled and
 HTTP fetch status output so first-launch downloads never look stalled.
 Production packages must also contain `ConfigureWebBackend.bat`,
-`config-editor/`, `config.example.json`, and the config editor server and folder
-picker under `server/config/`. The config editor must start before dependencies
-are installed and must not create `node_modules`.
+`StopConfigureWebBackend.bat`, `config-editor/`, `config.example.json`, and the
+config editor start/stop helpers and folder picker under `server/config/`. The
+config editor must start before dependencies are installed and must not create
+`node_modules`.
 Use `scripts/smoke-portable.ps1` to copy `Publish` to a temporary relocated path,
 verify that dependencies are initially absent, exercise the token-protected config
 editor without exposing an existing secret or installing dependencies, then
