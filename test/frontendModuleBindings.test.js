@@ -144,6 +144,10 @@ test('AI planning separates private conversations from shared submissions', () =
   const workspaceSource = fs.readFileSync('src/ui/ai/AiPlanningWorkspace.jsx', 'utf8');
   const librarySource = fs.readFileSync('src/ui/ai/AiPlanLibrary.jsx', 'utf8');
   const buildSource = fs.readFileSync('scripts/build.ps1', 'utf8');
+  const dependencyInstallerSource = fs.readFileSync(
+    'scripts/ensure-publish-dependencies.ps1',
+    'utf8',
+  );
 
   assert.match(workspaceSource, /这里的对话仅你可见/);
   assert.match(workspaceSource, /submitAiPlan/);
@@ -151,6 +155,9 @@ test('AI planning separates private conversations from shared submissions', () =
   assert.match(librarySource, /getAiPlanRawUrl/);
   assert.match(librarySource, /adoptAiPlan/);
   assert.match(buildSource, /runtime\\node\.exe/);
-  assert.match(buildSource, /codex-win32-x64/);
-  assert.doesNotMatch(buildSource, /Installing backend dependencies/);
+  assert.match(buildSource, /runtime\\npm\\bin\\npm-cli\.js/);
+  assert.doesNotMatch(buildSource, /npm\.cmd ci --omit=dev/);
+  assert.match(dependencyInstallerSource, /npm-cli\.js/);
+  assert.match(dependencyInstallerSource, /'ci'/);
+  assert.match(dependencyInstallerSource, /codex-win32-x64/);
 });

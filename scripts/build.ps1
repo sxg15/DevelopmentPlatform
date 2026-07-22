@@ -6,6 +6,7 @@ $configFile = Join-Path $rootDir 'config\config.json'
 $publishConfigFile = Join-Path $publishDir 'config.json'
 $publishServerDir = Join-Path $publishDir 'server'
 $publishRuntimeDir = Join-Path $publishDir 'runtime'
+$dependencyInstallerFile = Join-Path $rootDir 'scripts\ensure-publish-dependencies.ps1'
 $resolvedPublishDir = [System.IO.Path]::GetFullPath($publishDir)
 $workspacePrefix = [System.IO.Path]::GetFullPath($rootDir).TrimEnd('\') + '\'
 
@@ -17,6 +18,9 @@ if (-not $resolvedPublishDir.StartsWith($workspacePrefix, [System.StringComparis
 
 if (-not (Test-Path -LiteralPath $configFile)) {
     throw '缺少 config/config.json'
+}
+if (-not (Test-Path -LiteralPath $dependencyInstallerFile -PathType Leaf)) {
+    throw '缺少便携依赖安装脚本'
 }
 
 if (Test-Path -LiteralPath (Join-Path $publishDir 'StopWebBackend.bat')) {
@@ -51,27 +55,47 @@ if ($nodeRuntime.platform -ne 'win32' -or $nodeRuntime.arch -ne 'x64' -or $nodeR
     throw "便携发布要求 Windows x64 Node 24，当前为 $($nodeRuntime.platform)/$($nodeRuntime.arch) Node $($nodeRuntime.version)"
 }
 
-& npm.cmd ci --omit=dev --ignore-scripts --no-audit --no-fund --prefix $publishDir
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
+$npmCommand = (Get-Command npm.cmd -ErrorAction Stop).Source
+$npmGlobalRoot = (& npm.cmd root -g).Trim()
+$npmPackageCandidates = @(
+    (Join-Path $npmGlobalRoot 'npm'),
+    (Join-Path (Split-Path -Parent $npmCommand) 'node_modules\npm')
+)
+$npmPackageDir = $npmPackageCandidates |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Container } |
+    Select-Object -First 1
+if (-not $npmPackageDir) {
+    throw '找不到可打包的 npm 运行环境'
 }
 
 New-Item -ItemType Directory -Path $publishRuntimeDir | Out-Null
 Copy-Item -LiteralPath $nodeRuntime.path -Destination (Join-Path $publishRuntimeDir 'node.exe') -Force
-
-$codexPackageFile = Join-Path $publishDir 'node_modules\@openai\codex\package.json'
-$codexNativePackageFile = Join-Path $publishDir 'node_modules\@openai\codex-win32-x64\package.json'
-$codexNativeExecutable = Join-Path $publishDir 'node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe'
+Copy-Item -LiteralPath $npmPackageDir -Destination (Join-Path $publishRuntimeDir 'npm') -Recurse -Force
+Copy-Item -LiteralPath $dependencyInstallerFile -Destination (Join-Path $publishDir 'EnsureDependencies.ps1') -Force
+$packageLockStream = [System.IO.File]::OpenRead((Join-Path $rootDir 'package-lock.json'))
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $dependencyStamp = [System.BitConverter]::ToString(
+        $sha256.ComputeHash($packageLockStream)
+    ).Replace('-', '').ToLowerInvariant()
+} finally {
+    $sha256.Dispose()
+    $packageLockStream.Dispose()
+}
+Set-Content -LiteralPath (Join-Path $publishRuntimeDir 'dependency-version.txt') -Value $dependencyStamp -Encoding ASCII
 foreach ($requiredFile in @(
     (Join-Path $publishRuntimeDir 'node.exe'),
-    $codexPackageFile,
-    $codexNativePackageFile,
-    $codexNativeExecutable,
+    (Join-Path $publishRuntimeDir 'npm\bin\npm-cli.js'),
+    (Join-Path $publishRuntimeDir 'dependency-version.txt'),
+    (Join-Path $publishDir 'EnsureDependencies.ps1'),
     (Join-Path $publishServerDir 'ai\skills\work-item-plan\SKILL.md')
 )) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         throw "便携发布缺少运行文件：$requiredFile"
     }
+}
+if (Test-Path -LiteralPath (Join-Path $publishDir 'node_modules')) {
+    throw '轻量便携发布不应预装应用 node_modules'
 }
 
 $startBat = @'
@@ -83,8 +107,19 @@ if not exist runtime\node.exe (
   pause
   exit /b 1
 )
-if not exist node_modules\@openai\codex-win32-x64\package.json (
-  echo Bundled Codex runtime is missing.
+if not exist runtime\npm\bin\npm-cli.js (
+  echo Bundled npm runtime is missing.
+  pause
+  exit /b 1
+)
+if not exist EnsureDependencies.ps1 (
+  echo Dependency installer is missing.
+  pause
+  exit /b 1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0EnsureDependencies.ps1" -RootDir "%CD%"
+if errorlevel 1 (
+  echo Failed to prepare backend dependencies.
   pause
   exit /b 1
 )

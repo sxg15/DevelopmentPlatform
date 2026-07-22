@@ -9,8 +9,7 @@ $publishDir = Join-Path $rootDir 'Publish'
 $tempRoot = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
 $smokeDir = Join-Path $env:TEMP ("IGP Portable Smoke " + [guid]::NewGuid().ToString('N'))
 $resolvedSmokeDir = [System.IO.Path]::GetFullPath($smokeDir)
-$process = $null
-$previousNodeEnv = $env:NODE_ENV
+$serverProcessId = 0
 
 if (-not $resolvedSmokeDir.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Smoke path escaped temp directory: $resolvedSmokeDir"
@@ -50,17 +49,18 @@ try {
         $utf8WithoutBom
     )
 
-    $stdout = Join-Path $smokeDir 'smoke.stdout.log'
-    $stderr = Join-Path $smokeDir 'smoke.stderr.log'
-    $env:NODE_ENV = 'production'
-    $process = Start-Process `
-        -FilePath (Join-Path $smokeDir 'runtime\node.exe') `
-        -ArgumentList @('--disable-warning=ExperimentalWarning', 'server\index.js') `
-        -WorkingDirectory $smokeDir `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $stdout `
-        -RedirectStandardError $stderr `
-        -PassThru
+    if (Test-Path -LiteralPath (Join-Path $smokeDir 'node_modules')) {
+        throw 'Portable package unexpectedly contains preinstalled application dependencies'
+    }
+    Push-Location $smokeDir
+    try {
+        & (Join-Path $smokeDir 'StartWebBackend.bat')
+    } finally {
+        Pop-Location
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Portable startup failed with exit code $LASTEXITCODE"
+    }
 
     $health = $null
     for ($attempt = 0; $attempt -lt 40; $attempt += 1) {
@@ -76,8 +76,21 @@ try {
     }
 
     if ($health.ok -ne $true) {
-        $errorTail = (Get-Content -LiteralPath $stderr -Tail 20 -ErrorAction SilentlyContinue) -join ' '
+        $errorTail = (
+            Get-Content -LiteralPath (Join-Path $smokeDir 'server.err.log') -Tail 20 -ErrorAction SilentlyContinue
+        ) -join ' '
         throw "Portable server health check failed: $errorTail"
+    }
+    $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
+        Select-Object -First 1
+    $serverProcessId = [int]$listener.OwningProcess
+    & powershell.exe `
+        -NoProfile `
+        -ExecutionPolicy Bypass `
+        -File (Join-Path $smokeDir 'EnsureDependencies.ps1') `
+        -RootDir $smokeDir
+    if ($LASTEXITCODE -ne 0) {
+        throw "Portable dependency recheck failed with exit code $LASTEXITCODE"
     }
 
     $nodeInfo = & (Join-Path $smokeDir 'runtime\node.exe') -p (
@@ -85,11 +98,15 @@ try {
     )
     Write-Host "Portable smoke passed from relocated path: $nodeInfo"
 } finally {
-    if ($process -and -not $process.HasExited) {
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        $process.WaitForExit(5000) | Out-Null
+    if ($serverProcessId -gt 0) {
+        Stop-Process -Id $serverProcessId -Force -ErrorAction SilentlyContinue
+    } else {
+        Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty OwningProcess -Unique |
+            ForEach-Object {
+                Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue
+            }
     }
-    $env:NODE_ENV = $previousNodeEnv
 
     if (-not $resolvedSmokeDir.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Refusing to clean smoke path outside temp directory: $resolvedSmokeDir"
