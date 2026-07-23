@@ -36,7 +36,7 @@ export function normalizeConfig(config) {
     aiPlanning: {
       enabled: aiPlanningConfig.enabled !== false,
       codex: {
-        model: String(codexConfig.model || '5.6sol').trim(),
+        model: String(codexConfig.model || 'gpt-5.6-sol').trim(),
         apiBaseUrl: normalizeBaseUrl(codexConfig.apiBaseUrl || 'https://api.openai.com/v1'),
         apiKey: String(codexConfig.apiKey || '').trim(),
         reasoningEffort: String(codexConfig.reasoningEffort || 'high').trim() || 'high',

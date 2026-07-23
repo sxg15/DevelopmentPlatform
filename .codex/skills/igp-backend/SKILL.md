@@ -94,7 +94,7 @@ Read `AGENTS.md`, then locate the owning layer.
 - Run Codex with `read-only`, no approvals, and no tool network access. Keep the
   API key out of generated Codex config, browser payloads, logs, errors, and shell
   tool environments.
-- Default AI planning to enabled with model `5.6sol`. Missing Codex credentials or
+- Default AI planning to enabled with model `gpt-5.6-sol`. Missing Codex credentials or
   project roots must not block general backend startup; validate them before
   creating or running AI conversations and shared-plan operations.
 - Return only a non-sensitive AI unavailable reason for requirement/Bug projects

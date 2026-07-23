@@ -82,7 +82,7 @@ test('config editor allows incomplete disabled AI settings but validates enabled
   );
 
   disabled.aiPlanning.enabled = true;
-  assert.equal(disabled.aiPlanning.codex.model, '5.6sol');
+  assert.equal(disabled.aiPlanning.codex.model, 'gpt-5.6-sol');
   assert.equal(disabled.aiPlanning.codex.apiBaseUrl, 'https://api.openai.com/v1');
   const enabledErrors = validateConfigDocument(disabled);
   assert.ok(enabledErrors.some((error) => error.path === 'aiPlanning.codex.apiKey'));

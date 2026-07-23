@@ -174,7 +174,7 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 - `config/config.json` and `Publish/config.json` contain runtime secrets. Never print,
   inspect in responses, commit, or copy their values into tests/docs.
 - Use `config/config.example.json` for documented configuration changes.
-- AI planning defaults to enabled with Codex model `5.6sol`; incomplete Codex
+- AI planning defaults to enabled with Codex model `gpt-5.6-sol`; incomplete Codex
   credentials or project roots must not prevent the rest of the backend from
   starting, but AI endpoints still require complete validation.
 - When AI is globally enabled but a project lacks a runnable mapping, requirement

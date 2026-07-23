@@ -17,7 +17,7 @@
   "aiPlanning": {
     "enabled": true,
     "codex": {
-      "model": "5.6sol",
+      "model": "gpt-5.6-sol",
       "apiBaseUrl": "https://api.openai.com/v1",
       "apiKey": "",
       "reasoningEffort": "high",
