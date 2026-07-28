@@ -8,6 +8,9 @@ export function listAiPlans(projectId, filters = {}) {
   if (filters.status) {
     query.set('status', filters.status);
   }
+  if (filters.recordId) {
+    query.set('recordId', filters.recordId);
+  }
   if (filters.search) {
     query.set('search', filters.search);
   }
@@ -21,12 +24,36 @@ export function fetchAiPlan(projectId, submissionId) {
   );
 }
 
-export function adoptAiPlan(projectId, submissionId) {
+export function approveAiPlan(projectId, submissionId) {
   return requestJson(
-    `/api/projects/${encodeURIComponent(projectId)}/ai-plans/${encodeURIComponent(submissionId)}/adopt`,
+    `/api/projects/${encodeURIComponent(projectId)}/ai-plans/${encodeURIComponent(submissionId)}/approve`,
     { method: 'POST' },
   );
 }
+
+export function rejectAiPlan(projectId, submissionId, reason) {
+  return requestJson(
+    `/api/projects/${encodeURIComponent(projectId)}/ai-plans/${encodeURIComponent(submissionId)}/reject`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    },
+  );
+}
+
+export function createAiPlanRevision(projectId, submissionId, payload) {
+  return requestJson(
+    `/api/projects/${encodeURIComponent(projectId)}/ai-plans/${encodeURIComponent(submissionId)}/revisions`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export const adoptAiPlan = approveAiPlan;
 
 export function withdrawAiPlan(projectId, submissionId) {
   return requestJson(

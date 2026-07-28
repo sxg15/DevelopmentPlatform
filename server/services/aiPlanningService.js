@@ -81,7 +81,14 @@ export function createAiPlanningService({
     }).map(serializeAiConversation);
   }
 
-  function createConversation({ user, projectId, toolId, recordId, title }) {
+  function createConversation({
+    user,
+    projectId,
+    toolId,
+    recordId,
+    title,
+    clientMutationId = '',
+  }) {
     assertAvailable();
     assertSupportedTool(toolId);
     resolveAiProjectWorkspace(config, projectId);
@@ -92,6 +99,7 @@ export function createAiPlanningService({
       toolId,
       recordId,
       title,
+      clientMutationId,
     }));
   }
 
@@ -610,6 +618,7 @@ export function createAiPlanningService({
     projectId,
     allowedToolIds,
     toolId,
+    recordId,
     search,
     status,
   }) {
@@ -617,6 +626,7 @@ export function createAiPlanningService({
       projectId,
       allowedToolIds,
       toolId,
+      recordId,
       search,
       status,
     }).map((submission) => serializeSubmission(submission, user, { includeMarkdown: false }));
@@ -635,7 +645,35 @@ export function createAiPlanningService({
     return serializeSubmission(submission, user, { includeMarkdown: true });
   }
 
-  function adoptSubmission({ user, submissionId, projectId, allowedToolIds }) {
+  function getSubmissionRevisions({ user, submissionId, projectId, allowedToolIds }) {
+    const current = repository.getSubmission(submissionId);
+    const allowed = new Set(allowedToolIds || []);
+    if (
+      !current
+      || current.projectId !== projectId
+      || !allowed.has(current.toolId)
+    ) {
+      return [];
+    }
+    return repository.listSubmissionRevisions(current.rootSubmissionId)
+      .map((submission) => serializeSubmission(submission, user, { includeMarkdown: false }));
+  }
+
+  function getSubmissionEvents({ submissionId, projectId, allowedToolIds }) {
+    const current = repository.getSubmission(submissionId);
+    const allowed = new Set(allowedToolIds || []);
+    if (
+      !current
+      || current.projectId !== projectId
+      || !allowed.has(current.toolId)
+    ) {
+      return [];
+    }
+    return repository.listSubmissionEvents(current.rootSubmissionId)
+      .map(({ actorOpenId: _actorOpenId, ...event }) => event);
+  }
+
+  function approveSubmission({ user, submissionId, projectId, allowedToolIds }) {
     const current = repository.getSubmission(submissionId);
     const allowed = new Set(allowedToolIds || []);
     if (
@@ -645,7 +683,95 @@ export function createAiPlanningService({
     ) {
       return null;
     }
-    const submission = repository.adoptSubmission(submissionId);
+    const submission = repository.approveSubmission(submissionId, {
+      openId: getUserOpenId(user),
+      name: getUserName(user),
+    });
+    return submission
+      ? serializeSubmission(submission, user, { includeMarkdown: true })
+      : null;
+  }
+
+  function adoptSubmission(options) {
+    return approveSubmission(options);
+  }
+
+  function rejectSubmission({
+    user,
+    submissionId,
+    projectId,
+    allowedToolIds,
+    reason,
+  }) {
+    const normalizedReason = String(reason || '').trim();
+    if (!normalizedReason) {
+      throw createServiceError('拒绝原因不能为空', 400);
+    }
+    if (normalizedReason.length > 2000) {
+      throw createServiceError('拒绝原因不能超过 2000 字', 400);
+    }
+    const current = repository.getSubmission(submissionId);
+    const allowed = new Set(allowedToolIds || []);
+    if (
+      !current
+      || current.projectId !== projectId
+      || !allowed.has(current.toolId)
+    ) {
+      return null;
+    }
+    const submission = repository.rejectSubmission(submissionId, {
+      openId: getUserOpenId(user),
+      name: getUserName(user),
+    }, normalizedReason);
+    return submission
+      ? serializeSubmission(submission, user, { includeMarkdown: true })
+      : null;
+  }
+
+  function createReviewRevision({
+    user,
+    submissionId,
+    projectId,
+    allowedToolIds,
+    title,
+    summary,
+    markdown,
+  }) {
+    const current = repository.getSubmission(submissionId);
+    const allowed = new Set(allowedToolIds || []);
+    if (
+      !current
+      || current.projectId !== projectId
+      || !allowed.has(current.toolId)
+    ) {
+      return null;
+    }
+    const normalizedTitle = String(title || '').trim();
+    const normalizedSummary = String(summary || '').trim();
+    const normalizedMarkdown = String(markdown || '').trim();
+    if (!normalizedTitle || !normalizedMarkdown) {
+      throw createServiceError('方案标题和 Markdown 不能为空', 400);
+    }
+    if (normalizedTitle.length > 200) {
+      throw createServiceError('方案标题不能超过 200 字', 400);
+    }
+    if (normalizedSummary.length > 2000) {
+      throw createServiceError('方案摘要不能超过 2000 字', 400);
+    }
+    if (normalizedMarkdown.length > 200_000) {
+      throw createServiceError('方案 Markdown 不能超过 200000 字', 400);
+    }
+    const workspace = resolveAiProjectWorkspace(config, current.projectId);
+    const submission = repository.createReviewRevision({
+      submissionId,
+      reviewer: {
+        openId: getUserOpenId(user),
+        name: getUserName(user),
+      },
+      title: redactWorkspacePaths(normalizedTitle, workspace),
+      summary: redactWorkspacePaths(normalizedSummary, workspace),
+      markdown: redactWorkspacePaths(normalizedMarkdown, workspace),
+    });
     return submission
       ? serializeSubmission(submission, user, { includeMarkdown: true })
       : null;
@@ -661,7 +787,11 @@ export function createAiPlanningService({
     ) {
       return null;
     }
-    const submission = repository.withdrawSubmission(submissionId, getUserOpenId(user));
+    const submission = repository.withdrawSubmission(
+      submissionId,
+      getUserOpenId(user),
+      getUserName(user),
+    );
     return submission
       ? serializeSubmission(submission, user, { includeMarkdown: true })
       : null;
@@ -681,16 +811,26 @@ export function createAiPlanningService({
 
   return {
     adoptSubmission,
+    approveSubmission,
     answerQuestions,
     archiveConversation,
     cancelRun,
     createConversation,
+    createReviewRevision,
     createSubmission,
     getConversation,
     getSubmission,
+    getSubmissionEvents,
+    getSubmissionRevisions,
     isAvailable: () => Boolean(config.enabled && codexClient),
     listConversations,
     listSubmissions,
+    listPendingSubmissionsForWorkItem: (options) => repository
+      .listPendingSubmissionsForWorkItem(options)
+      .map((submission) => serializeSubmission(submission, null, { includeMarkdown: false })),
+    countPendingSubmissionsForWorkItem: (options) => repository
+      .countPendingSubmissionsForWorkItem(options),
+    rejectSubmission,
     sendMessage,
     subscribe,
     withdrawSubmission,
@@ -1074,6 +1214,9 @@ function serializeSubmission(submission, user, { includeMarkdown }) {
   const result = {
     ...submission,
     authorOpenId: undefined,
+    revisionAuthorOpenId: undefined,
+    reviewedByOpenId: undefined,
+    conversationId: undefined,
     isOwnPlan: Boolean(openId && submission.authorOpenId === openId),
   };
   if (!includeMarkdown) {

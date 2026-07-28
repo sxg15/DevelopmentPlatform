@@ -83,6 +83,19 @@ Treat shared definitions as the canonical frontend/backend contract.
 - If AI planning is globally enabled but the current project lacks a model
   connection or code-root mapping, requirement and Bug details retain a disabled
   AI status action so the configuration issue is visible.
+- A `研发` project member who submits a requirement or Bug receives an optional
+  post-submit AI planning prompt. The AI action opens a private conversation with
+  an unsent default request; declining preserves the normal submission result.
+- Submitted AI plans remain bound to the original project, tool, record ID,
+  business ID, and title snapshot. Shared plans use immutable review revisions:
+  current assignees plus development/global admins may approve, reject, or edit;
+  reviewer edits return to pending review and rejection requires a reason.
+- Keep one approved plan per work item. Replacing it marks the former approved
+  plan superseded while preserving its Markdown, revision chain, and audit events.
+- New plan review cards target current assignees, or development super-admins for
+  unassigned items. Newly assigned handlers receive a single pending-plan notice
+  or aggregate notice, and review/edit/replacement outcomes notify the original
+  plan submitter even when reviewer and submitter are the same user.
 
 ## Change Sequence
 

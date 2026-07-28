@@ -115,6 +115,17 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - When AI is globally enabled but the selected requirement/Bug project is not
   runnable, show a disabled `AI 计划未配置` action with the server-provided
   non-sensitive reason instead of silently removing the action.
+- After a user whose project role includes `研发` submits a requirement or Bug,
+  offer `不了` and an emphasized `前往 AI 生成计划` action when AI planning is
+  runnable. Opening it creates or selects an idempotent private conversation and
+  prefills an unsent prompt; never start Codex until the user sends the prompt.
+- The shared AI plan library supports `ai-plan` direct targets, status filters,
+  original-work-item navigation, immutable revision history, audit events, and
+  Markdown download. Render approve/reject/edit controls from server permissions,
+  require a rejection reason, and create a new revision for reviewer edits.
+- Distinguish successful plan mutations from Feishu notification outcomes. State
+  whether notification delivery is disabled, no reviewer exists, or no new outbox
+  job was created instead of claiming a card was sent.
 
 ## Validate
 

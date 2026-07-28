@@ -48,6 +48,7 @@ export function AiPlanningWorkspace({
   record,
   initialConversationId = '',
   initialFocus = '',
+  autoCreateRequest = null,
   onClose,
 }) {
   const [state, setState] = useState({
@@ -67,6 +68,8 @@ export function AiPlanningWorkspace({
   const questionFocusRef = useRef(null);
   const planFocusRef = useRef(null);
   const failureFocusRef = useRef(null);
+  const composerRef = useRef(null);
+  const processedAutoCreateRef = useRef('');
   const selectedConversation = conversation?.id === selectedId ? conversation : null;
   const isRunning = ['queued', 'running'].includes(selectedConversation?.status);
   const isAwaitingUser = selectedConversation?.status === 'awaiting_user';
@@ -96,6 +99,27 @@ export function AiPlanningWorkspace({
       active = false;
     };
   }, [initialConversationId, projectId, record.recordId, toolConfig.toolId]);
+
+  useEffect(() => {
+    const requestKey = String(autoCreateRequest?.key || '').trim();
+    if (
+      state.status !== 'ready'
+      || !requestKey
+      || processedAutoCreateRef.current === requestKey
+    ) {
+      return;
+    }
+    processedAutoCreateRef.current = requestKey;
+    void handleCreateConversation({
+      clientMutationId: autoCreateRequest.clientMutationId,
+      initialComposer: autoCreateRequest.defaultPrompt,
+    });
+  }, [
+    autoCreateRequest?.clientMutationId,
+    autoCreateRequest?.defaultPrompt,
+    autoCreateRequest?.key,
+    state.status,
+  ]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -231,7 +255,10 @@ export function AiPlanningWorkspace({
     };
   }, [isRunning, selectedId]);
 
-  async function handleCreateConversation() {
+  async function handleCreateConversation({
+    clientMutationId = '',
+    initialComposer = '',
+  } = {}) {
     if (actionStatus.type === 'loading') {
       return;
     }
@@ -242,6 +269,7 @@ export function AiPlanningWorkspace({
         toolConfig.toolId,
         record.recordId,
         `AI计划：${record.title || toolConfig.unnamedTitle}`,
+        clientMutationId,
       );
       const next = payload.conversation;
       setState((current) => ({
@@ -251,6 +279,16 @@ export function AiPlanningWorkspace({
       }));
       setSelectedId(next.id);
       setConversation(next);
+      if (initialComposer) {
+        setComposer(initialComposer);
+        setTimeout(() => {
+          composerRef.current?.focus();
+          composerRef.current?.setSelectionRange?.(
+            initialComposer.length,
+            initialComposer.length,
+          );
+        }, 0);
+      }
       setActionStatus({ type: 'idle', message: '' });
     } catch (error) {
       setActionStatus({ type: 'error', message: formatAiError(error) });
@@ -386,7 +424,7 @@ export function AiPlanningWorkspace({
                 title="新建对话"
                 aria-label="新建对话"
                 disabled={actionStatus.type === 'loading'}
-                onClick={handleCreateConversation}
+                onClick={() => handleCreateConversation()}
               >
                 <MessageSquarePlus aria-hidden="true" />
               </button>
@@ -414,7 +452,12 @@ export function AiPlanningWorkspace({
                 <Bot aria-hidden="true" />
                 <strong>创建一条私有对话</strong>
                 <span>Codex 会只读检查已配置的项目目录，并围绕当前工作项生成计划。</span>
-                <button type="button" className="ai-primary-button" onClick={handleCreateConversation}>
+                {actionStatus.message ? (
+                  <p className={`ai-inline-status is-${actionStatus.type}`}>
+                    {actionStatus.message}
+                  </p>
+                ) : null}
+                <button type="button" className="ai-primary-button" onClick={() => handleCreateConversation()}>
                   <MessageSquarePlus aria-hidden="true" />
                   新建对话
                 </button>
@@ -517,6 +560,7 @@ export function AiPlanningWorkspace({
                 ) : null}
                 <form className="ai-composer" onSubmit={handleSend}>
                   <textarea
+                    ref={composerRef}
                     className="allow-text-select"
                     value={composer}
                     maxLength={20_000}
@@ -554,9 +598,21 @@ export function AiPlanningWorkspace({
           <AiPlanSubmitDialog
             conversation={selectedConversation}
             onClose={() => setSubmitOpen(false)}
-            onSubmitted={() => {
+            onSubmitted={(payload) => {
               setSubmitOpen(false);
-              setActionStatus({ type: 'success', message: '方案已提交到项目 AI 方案库' });
+              const queuedCount = Number(payload?.notificationQueuedCount || 0);
+              const recipientCount = Number(payload?.reviewRecipientCount || 0);
+              const notificationsEnabled = payload?.notificationDeliveryEnabled !== false;
+              setActionStatus({
+                type: queuedCount > 0 ? 'success' : 'warning',
+                message: queuedCount > 0
+                  ? `方案已提交到项目 AI 方案库，已安排通知 ${queuedCount} 位审核人`
+                  : recipientCount < 1
+                    ? '方案已提交到项目 AI 方案库，但当前工作项没有可通知的处理人或研发超级管理员'
+                    : !notificationsEnabled
+                      ? '方案已提交到项目 AI 方案库，当前未启用飞书 AI 计划通知'
+                      : '方案已提交到项目 AI 方案库，未新增飞书通知任务',
+              });
             }}
           />
         ) : null}
@@ -723,13 +779,13 @@ function AiPlanSubmitDialog({ conversation, onClose, onSubmitted }) {
     }
     setStatus({ type: 'loading', message: '正在提交方案' });
     try {
-      await submitAiPlan(conversation.id, {
+      const payload = await submitAiPlan(conversation.id, {
         title: title.trim(),
         summary: summary.trim(),
         markdown: markdown.trim(),
         sourceReferences: draft.sourceReferences || [],
       });
-      onSubmitted?.();
+      onSubmitted?.(payload);
     } catch (error) {
       setStatus({ type: 'error', message: formatAiError(error) });
     }

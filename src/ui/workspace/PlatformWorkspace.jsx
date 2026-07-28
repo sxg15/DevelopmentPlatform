@@ -409,6 +409,41 @@ function CacheStateNotice({ message }) {
   return <p className="cache-state-notice" role="status">{message}</p>;
 }
 
+function AiPlanningOfferDialog({ offer, onDecline, onOpen }) {
+  return (
+    <div className="ai-offer-backdrop" role="presentation">
+      <section
+        className="ai-offer-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${offer.itemLabel}已提交`}
+      >
+        <div className="ai-offer-icon" aria-hidden="true">
+          <Bot />
+        </div>
+        <div className="ai-offer-content">
+          <h3>{offer.itemLabel}已提交</h3>
+          <p>
+            是否让 AI 结合当前工作项、附件和项目代码生成一份实现方案，帮助处理人更快理解、评估并推进处理？
+          </p>
+          {offer.submitNotice?.type === 'warning' ? (
+            <span className="ai-offer-warning">{offer.submitNotice.message}</span>
+          ) : null}
+        </div>
+        <div className="ai-offer-actions">
+          <button type="button" className="ai-secondary-button" onClick={onDecline}>
+            不了
+          </button>
+          <button type="button" className="ai-primary-button ai-offer-primary" onClick={onOpen}>
+            <Bot aria-hidden="true" />
+            前往 AI 生成计划
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function ProjectWorkspace({
   project,
   user,
@@ -427,6 +462,8 @@ function ProjectWorkspace({
   const [selectedWorkItemId, setSelectedWorkItemId] = useState('');
   const [selectedVersionId, setSelectedVersionId] = useState('');
   const [highlightCommentId, setHighlightCommentId] = useState('');
+  const [aiPlanningOffer, setAiPlanningOffer] = useState(null);
+  const [aiPlanningLaunch, setAiPlanningLaunch] = useState(null);
   const processedDirectKeyRef = useRef('');
   const processedRealtimeEventRef = useRef('');
   const visibleTools = getProjectTools(project);
@@ -448,6 +485,8 @@ function ProjectWorkspace({
     setSelectedWorkItemId('');
     setSelectedVersionId('');
     setHighlightCommentId('');
+    setAiPlanningOffer(null);
+    setAiPlanningLaunch(null);
     processedDirectKeyRef.current = '';
     processedRealtimeEventRef.current = '';
   }, [cacheUserKey, project.recordId]);
@@ -818,7 +857,22 @@ function ProjectWorkspace({
               />
             ) : null}
             {activeToolId === 'aiPlans' ? (
-              <AiPlanLibrary project={project} />
+              <AiPlanLibrary
+                project={project}
+                directTarget={
+                  directTarget?.type === 'ai-plan'
+                  && directTarget.projectId === String(project.projectId || '')
+                    ? directTarget
+                    : null
+                }
+                onOpenWorkItem={(toolId, recordId) => {
+                  const toolConfig = getWorkItemToolConfig(toolId);
+                  if (toolConfig) {
+                    setActiveToolId(toolId);
+                    void loadWorkItems(toolConfig, { recordId });
+                  }
+                }}
+              />
             ) : null}
             {activeWorkItemConfig ? (
               <RequirementsStatus
@@ -867,6 +921,12 @@ function ProjectWorkspace({
                     ? directTarget
                     : null
                 }
+                aiLaunchRequest={
+                  aiPlanningLaunch?.toolId === activeWorkItemConfig.toolId
+                    ? aiPlanningLaunch
+                    : null
+                }
+                onAiLaunchConsumed={() => setAiPlanningLaunch(null)}
                 onWorkItemCreated={(payload) => {
                   const createdItem = payload.item || payload.requirement;
                   updateWorkItemState(
@@ -876,18 +936,35 @@ function ProjectWorkspace({
                   if (createdItem) {
                     setSelectedWorkItemId(getRequirementStableId(createdItem));
                   }
-                  if (payload.submitNotice?.message) {
-                    onDirectNotice?.(payload.submitNotice);
-                    return;
-                  }
-
                   const notificationCount = (payload.notificationResults || []).filter((item) => item.ok).length;
-                  if (notificationCount > 0) {
-                    const targetLabel = getAssignmentNotificationTargetLabel(payload.assignmentEscalated);
-                    onDirectNotice?.({
-                      type: 'success',
-                      message: `${activeWorkItemConfig.itemLabel}已提交，已通知 ${notificationCount} 个${targetLabel}`,
+                  const targetLabel = getAssignmentNotificationTargetLabel(payload.assignmentEscalated);
+                  const submitNotice = payload.submitNotice?.message
+                    ? payload.submitNotice
+                    : {
+                        type: 'success',
+                        message: notificationCount > 0
+                          ? `${activeWorkItemConfig.itemLabel}已提交，已通知 ${notificationCount} 个${targetLabel}`
+                          : `${activeWorkItemConfig.itemLabel}已提交`,
+                      };
+                  const shouldOfferAiPlanning = Boolean(
+                    createdItem
+                    && ['requirements', 'bugs'].includes(activeWorkItemConfig.toolId)
+                    && Array.isArray(project.departments)
+                    && project.departments.includes('研发')
+                    && project.aiPlanning?.enabled
+                    && project.aiPlanning?.supportedToolIds?.includes(activeWorkItemConfig.toolId)
+                    && !project.aiPlanning?.unavailableReason
+                  );
+                  if (shouldOfferAiPlanning) {
+                    setAiPlanningOffer({
+                      toolId: activeWorkItemConfig.toolId,
+                      itemLabel: activeWorkItemConfig.itemLabel,
+                      recordId: createdItem.recordId,
+                      title: createdItem.title || activeWorkItemConfig.unnamedTitle,
+                      submitNotice,
                     });
+                  } else {
+                    onDirectNotice?.(submitNotice);
                   }
                 }}
                 onRequirementUpdated={(requirement) => handleWorkItemUpdated(activeWorkItemConfig, requirement)}
@@ -904,6 +981,27 @@ function ProjectWorkspace({
           </div>
         </section>
       </div>
+      {aiPlanningOffer ? (
+        <AiPlanningOfferDialog
+          offer={aiPlanningOffer}
+          onDecline={() => {
+            onDirectNotice?.(aiPlanningOffer.submitNotice);
+            setAiPlanningOffer(null);
+          }}
+          onOpen={() => {
+            const actionLabel = aiPlanningOffer.toolId === 'bugs' ? '修复' : '实现';
+            onDirectNotice?.(aiPlanningOffer.submitNotice);
+            setAiPlanningLaunch({
+              key: `ai-offer-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+              toolId: aiPlanningOffer.toolId,
+              recordId: aiPlanningOffer.recordId,
+              clientMutationId: `ai-offer-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`,
+              defaultPrompt: `请结合当前${aiPlanningOffer.itemLabel}、附件和项目代码，生成一份可执行的${actionLabel}计划；如果存在关键不确定项，请先向我提问。`,
+            });
+            setAiPlanningOffer(null);
+          }}
+        />
+      ) : null}
     </section>
   );
 }
@@ -930,6 +1028,8 @@ function RequirementsStatus({
   aiPlanningEnabled,
   aiPlanningUnavailableReason,
   aiDirectTarget,
+  aiLaunchRequest,
+  onAiLaunchConsumed,
   onWorkItemCreated,
   onRequirementUpdated,
   onRequirementDeleted,
@@ -1017,6 +1117,8 @@ function RequirementsStatus({
         aiPlanningEnabled={aiPlanningEnabled}
         aiPlanningUnavailableReason={aiPlanningUnavailableReason}
         aiDirectTarget={aiDirectTarget}
+        aiLaunchRequest={aiLaunchRequest}
+        onAiLaunchConsumed={onAiLaunchConsumed}
         onBack={onRequirementBack}
       />
     );
@@ -2432,6 +2534,8 @@ function BitableRecordDetail({
   aiPlanningEnabled,
   aiPlanningUnavailableReason,
   aiDirectTarget,
+  aiLaunchRequest,
+  onAiLaunchConsumed,
   onRequirementUpdated,
   onRequirementDeleted,
   onBack,
@@ -2462,6 +2566,7 @@ function BitableRecordDetail({
   const [editStatus, setEditStatus] = useState({ type: 'idle', message: '' });
   const [activeAction, setActiveAction] = useState('comments');
   const [aiPlanningOpen, setAiPlanningOpen] = useState(false);
+  const [aiAutoCreateRequest, setAiAutoCreateRequest] = useState(null);
 
   useEffect(() => {
     document.documentElement.classList.add('requirement-detail-scroll-lock');
@@ -2488,6 +2593,22 @@ function BitableRecordDetail({
     aiDirectTarget?.key,
     aiDirectTarget?.recordId,
     aiDirectTarget?.type,
+    record.recordId,
+  ]);
+
+  useEffect(() => {
+    if (
+      aiLaunchRequest?.key
+      && String(aiLaunchRequest.recordId || '') === String(record.recordId || '')
+    ) {
+      setAiAutoCreateRequest(aiLaunchRequest);
+      setAiPlanningOpen(true);
+      onAiLaunchConsumed?.();
+    }
+  }, [
+    aiLaunchRequest?.key,
+    aiLaunchRequest?.recordId,
+    onAiLaunchConsumed,
     record.recordId,
   ]);
 
@@ -2600,7 +2721,11 @@ function BitableRecordDetail({
           record={record}
           initialConversationId={aiDirectTarget?.conversationId || ''}
           initialFocus={aiDirectTarget?.focus || ''}
-          onClose={() => setAiPlanningOpen(false)}
+          autoCreateRequest={aiAutoCreateRequest}
+          onClose={() => {
+            setAiPlanningOpen(false);
+            setAiAutoCreateRequest(null);
+          }}
         />
       ) : null}
 
@@ -3869,6 +3994,7 @@ function parseDirectTargetFromLocation() {
       recordId: String(url.searchParams.get('recordId') || '').trim(),
       commentId: String(url.searchParams.get('commentId') || '').trim(),
       conversationId: String(url.searchParams.get('conversationId') || '').trim(),
+      submissionId: String(url.searchParams.get('submissionId') || '').trim(),
       focus: String(url.searchParams.get('focus') || '').trim(),
     };
 
@@ -3881,6 +4007,7 @@ function parseDirectTargetFromLocation() {
         target.recordId,
         target.commentId,
         target.conversationId,
+        target.submissionId,
         target.focus,
       ].join('|'),
     };
@@ -3901,6 +4028,10 @@ function getDefaultDirectToolId(targetType) {
 
   if (direct === 'ai-conversation') {
     return '';
+  }
+
+  if (direct === 'ai-plan') {
+    return 'aiPlans';
   }
 
   if (direct === 'feedback-detail' || direct === 'feedback-comment') {

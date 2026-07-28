@@ -141,6 +141,23 @@ Read `AGENTS.md`, then locate the owning layer.
   submitted Markdown before persistence or sharing.
 - Derive `aiPlans` visibility from requirement/Bug access plus configured project
   roots; do not add it to the Feishu department tool matrix.
+- Store shared AI plans as immutable revision chains with
+  `pending_review`, `approved`, `rejected`, `withdrawn`, and `superseded`
+  statuses. Preserve legacy candidate/adopted data during migration, keep one
+  pending revision per chain, and keep at most one approved plan per work item.
+- Resolve AI plan review permission from the current work-item assignees on every
+  mutation. Current assignees, project development super-admins, and global
+  super-admins may approve, reject, or create an edited revision; deleted work
+  items remain reviewable only by the administrator roles.
+- Serialize approve, reject, and reviewer-edit mutations by
+  project/tool/record. Reviewer edits create a new immutable pending revision,
+  rejection requires a reason, and approving a replacement supersedes the
+  previously approved plan without deleting its history.
+- Notify current assignees when a plan is submitted, or development super-admins
+  when the work item is unassigned. Newly added assignees receive one pending-plan
+  card or one aggregate card, and approval/rejection/edit/replacement outcomes
+  notify the original submitter. Outbox dedupe must report only newly inserted
+  notification jobs.
 
 ## Validate
 

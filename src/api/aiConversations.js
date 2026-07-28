@@ -4,11 +4,11 @@ export function listAiConversations(projectId, toolId, recordId) {
   return requestJson(buildWorkItemAiUrl(projectId, toolId, recordId));
 }
 
-export function createAiConversation(projectId, toolId, recordId, title) {
+export function createAiConversation(projectId, toolId, recordId, title, clientMutationId = '') {
   return requestJson(buildWorkItemAiUrl(projectId, toolId, recordId), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title }),
+    body: JSON.stringify({ title, clientMutationId }),
   });
 }
 

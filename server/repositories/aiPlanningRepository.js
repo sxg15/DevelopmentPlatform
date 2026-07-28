@@ -33,6 +33,7 @@ export class AiPlanningRepository {
         title TEXT NOT NULL,
         status TEXT NOT NULL,
         version INTEGER NOT NULL DEFAULT 1,
+        client_mutation_id TEXT NOT NULL DEFAULT '',
         codex_thread_id TEXT NOT NULL DEFAULT '',
         skill_version TEXT NOT NULL DEFAULT '1',
         context_summary TEXT NOT NULL DEFAULT '',
@@ -117,6 +118,7 @@ export class AiPlanningRepository {
 
       CREATE TABLE IF NOT EXISTS plan_submissions (
         id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL DEFAULT '',
         project_id TEXT NOT NULL,
         tool_id TEXT NOT NULL,
         record_id TEXT NOT NULL,
@@ -125,23 +127,43 @@ export class AiPlanningRepository {
         project_name TEXT NOT NULL DEFAULT '',
         author_open_id TEXT NOT NULL,
         author_name TEXT NOT NULL,
+        revision_author_open_id TEXT NOT NULL DEFAULT '',
+        revision_author_name TEXT NOT NULL DEFAULT '',
         title TEXT NOT NULL,
         summary TEXT NOT NULL,
         markdown TEXT NOT NULL,
         source_references_json TEXT NOT NULL,
         revision INTEGER NOT NULL,
         parent_submission_id TEXT NOT NULL DEFAULT '',
+        root_submission_id TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL,
         submitted_at TEXT NOT NULL,
-        withdrawn_at TEXT
+        withdrawn_at TEXT,
+        reviewed_by_open_id TEXT NOT NULL DEFAULT '',
+        reviewed_by_name TEXT NOT NULL DEFAULT '',
+        reviewed_at TEXT,
+        review_reason TEXT NOT NULL DEFAULT '',
+        superseded_by_submission_id TEXT NOT NULL DEFAULT '',
+        superseded_at TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_plan_submissions_project
       ON plan_submissions(project_id, submitted_at DESC);
 
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_submissions_adopted
-      ON plan_submissions(project_id, tool_id, record_id)
-      WHERE status = 'adopted';
+      CREATE TABLE IF NOT EXISTS plan_submission_events (
+        id TEXT PRIMARY KEY,
+        submission_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        actor_open_id TEXT NOT NULL DEFAULT '',
+        actor_name TEXT NOT NULL DEFAULT '',
+        reason TEXT NOT NULL DEFAULT '',
+        related_submission_id TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(submission_id) REFERENCES plan_submissions(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_plan_submission_events_submission
+      ON plan_submission_events(submission_id, created_at);
 
       CREATE TABLE IF NOT EXISTS notification_outbox (
         id TEXT PRIMARY KEY,
@@ -161,9 +183,20 @@ export class AiPlanningRepository {
       CREATE INDEX IF NOT EXISTS idx_notification_outbox_pending
       ON notification_outbox(status, next_attempt_at, created_at);
     `);
+    ensureColumn(this.database, 'conversations', 'client_mutation_id', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'plan_submissions', 'conversation_id', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.database, 'plan_submissions', 'work_item_id', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.database, 'plan_submissions', 'work_item_title', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.database, 'plan_submissions', 'project_name', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'plan_submissions', 'revision_author_open_id', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'plan_submissions', 'revision_author_name', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'plan_submissions', 'root_submission_id', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'plan_submissions', 'reviewed_by_open_id', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'plan_submissions', 'reviewed_by_name', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'plan_submissions', 'reviewed_at', 'TEXT');
+    ensureColumn(this.database, 'plan_submissions', 'review_reason', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'plan_submissions', 'superseded_by_submission_id', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'plan_submissions', 'superseded_at', 'TEXT');
     ensureColumn(this.database, 'runs', 'progress_stage', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.database, 'runs', 'progress_message', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.database, 'runs', 'progress_updated_at', "TEXT NOT NULL DEFAULT ''");
@@ -172,6 +205,7 @@ export class AiPlanningRepository {
     ensureColumn(this.database, 'messages', 'kind', "TEXT NOT NULL DEFAULT 'text'");
     ensureColumn(this.database, 'messages', 'payload_json', "TEXT NOT NULL DEFAULT ''");
 
+    this.migrateAiPlanReviewSchema();
     this.recoverInterruptedRuns();
   }
 
@@ -186,14 +220,32 @@ export class AiPlanningRepository {
     toolId,
     recordId,
     title,
+    clientMutationId = '',
   }) {
+    const normalizedMutationId = String(clientMutationId || '').trim().slice(0, 100);
+    if (normalizedMutationId) {
+      const existing = this.database.prepare(`
+        SELECT * FROM conversations
+        WHERE owner_open_id = ? AND client_mutation_id = ?
+      `).get(ownerOpenId, normalizedMutationId);
+      if (existing) {
+        if (
+          existing.project_id !== projectId
+          || existing.tool_id !== toolId
+          || existing.record_id !== recordId
+        ) {
+          throw new Error('对话幂等键已用于其他工作项');
+        }
+        return this.getConversation(existing.id, ownerOpenId);
+      }
+    }
     const now = new Date().toISOString();
     const id = crypto.randomUUID();
     this.database.prepare(`
       INSERT INTO conversations (
         id, owner_open_id, owner_name, project_id, tool_id, record_id,
-        title, status, version, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        title, status, version, client_mutation_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
     `).run(
       id,
       ownerOpenId,
@@ -203,6 +255,7 @@ export class AiPlanningRepository {
       recordId,
       String(title || '新的 AI 计划').slice(0, 120),
       AI_CONVERSATION_STATUSES.IDLE,
+      normalizedMutationId,
       now,
       now,
     );
@@ -731,28 +784,53 @@ export class AiPlanningRepository {
         return null;
       }
 
-      const previous = this.database.prepare(`
-        SELECT id, revision FROM plan_submissions
-        WHERE project_id = ? AND tool_id = ? AND record_id = ? AND author_open_id = ?
+      let previous = this.database.prepare(`
+        SELECT * FROM plan_submissions
+        WHERE conversation_id = ?
         ORDER BY revision DESC LIMIT 1
-      `).get(
-        conversation.projectId,
-        conversation.toolId,
-        conversation.recordId,
-        ownerOpenId,
-      );
+      `).get(conversationId);
+      if (!previous) {
+        previous = this.database.prepare(`
+          SELECT * FROM plan_submissions
+          WHERE conversation_id = ''
+            AND project_id = ?
+            AND tool_id = ?
+            AND record_id = ?
+            AND author_open_id = ?
+          ORDER BY revision DESC, submitted_at DESC
+          LIMIT 1
+        `).get(
+          conversation.projectId,
+          conversation.toolId,
+          conversation.recordId,
+          ownerOpenId,
+        );
+        if (previous) {
+          this.database.prepare(`
+            UPDATE plan_submissions
+            SET conversation_id = ?
+            WHERE root_submission_id = ? AND conversation_id = ''
+          `).run(conversationId, previous.root_submission_id || previous.id);
+        }
+      }
       const id = crypto.randomUUID();
       const revision = Number(previous?.revision || 0) + 1;
+      const rootSubmissionId = previous?.root_submission_id || previous?.id || id;
       const now = new Date().toISOString();
+      if (previous?.status === AI_PLAN_STATUSES.PENDING_REVIEW) {
+        this.markSubmissionSuperseded(previous.id, id, now);
+      }
       this.database.prepare(`
         INSERT INTO plan_submissions (
-          id, project_id, tool_id, record_id, work_item_id, work_item_title,
-          project_name, author_open_id, author_name,
+          id, conversation_id, project_id, tool_id, record_id, work_item_id, work_item_title,
+          project_name, author_open_id, author_name, revision_author_open_id,
+          revision_author_name,
           title, summary, markdown, source_references_json, revision,
-          parent_submission_id, status, submitted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          parent_submission_id, root_submission_id, status, submitted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
+        conversationId,
         conversation.projectId,
         conversation.toolId,
         conversation.recordId,
@@ -761,20 +839,38 @@ export class AiPlanningRepository {
         String(projectName || '').slice(0, 500),
         ownerOpenId,
         conversation.ownerName,
+        ownerOpenId,
+        conversation.ownerName,
         String(title || '未命名方案').slice(0, 200),
         String(summary || '').slice(0, 2000),
         String(markdown || '').slice(0, 200000),
         JSON.stringify(normalizeAiPlanSourceReferences(sourceReferences)),
         revision,
         previous?.id || '',
-        AI_PLAN_STATUSES.CANDIDATE,
+        rootSubmissionId,
+        AI_PLAN_STATUSES.PENDING_REVIEW,
         now,
       );
+      this.insertSubmissionEvent({
+        submissionId: id,
+        eventType: previous ? 'revision_submitted' : 'submitted',
+        actorOpenId: ownerOpenId,
+        actorName: conversation.ownerName,
+        relatedSubmissionId: previous?.id || '',
+        createdAt: now,
+      });
       return this.getSubmission(id);
     });
   }
 
-  listSubmissions({ projectId, allowedToolIds, toolId = '', search = '', status = '' }) {
+  listSubmissions({
+    projectId,
+    allowedToolIds,
+    toolId = '',
+    recordId = '',
+    search = '',
+    status = '',
+  }) {
     const tools = [...new Set(allowedToolIds || [])].filter(Boolean);
     if (tools.length === 0) {
       return [];
@@ -789,12 +885,16 @@ export class AiPlanningRepository {
       where.push('tool_id = ?');
       params.push(toolId);
     }
-    if (status) {
+    if (recordId) {
+      where.push('record_id = ?');
+      params.push(recordId);
+    }
+    if (status && status !== 'all') {
       where.push('status = ?');
       params.push(status);
-    } else {
-      where.push('status <> ?');
-      params.push(AI_PLAN_STATUSES.WITHDRAWN);
+    } else if (!status) {
+      where.push('status IN (?, ?)');
+      params.push(AI_PLAN_STATUSES.PENDING_REVIEW, AI_PLAN_STATUSES.APPROVED);
     }
     if (search) {
       where.push('(title LIKE ? OR summary LIKE ? OR record_id LIKE ? OR work_item_id LIKE ? OR work_item_title LIKE ? OR author_name LIKE ?)');
@@ -817,41 +917,390 @@ export class AiPlanningRepository {
     return row ? normalizeSubmissionRow(row) : null;
   }
 
-  adoptSubmission(submissionId) {
+  listSubmissionRevisions(rootSubmissionId) {
+    if (!rootSubmissionId) {
+      return [];
+    }
+    return this.database.prepare(`
+      SELECT * FROM plan_submissions
+      WHERE root_submission_id = ?
+      ORDER BY revision DESC, submitted_at DESC
+    `).all(rootSubmissionId).map(normalizeSubmissionRow);
+  }
+
+  listPendingSubmissionsForWorkItem({ projectId, toolId, recordId, limit = 100 }) {
+    return this.database.prepare(`
+      SELECT * FROM plan_submissions
+      WHERE project_id = ? AND tool_id = ? AND record_id = ? AND status = ?
+      ORDER BY submitted_at DESC
+      LIMIT ?
+    `).all(
+      projectId,
+      toolId,
+      recordId,
+      AI_PLAN_STATUSES.PENDING_REVIEW,
+      Math.max(1, Math.min(500, Number(limit) || 100)),
+    ).map(normalizeSubmissionRow);
+  }
+
+  countPendingSubmissionsForWorkItem({ projectId, toolId, recordId }) {
+    return Number(this.database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM plan_submissions
+      WHERE project_id = ? AND tool_id = ? AND record_id = ? AND status = ?
+    `).get(
+      projectId,
+      toolId,
+      recordId,
+      AI_PLAN_STATUSES.PENDING_REVIEW,
+    )?.count || 0);
+  }
+
+  getApprovedSubmissionForWorkItem({ projectId, toolId, recordId }) {
+    const row = this.database.prepare(`
+      SELECT * FROM plan_submissions
+      WHERE project_id = ? AND tool_id = ? AND record_id = ? AND status = ?
+      LIMIT 1
+    `).get(projectId, toolId, recordId, AI_PLAN_STATUSES.APPROVED);
+    return row ? normalizeSubmissionRow(row) : null;
+  }
+
+  approveSubmission(submissionId, reviewer) {
     return this.withTransaction(() => {
       const submission = this.getSubmission(submissionId);
-      if (!submission || submission.status === AI_PLAN_STATUSES.WITHDRAWN) {
+      if (!submission || submission.status !== AI_PLAN_STATUSES.PENDING_REVIEW) {
         return null;
       }
-      this.database.prepare(`
-        UPDATE plan_submissions SET status = ?
-        WHERE project_id = ? AND tool_id = ? AND record_id = ? AND status = ?
-      `).run(
-        AI_PLAN_STATUSES.CANDIDATE,
+      const now = new Date().toISOString();
+      const previousApproved = this.database.prepare(`
+        SELECT id FROM plan_submissions
+        WHERE project_id = ? AND tool_id = ? AND record_id = ? AND status = ? AND id <> ?
+      `).get(
         submission.projectId,
         submission.toolId,
         submission.recordId,
-        AI_PLAN_STATUSES.ADOPTED,
+        AI_PLAN_STATUSES.APPROVED,
+        submissionId,
       );
-      this.database.prepare(`
-        UPDATE plan_submissions SET status = ? WHERE id = ?
-      `).run(AI_PLAN_STATUSES.ADOPTED, submissionId);
+      if (previousApproved?.id) {
+        this.markSubmissionSuperseded(previousApproved.id, submissionId, now);
+      }
+      const result = this.database.prepare(`
+        UPDATE plan_submissions
+        SET status = ?, reviewed_by_open_id = ?, reviewed_by_name = ?,
+            reviewed_at = ?, review_reason = ''
+        WHERE id = ? AND status = ?
+      `).run(
+        AI_PLAN_STATUSES.APPROVED,
+        String(reviewer?.openId || ''),
+        String(reviewer?.name || ''),
+        now,
+        submissionId,
+        AI_PLAN_STATUSES.PENDING_REVIEW,
+      );
+      if (result.changes === 0) {
+        return null;
+      }
+      this.insertSubmissionEvent({
+        submissionId,
+        eventType: 'approved',
+        actorOpenId: reviewer.openId,
+        actorName: reviewer.name,
+        createdAt: now,
+      });
       return this.getSubmission(submissionId);
     });
   }
 
-  withdrawSubmission(submissionId, ownerOpenId) {
+  rejectSubmission(submissionId, reviewer, reason) {
+    return this.withTransaction(() => {
+      const now = new Date().toISOString();
+      const result = this.database.prepare(`
+        UPDATE plan_submissions
+        SET status = ?, reviewed_by_open_id = ?, reviewed_by_name = ?,
+            reviewed_at = ?, review_reason = ?
+        WHERE id = ? AND status = ?
+      `).run(
+        AI_PLAN_STATUSES.REJECTED,
+        String(reviewer?.openId || ''),
+        String(reviewer?.name || ''),
+        now,
+        String(reason || '').slice(0, 2000),
+        submissionId,
+        AI_PLAN_STATUSES.PENDING_REVIEW,
+      );
+      if (result.changes === 0) {
+        return null;
+      }
+      this.insertSubmissionEvent({
+        submissionId,
+        eventType: 'rejected',
+        actorOpenId: reviewer?.openId,
+        actorName: reviewer?.name,
+        reason,
+        createdAt: now,
+      });
+      return this.getSubmission(submissionId);
+    });
+  }
+
+  createReviewRevision({
+    submissionId,
+    reviewer,
+    title,
+    summary,
+    markdown,
+  }) {
+    return this.withTransaction(() => {
+      const parent = this.getSubmission(submissionId);
+      if (!parent || parent.status === AI_PLAN_STATUSES.WITHDRAWN || parent.status === AI_PLAN_STATUSES.SUPERSEDED) {
+        return null;
+      }
+      const latest = this.database.prepare(`
+        SELECT id FROM plan_submissions
+        WHERE root_submission_id = ?
+        ORDER BY revision DESC, submitted_at DESC
+        LIMIT 1
+      `).get(parent.rootSubmissionId);
+      if (latest?.id !== parent.id) {
+        return null;
+      }
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+      if (parent.status === AI_PLAN_STATUSES.PENDING_REVIEW) {
+        this.markSubmissionSuperseded(parent.id, id, now);
+      }
+      this.database.prepare(`
+        INSERT INTO plan_submissions (
+          id, conversation_id, project_id, tool_id, record_id, work_item_id,
+          work_item_title, project_name, author_open_id, author_name,
+          revision_author_open_id, revision_author_name, title, summary, markdown,
+          source_references_json, revision, parent_submission_id,
+          root_submission_id, status, submitted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        parent.conversationId,
+        parent.projectId,
+        parent.toolId,
+        parent.recordId,
+        parent.workItemId,
+        parent.workItemTitle,
+        parent.projectName,
+        parent.authorOpenId,
+        parent.authorName,
+        String(reviewer?.openId || ''),
+        String(reviewer?.name || ''),
+        String(title || '未命名方案').slice(0, 200),
+        String(summary || '').slice(0, 2000),
+        String(markdown || '').slice(0, 200000),
+        JSON.stringify(normalizeAiPlanSourceReferences(parent.sourceReferences)),
+        parent.revision + 1,
+        parent.id,
+        parent.rootSubmissionId,
+        AI_PLAN_STATUSES.PENDING_REVIEW,
+        now,
+      );
+      this.insertSubmissionEvent({
+        submissionId: id,
+        eventType: 'review_revision_created',
+        actorOpenId: reviewer?.openId,
+        actorName: reviewer?.name,
+        relatedSubmissionId: parent.id,
+        createdAt: now,
+      });
+      return this.getSubmission(id);
+    });
+  }
+
+  adoptSubmission(submissionId, reviewer = {}) {
+    return this.approveSubmission(submissionId, reviewer);
+  }
+
+  withdrawSubmission(submissionId, ownerOpenId, ownerName = '') {
+    const now = new Date().toISOString();
     const result = this.database.prepare(`
       UPDATE plan_submissions SET status = ?, withdrawn_at = ?
       WHERE id = ? AND author_open_id = ? AND status = ?
     `).run(
       AI_PLAN_STATUSES.WITHDRAWN,
-      new Date().toISOString(),
+      now,
       submissionId,
       ownerOpenId,
-      AI_PLAN_STATUSES.CANDIDATE,
+      AI_PLAN_STATUSES.PENDING_REVIEW,
     );
-    return result.changes > 0 ? this.getSubmission(submissionId) : null;
+    if (result.changes === 0) {
+      return null;
+    }
+    this.insertSubmissionEvent({
+      submissionId,
+      eventType: 'withdrawn',
+      actorOpenId: ownerOpenId,
+      actorName: ownerName,
+      createdAt: now,
+    });
+    return this.getSubmission(submissionId);
+  }
+
+  markSubmissionSuperseded(submissionId, relatedSubmissionId, createdAt = new Date().toISOString()) {
+    const result = this.database.prepare(`
+      UPDATE plan_submissions
+      SET status = ?, superseded_by_submission_id = ?, superseded_at = ?
+      WHERE id = ? AND status <> ?
+    `).run(
+      AI_PLAN_STATUSES.SUPERSEDED,
+      relatedSubmissionId,
+      createdAt,
+      submissionId,
+      AI_PLAN_STATUSES.SUPERSEDED,
+    );
+    if (result.changes === 0) {
+      return false;
+    }
+    this.insertSubmissionEvent({
+      submissionId,
+      eventType: 'superseded',
+      relatedSubmissionId,
+      createdAt,
+    });
+    return true;
+  }
+
+  insertSubmissionEvent({
+    submissionId,
+    eventType,
+    actorOpenId = '',
+    actorName = '',
+    reason = '',
+    relatedSubmissionId = '',
+    createdAt = new Date().toISOString(),
+  }) {
+    this.database.prepare(`
+      INSERT INTO plan_submission_events (
+        id, submission_id, event_type, actor_open_id, actor_name,
+        reason, related_submission_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      crypto.randomUUID(),
+      submissionId,
+      eventType,
+      String(actorOpenId || '').slice(0, 200),
+      String(actorName || '').slice(0, 200),
+      String(reason || '').slice(0, 2000),
+      String(relatedSubmissionId || '').slice(0, 100),
+      createdAt,
+    );
+  }
+
+  listSubmissionEvents(rootSubmissionId) {
+    if (!rootSubmissionId) {
+      return [];
+    }
+    return this.database.prepare(`
+      SELECT events.*
+      FROM plan_submission_events events
+      INNER JOIN plan_submissions submissions ON submissions.id = events.submission_id
+      WHERE submissions.root_submission_id = ?
+      ORDER BY events.created_at, events.rowid
+    `).all(rootSubmissionId).map((row) => ({
+      id: row.id,
+      submissionId: row.submission_id,
+      eventType: row.event_type,
+      actorOpenId: row.actor_open_id || '',
+      actorName: row.actor_name || '',
+      reason: row.reason || '',
+      relatedSubmissionId: row.related_submission_id || '',
+      createdAt: row.created_at,
+    }));
+  }
+
+  migrateAiPlanReviewSchema() {
+    this.withTransaction(() => {
+      this.database.exec(`
+        DROP INDEX IF EXISTS idx_plan_submissions_adopted;
+        UPDATE plan_submissions SET status = 'pending_review' WHERE status = 'candidate';
+        UPDATE plan_submissions SET status = 'approved' WHERE status = 'adopted';
+        UPDATE plan_submissions
+        SET revision_author_open_id = author_open_id
+        WHERE revision_author_open_id = '';
+        UPDATE plan_submissions
+        SET revision_author_name = author_name
+        WHERE revision_author_name = '';
+        UPDATE plan_submissions
+        SET root_submission_id = id
+        WHERE root_submission_id = '' AND parent_submission_id = '';
+      `);
+      const unresolved = this.database.prepare(`
+        SELECT id, parent_submission_id FROM plan_submissions
+        WHERE root_submission_id = '' AND parent_submission_id <> ''
+      `).all();
+      for (let pass = 0; pass < unresolved.length; pass += 1) {
+        let changed = 0;
+        for (const row of unresolved) {
+          const parent = this.database.prepare(`
+            SELECT root_submission_id FROM plan_submissions WHERE id = ?
+          `).get(row.parent_submission_id);
+          if (!parent?.root_submission_id) {
+            continue;
+          }
+          changed += this.database.prepare(`
+            UPDATE plan_submissions SET root_submission_id = ?
+            WHERE id = ? AND root_submission_id = ''
+          `).run(parent.root_submission_id, row.id).changes;
+        }
+        if (changed === 0) {
+          break;
+        }
+      }
+      const pendingRoots = this.database.prepare(`
+        SELECT root_submission_id
+        FROM plan_submissions
+        WHERE status = 'pending_review'
+        GROUP BY root_submission_id
+        HAVING COUNT(*) > 1
+      `).all();
+      for (const group of pendingRoots) {
+        const revisions = this.database.prepare(`
+          SELECT id FROM plan_submissions
+          WHERE root_submission_id = ? AND status = 'pending_review'
+          ORDER BY revision DESC, submitted_at DESC, id DESC
+        `).all(group.root_submission_id);
+        const latestId = revisions[0]?.id || '';
+        for (const revision of revisions.slice(1)) {
+          this.markSubmissionSuperseded(revision.id, latestId);
+        }
+      }
+      const approvedItems = this.database.prepare(`
+        SELECT project_id, tool_id, record_id
+        FROM plan_submissions
+        WHERE status = 'approved'
+        GROUP BY project_id, tool_id, record_id
+        HAVING COUNT(*) > 1
+      `).all();
+      for (const item of approvedItems) {
+        const submissions = this.database.prepare(`
+          SELECT id FROM plan_submissions
+          WHERE project_id = ? AND tool_id = ? AND record_id = ? AND status = 'approved'
+          ORDER BY COALESCE(reviewed_at, submitted_at) DESC, revision DESC, id DESC
+        `).all(item.project_id, item.tool_id, item.record_id);
+        const latestId = submissions[0]?.id || '';
+        for (const submission of submissions.slice(1)) {
+          this.markSubmissionSuperseded(submission.id, latestId);
+        }
+      }
+      this.database.exec(`
+        UPDATE plan_submissions SET root_submission_id = id WHERE root_submission_id = '';
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_owner_mutation
+        ON conversations(owner_open_id, client_mutation_id)
+        WHERE client_mutation_id <> '';
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_submissions_approved
+        ON plan_submissions(project_id, tool_id, record_id)
+        WHERE status = 'approved';
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_submissions_pending_root
+        ON plan_submissions(root_submission_id)
+        WHERE status = 'pending_review';
+      `);
+    });
   }
 
   getRun(runId) {
@@ -885,7 +1334,7 @@ export class AiPlanningRepository {
   }) {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
-    this.database.prepare(`
+    const result = this.database.prepare(`
       INSERT INTO notification_outbox (
         id, event_key, owner_open_id, event_type, payload_json,
         status, next_attempt_at, created_at, updated_at
@@ -901,6 +1350,9 @@ export class AiPlanningRepository {
       now,
       now,
     );
+    if (result.changes === 0) {
+      return null;
+    }
     return this.database.prepare(`
       SELECT * FROM notification_outbox WHERE event_key = ?
     `).get(eventKey);
@@ -1110,6 +1562,7 @@ function normalizeNotificationRow(row) {
     id: row.id,
     eventKey: row.event_key,
     ownerOpenId: row.owner_open_id,
+    recipientOpenId: row.owner_open_id,
     eventType: row.event_type,
     payload: parseJsonObject(row.payload_json),
     status: row.status,
@@ -1125,6 +1578,7 @@ function normalizeNotificationRow(row) {
 function normalizeSubmissionRow(row) {
   return {
     id: row.id,
+    conversationId: row.conversation_id || '',
     projectId: row.project_id,
     toolId: row.tool_id,
     recordId: row.record_id,
@@ -1133,15 +1587,24 @@ function normalizeSubmissionRow(row) {
     projectName: row.project_name || '',
     authorOpenId: row.author_open_id,
     authorName: row.author_name,
+    revisionAuthorOpenId: row.revision_author_open_id || row.author_open_id,
+    revisionAuthorName: row.revision_author_name || row.author_name,
     title: row.title,
     summary: row.summary,
     markdown: row.markdown,
     sourceReferences: parseJsonArray(row.source_references_json),
     revision: Number(row.revision || 0),
     parentSubmissionId: row.parent_submission_id,
+    rootSubmissionId: row.root_submission_id || row.id,
     status: row.status,
     submittedAt: row.submitted_at,
     withdrawnAt: row.withdrawn_at || '',
+    reviewedByOpenId: row.reviewed_by_open_id || '',
+    reviewedByName: row.reviewed_by_name || '',
+    reviewedAt: row.reviewed_at || '',
+    reviewReason: row.review_reason || '',
+    supersededBySubmissionId: row.superseded_by_submission_id || '',
+    supersededAt: row.superseded_at || '',
   };
 }
 

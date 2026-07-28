@@ -23,9 +23,16 @@ export function createAiPlanningNotificationService({
       return null;
     }
     const payload = normalizeNotificationPayload(event);
+    const recipientOpenId = String(
+      event?.recipientOpenId || event?.ownerOpenId || '',
+    ).trim();
+    const eventKey = String(event?.eventKey || '').trim();
+    if (!recipientOpenId || !eventKey) {
+      return null;
+    }
     const queued = repository.enqueueNotification({
-      eventKey: String(event?.eventKey || '').trim(),
-      ownerOpenId: String(event?.ownerOpenId || '').trim(),
+      eventKey,
+      ownerOpenId: recipientOpenId,
       eventType,
       payload,
     });
@@ -88,15 +95,27 @@ function normalizeNotificationPayload(event) {
   const conversation = event?.conversation || {};
   const workItem = event?.workItem || {};
   const project = event?.project || {};
+  const submission = event?.submission || {};
+  const reviewer = event?.reviewer || {};
   return {
     conversationId: String(conversation.id || '').slice(0, 100),
     projectId: String(conversation.projectId || project.projectId || '').slice(0, 200),
     projectName: String(project.projectName || '').slice(0, 300),
-    toolId: String(conversation.toolId || '').slice(0, 50),
-    recordId: String(conversation.recordId || workItem.recordId || '').slice(0, 200),
+    toolId: String(conversation.toolId || submission.toolId || '').slice(0, 50),
+    recordId: String(
+      conversation.recordId || submission.recordId || workItem.recordId || '',
+    ).slice(0, 200),
     conversationTitle: String(conversation.title || '').slice(0, 200),
-    workItemId: String(workItem.itemId || '').slice(0, 200),
-    workItemTitle: String(workItem.title || '').slice(0, 500),
+    workItemId: String(workItem.itemId || submission.workItemId || '').slice(0, 200),
+    workItemTitle: String(workItem.title || submission.workItemTitle || '').slice(0, 500),
+    submissionId: String(submission.id || '').slice(0, 100),
+    submissionTitle: String(submission.title || '').slice(0, 200),
+    submissionSummary: String(submission.summary || '').slice(0, 1000),
+    submissionRevision: Math.max(0, Number(submission.revision || 0)),
+    submitterName: String(submission.authorName || '').slice(0, 200),
+    reviewerName: String(reviewer.name || '').slice(0, 200),
+    reviewReason: String(event?.reviewReason || submission.reviewReason || '').slice(0, 2000),
+    pendingCount: Math.max(0, Math.min(500, Number(event?.pendingCount || 0))),
     focus: String(event?.focus || '').slice(0, 50),
     questionCount: Math.max(0, Math.min(3, Number(event?.questionCount || 0))),
     errorMessage: String(event?.errorMessage || '').slice(0, 500),

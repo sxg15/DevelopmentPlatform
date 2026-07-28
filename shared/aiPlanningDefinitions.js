@@ -39,9 +39,11 @@ export const AI_RUN_PROGRESS_STAGE_ORDER = Object.freeze(
 );
 
 export const AI_PLAN_STATUSES = Object.freeze({
-  CANDIDATE: 'candidate',
-  ADOPTED: 'adopted',
+  PENDING_REVIEW: 'pending_review',
+  APPROVED: 'approved',
+  REJECTED: 'rejected',
   WITHDRAWN: 'withdrawn',
+  SUPERSEDED: 'superseded',
 });
 
 export function isAiPlanningWorkItemTool(toolId) {

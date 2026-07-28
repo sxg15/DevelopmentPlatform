@@ -5,6 +5,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import {
+  AI_PLAN_STATUSES,
   AI_PLAN_TOOL_ID,
   canAccessAiPlanTool,
   normalizeAiPlanSourceReferences,
@@ -177,12 +178,52 @@ test('AI planning repository isolates conversations and preserves revisions', ()
     assert.equal(revisionTwo.parentSubmissionId, revisionOne.id);
     assert.equal(revisionTwo.workItemId, 'REQ-001');
 
-    repository.adoptSubmission(revisionOne.id);
-    repository.adoptSubmission(revisionTwo.id);
-    assert.equal(repository.getSubmission(revisionOne.id).status, 'candidate');
-    assert.equal(repository.getSubmission(revisionTwo.id).status, 'adopted');
-    assert.equal(repository.withdrawSubmission(revisionOne.id, 'owner-b'), null);
-    assert.equal(repository.withdrawSubmission(revisionOne.id, 'owner-a').status, 'withdrawn');
+    assert.equal(repository.getSubmission(revisionOne.id).status, AI_PLAN_STATUSES.SUPERSEDED);
+    assert.equal(repository.getSubmission(revisionTwo.id).status, AI_PLAN_STATUSES.PENDING_REVIEW);
+    assert.equal(repository.approveSubmission(revisionTwo.id, {
+      openId: 'reviewer-a',
+      name: 'Reviewer A',
+    }).status, AI_PLAN_STATUSES.APPROVED);
+
+    const reviewRevision = repository.createReviewRevision({
+      submissionId: revisionTwo.id,
+      reviewer: { openId: 'reviewer-a', name: 'Reviewer A' },
+      title: 'Plan v3',
+      summary: 'Reviewer edit',
+      markdown: '# v3',
+    });
+    assert.equal(reviewRevision.revision, 3);
+    assert.equal(reviewRevision.status, AI_PLAN_STATUSES.PENDING_REVIEW);
+    assert.equal(repository.getSubmission(revisionTwo.id).status, AI_PLAN_STATUSES.APPROVED);
+    assert.equal(repository.rejectSubmission(
+      reviewRevision.id,
+      { openId: 'reviewer-b', name: 'Reviewer B' },
+      '需要补充回滚步骤',
+    ).status, AI_PLAN_STATUSES.REJECTED);
+    assert.equal(repository.getSubmission(reviewRevision.id).reviewReason, '需要补充回滚步骤');
+    assert.ok(repository.listSubmissionEvents(reviewRevision.rootSubmissionId).length >= 6);
+
+    const revisionFour = repository.createSubmission({
+      conversationId: conversation.id,
+      ownerOpenId: 'owner-a',
+      title: 'Plan v4',
+      summary: 'Fourth',
+      markdown: '# v4',
+      sourceReferences: [],
+      workItemId: 'REQ-001',
+      workItemTitle: 'Requirement one',
+      projectName: 'Project one',
+    });
+    assert.equal(repository.countPendingSubmissionsForWorkItem({
+      projectId: 'P1',
+      toolId: 'requirements',
+      recordId: 'rec-1',
+    }), 1);
+    assert.equal(repository.withdrawSubmission(revisionFour.id, 'owner-b'), null);
+    assert.equal(
+      repository.withdrawSubmission(revisionFour.id, 'owner-a', 'Owner A').status,
+      AI_PLAN_STATUSES.WITHDRAWN,
+    );
     assert.equal(repository.listSubmissions({
       projectId: 'P1',
       allowedToolIds: ['bugs'],
@@ -221,6 +262,128 @@ test('AI repository migrates legacy run tables with persistent progress columns'
     assert.ok(columns.includes('progress_message'));
     assert.ok(columns.includes('progress_updated_at'));
     assert.ok(columns.includes('activity_count'));
+  } finally {
+    repository.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AI repository migrates legacy plan statuses and keeps one pending revision per chain', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-plan-migration-'));
+  const databasePath = path.join(root, 'planning.sqlite');
+  const database = new DatabaseSync(databasePath);
+  database.exec(`
+    CREATE TABLE conversations (
+      id TEXT PRIMARY KEY,
+      owner_open_id TEXT NOT NULL,
+      owner_name TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      tool_id TEXT NOT NULL,
+      record_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      codex_thread_id TEXT NOT NULL DEFAULT '',
+      skill_version TEXT NOT NULL DEFAULT '1',
+      context_summary TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE plan_submissions (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      tool_id TEXT NOT NULL,
+      record_id TEXT NOT NULL,
+      author_open_id TEXT NOT NULL,
+      author_name TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      markdown TEXT NOT NULL,
+      source_references_json TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      parent_submission_id TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL,
+      submitted_at TEXT NOT NULL,
+      withdrawn_at TEXT
+    );
+    INSERT INTO plan_submissions VALUES
+      ('p1', 'P1', 'requirements', 'r1', 'u1', 'User', 'v1', '', '# v1', '[]', 1, '', 'candidate', '2026-01-01T00:00:00.000Z', NULL),
+      ('p2', 'P1', 'requirements', 'r1', 'u1', 'User', 'v2', '', '# v2', '[]', 2, 'p1', 'candidate', '2026-01-02T00:00:00.000Z', NULL),
+      ('p3', 'P1', 'bugs', 'b1', 'u2', 'User 2', 'bug', '', '# bug', '[]', 1, '', 'adopted', '2026-01-03T00:00:00.000Z', NULL);
+    INSERT INTO conversations (
+      id, owner_open_id, owner_name, project_id, tool_id, record_id,
+      title, status, version, codex_thread_id, skill_version,
+      context_summary, created_at, updated_at
+    ) VALUES (
+      'c1', 'u1', 'User', 'P1', 'requirements', 'r1',
+      'Legacy conversation', 'idle', 1, '', '1', '',
+      '2025-12-31T00:00:00.000Z', '2026-01-02T00:00:00.000Z'
+    );
+  `);
+  database.close();
+
+  const repository = new AiPlanningRepository(databasePath);
+  try {
+    assert.equal(repository.getSubmission('p1').status, AI_PLAN_STATUSES.SUPERSEDED);
+    assert.equal(repository.getSubmission('p2').status, AI_PLAN_STATUSES.PENDING_REVIEW);
+    assert.equal(repository.getSubmission('p3').status, AI_PLAN_STATUSES.APPROVED);
+    assert.equal(repository.getSubmission('p2').rootSubmissionId, 'p1');
+    assert.equal(repository.getSubmission('p2').revisionAuthorName, 'User');
+    const revisionThree = repository.createSubmission({
+      conversationId: 'c1',
+      ownerOpenId: 'u1',
+      title: 'v3',
+      summary: '',
+      markdown: '# v3',
+      sourceReferences: [],
+    });
+    assert.equal(revisionThree.revision, 3);
+    assert.equal(revisionThree.rootSubmissionId, 'p1');
+    assert.equal(repository.getSubmission('p2').conversationId, 'c1');
+  } finally {
+    repository.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AI conversation creation is idempotent per owner mutation key', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-conversation-mutation-'));
+  const repository = new AiPlanningRepository(path.join(root, 'planning.sqlite'));
+  try {
+    const first = repository.createConversation({
+      ownerOpenId: 'owner-a',
+      ownerName: 'Owner A',
+      projectId: 'P1',
+      toolId: 'requirements',
+      recordId: 'r1',
+      title: 'Plan',
+      clientMutationId: 'offer-1',
+    });
+    const duplicate = repository.createConversation({
+      ownerOpenId: 'owner-a',
+      ownerName: 'Owner A',
+      projectId: 'P1',
+      toolId: 'requirements',
+      recordId: 'r1',
+      title: 'Duplicate',
+      clientMutationId: 'offer-1',
+    });
+    assert.equal(duplicate.id, first.id);
+    assert.equal(repository.listConversations({
+      ownerOpenId: 'owner-a',
+      projectId: 'P1',
+      toolId: 'requirements',
+      recordId: 'r1',
+    }).length, 1);
+    assert.throws(() => repository.createConversation({
+      ownerOpenId: 'owner-a',
+      ownerName: 'Owner A',
+      projectId: 'P1',
+      toolId: 'bugs',
+      recordId: 'b1',
+      title: 'Wrong item',
+      clientMutationId: 'offer-1',
+    }), /其他工作项/);
   } finally {
     repository.close();
     fs.rmSync(root, { recursive: true, force: true });
@@ -615,13 +778,32 @@ test('AI notification outbox is durable and idempotent', async () => {
       project: { projectName: 'Project' },
       focus: 'plan',
     };
-    service.enqueue('plan_ready', event);
-    service.enqueue('plan_ready', event);
+    assert.ok(service.enqueue('plan_ready', event));
+    assert.equal(service.enqueue('plan_ready', event), null);
     await waitFor(() => delivered.length === 1);
+    service.enqueue('plan_review_requested', {
+      eventKey: 'ai-plan:review:submission-1:owner-b',
+      recipientOpenId: 'owner-b',
+      submission: {
+        id: 'submission-1',
+        projectId: 'P1',
+        toolId: 'requirements',
+        recordId: 'rec-1',
+        workItemId: 'REQ-1',
+        workItemTitle: 'Requirement',
+        title: 'Shared plan',
+        summary: 'Review me',
+        revision: 1,
+        authorName: 'Owner A',
+      },
+      project: { projectName: 'Project' },
+    });
+    await waitFor(() => delivered.length === 2);
     const rows = repository.database.prepare('SELECT * FROM notification_outbox').all();
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].status, 'sent');
+    assert.equal(rows.length, 2);
+    assert.ok(rows.every((row) => row.status === 'sent'));
     assert.doesNotMatch(rows[0].payload_json, /must-not-persist|secret-token/);
+    assert.match(rows[1].payload_json, /submission-1|Shared plan/);
   } finally {
     service.stop();
     repository.close();

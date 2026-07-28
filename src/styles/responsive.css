@@ -745,6 +745,32 @@
     padding-left: 12px;
   }
 
+  .ai-offer-backdrop {
+    align-items: flex-end;
+    padding: 12px;
+  }
+
+  .ai-offer-dialog {
+    grid-template-columns: 42px minmax(0, 1fr);
+    width: 100%;
+    gap: 12px;
+    padding: 16px;
+  }
+
+  .ai-offer-icon {
+    width: 42px;
+    height: 42px;
+  }
+
+  .ai-offer-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .ai-offer-actions button {
+    width: 100%;
+  }
+
   .project-detail-surface-ai-plans {
     height: 760px;
     min-height: 620px;
@@ -793,8 +819,15 @@
   }
 
   .ai-plan-document,
-  .ai-source-references {
+  .ai-source-references,
+  .ai-plan-review-note,
+  .ai-plan-revisions,
+  .ai-plan-audit {
     width: calc(100% - 28px);
+  }
+
+  .ai-review-dialog {
+    width: 100%;
   }
 
   .personal-settings-backdrop {

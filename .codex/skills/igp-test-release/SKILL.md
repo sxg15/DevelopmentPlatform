@@ -77,7 +77,10 @@ the current or rollback release.
   safe item-event mapping, inactivity UI text, persistent failure details,
   durable question/answer continuation, restart preservation, attachment cleanup,
   notification outbox idempotency, and the required response/interruption ordering
-  for `item/tool/requestUserInput`.
+  for `item/tool/requestUserInput`. Also cover legacy shared-plan migration,
+  immutable revision chains, pending/approved uniqueness, reviewer edits,
+  rejection reasons, notification dedupe counts, and idempotent post-submit
+  conversation creation.
 - Same-user settings mutation serialization is covered by
   `test/serverRuntime.test.js`; non-blocking frontend initialization is covered by
   `test/frontendModuleBindings.test.js`.

@@ -64,6 +64,7 @@ import { AiPlanningRepository } from './repositories/aiPlanningRepository.js';
 import { ensureAiDataDirectories } from './runtime/aiDataPaths.js';
 import { createAiPlanningRealtimeHub } from './runtime/aiPlanningRealtime.js';
 import { createBoundedTaskScheduler } from './runtime/boundedTaskScheduler.js';
+import { createKeyedTaskQueue } from './runtime/keyedTaskQueue.js';
 import { getLocalUrls } from './runtime/network.js';
 import {
   buildClearSessionCookie,
@@ -172,6 +173,7 @@ const todoNotificationScheduler = createTodoNotificationScheduler({
 });
 const aiDataPaths = ensureAiDataDirectories();
 const aiPlanningRepository = new AiPlanningRepository(aiDataPaths.database);
+const aiPlanMutationQueue = createKeyedTaskQueue();
 const aiPlanningRealtimeHub = createAiPlanningRealtimeHub();
 const aiPlanningScheduler = createBoundedTaskScheduler({
   maxConcurrent: runtimeConfig.aiPlanning.codex.maxConcurrentRuns,
@@ -473,7 +475,19 @@ app.get('/api/projects/:projectId/ai-plans/:submissionId', async (request, respo
 });
 
 app.post('/api/projects/:projectId/ai-plans/:submissionId/adopt', async (request, response) => {
-  await handleAiPlanAdopt(request, response);
+  await handleAiPlanApprove(request, response);
+});
+
+app.post('/api/projects/:projectId/ai-plans/:submissionId/approve', async (request, response) => {
+  await handleAiPlanApprove(request, response);
+});
+
+app.post('/api/projects/:projectId/ai-plans/:submissionId/reject', async (request, response) => {
+  await handleAiPlanReject(request, response);
+});
+
+app.post('/api/projects/:projectId/ai-plans/:submissionId/revisions', async (request, response) => {
+  await handleAiPlanRevisionCreate(request, response);
 });
 
 app.post('/api/projects/:projectId/ai-plans/:submissionId/withdraw', async (request, response) => {
@@ -956,6 +970,7 @@ async function handleAiConversationCreate(request, response) {
       toolId: context.toolId,
       recordId: context.recordId,
       title: String(request.body?.title || `AI计划：${context.workItem.title || context.recordId}`),
+      clientMutationId: String(request.body?.clientMutationId || '').trim(),
     });
     response.status(201).json({ conversation });
   } catch (error) {
@@ -1081,7 +1096,29 @@ async function handleAiPlanSubmissionCreate(request, response) {
       workItem: context.workItem,
       project: context.project,
     });
-    response.status(201).json({ submission });
+    const rawSubmission = aiPlanningRepository.getSubmission(submission.id);
+    const reviewRecipients = getAiPlanReviewNotificationRecipients(
+      context.workItem,
+      context.projectAccess,
+    );
+    const notificationQueuedCount = enqueueAiPlanNotifications(
+      'plan_review_requested',
+      rawSubmission,
+      reviewRecipients,
+      {
+        project: context.project,
+        workItem: context.workItem,
+      },
+    );
+    response.status(201).json({
+      submission,
+      notificationQueuedCount,
+      notificationDeliveryEnabled: runtimeConfig.aiPlanning.notifications.enabled,
+      reviewRecipientCount: reviewRecipients.length,
+      notificationTargetLabel: context.workItem?._aiReviewAssignees?.length
+        ? '处理人'
+        : '研发超级管理员',
+    });
   } catch (error) {
     sendAiPlanningError(response, error, '提交 AI 方案失败');
   }
@@ -1092,10 +1129,11 @@ async function handleAiPlanList(request, response) {
     const context = await getAiPlanProjectRequestContext(request);
     const toolId = String(request.query.toolId || '').trim();
     const status = String(request.query.status || '').trim();
+    const recordId = String(request.query.recordId || '').trim();
     if (toolId && !context.allowedToolIds.includes(toolId)) {
       throw createHttpError('没有该工具权限', 403);
     }
-    if (status && !Object.values(AI_PLAN_STATUSES).includes(status)) {
+    if (status && status !== 'all' && !Object.values(AI_PLAN_STATUSES).includes(status)) {
       throw createHttpError('方案状态不正确', 400);
     }
     const submissions = aiPlanningService.listSubmissions({
@@ -1103,13 +1141,13 @@ async function handleAiPlanList(request, response) {
       projectId: context.project.projectId,
       allowedToolIds: context.allowedToolIds,
       toolId,
+      recordId,
       search: String(request.query.search || '').trim(),
       status,
     });
     response.json({
       submissions,
       allowedToolIds: context.allowedToolIds,
-      canAdopt: canManageAiPlans(context.projectAccess),
     });
   } catch (error) {
     sendAiPlanningError(response, error, '读取 AI 方案失败');
@@ -1119,18 +1157,9 @@ async function handleAiPlanList(request, response) {
 async function handleAiPlanRead(request, response) {
   try {
     const context = await getAiPlanProjectRequestContext(request);
-    const submission = aiPlanningService.getSubmission({
-      user: context.session.user,
-      submissionId: String(request.params.submissionId || '').trim(),
-      projectId: context.project.projectId,
-      allowedToolIds: context.allowedToolIds,
-    });
-    if (!submission) {
-      throw createHttpError('方案不存在', 404);
-    }
+    const detail = await buildAiPlanDetailResponse(context, request.params.submissionId);
     response.json({
-      submission,
-      canAdopt: canManageAiPlans(context.projectAccess),
+      ...detail,
     });
   } catch (error) {
     sendAiPlanningError(response, error, '读取 AI 方案失败');
@@ -1160,24 +1189,166 @@ async function handleAiPlanRawRead(request, response) {
   }
 }
 
-async function handleAiPlanAdopt(request, response) {
+async function handleAiPlanApprove(request, response) {
   try {
-    const context = await getAiPlanProjectRequestContext(request);
-    if (!canManageAiPlans(context.projectAccess)) {
-      throw createHttpError('只有研发超级管理员或超级管理员可以采纳方案', 403);
-    }
-    const submission = aiPlanningService.adoptSubmission({
-      user: context.session.user,
-      submissionId: String(request.params.submissionId || '').trim(),
-      projectId: context.project.projectId,
-      allowedToolIds: context.allowedToolIds,
-    });
-    if (!submission) {
-      throw createHttpError('方案不存在或已撤回', 404);
-    }
-    response.json({ submission });
+    const initial = await getAiPlanReviewRequestContext(request);
+    const result = await aiPlanMutationQueue.run(
+      buildAiPlanMutationKey(initial.submission),
+      async () => {
+        const context = await getAiPlanReviewRequestContext(request);
+        assertCanReviewAiPlan(context);
+        const previousApproved = aiPlanningRepository.getApprovedSubmissionForWorkItem({
+          projectId: context.submission.projectId,
+          toolId: context.submission.toolId,
+          recordId: context.submission.recordId,
+        });
+        const submission = aiPlanningService.approveSubmission({
+          user: context.session.user,
+          submissionId: context.submission.id,
+          projectId: context.project.projectId,
+          allowedToolIds: context.allowedToolIds,
+        });
+        if (!submission) {
+          throw createHttpError('方案状态已变化，请刷新后重试', 409);
+        }
+        const rawSubmission = aiPlanningRepository.getSubmission(submission.id);
+        let notificationQueuedCount = enqueueAiPlanNotifications(
+          'plan_approved',
+          rawSubmission,
+          [toMentionableUser(context.submissionAuthor)],
+          {
+            project: context.project,
+            workItem: context.workItem,
+            reviewer: context.session.user,
+          },
+        );
+        if (previousApproved && previousApproved.id !== rawSubmission.id) {
+          notificationQueuedCount += enqueueAiPlanNotifications(
+            'plan_superseded',
+            previousApproved,
+            [{
+              openId: previousApproved.authorOpenId,
+              name: previousApproved.authorName,
+            }],
+            {
+              project: context.project,
+              workItem: context.workItem,
+              reviewer: context.session.user,
+            },
+          );
+        }
+        return {
+          submission,
+          notificationQueuedCount,
+          notificationDeliveryEnabled: runtimeConfig.aiPlanning.notifications.enabled,
+        };
+      },
+    );
+    response.json(result);
   } catch (error) {
-    sendAiPlanningError(response, error, '采纳 AI 方案失败');
+    sendAiPlanningError(response, error, '通过 AI 方案失败');
+  }
+}
+
+async function handleAiPlanReject(request, response) {
+  try {
+    const initial = await getAiPlanReviewRequestContext(request);
+    const result = await aiPlanMutationQueue.run(
+      buildAiPlanMutationKey(initial.submission),
+      async () => {
+        const context = await getAiPlanReviewRequestContext(request);
+        assertCanReviewAiPlan(context);
+        const submission = aiPlanningService.rejectSubmission({
+          user: context.session.user,
+          submissionId: context.submission.id,
+          projectId: context.project.projectId,
+          allowedToolIds: context.allowedToolIds,
+          reason: request.body?.reason,
+        });
+        if (!submission) {
+          throw createHttpError('方案状态已变化，请刷新后重试', 409);
+        }
+        const rawSubmission = aiPlanningRepository.getSubmission(submission.id);
+        const notificationQueuedCount = enqueueAiPlanNotifications(
+          'plan_rejected',
+          rawSubmission,
+          [toMentionableUser(context.submissionAuthor)],
+          {
+            project: context.project,
+            workItem: context.workItem,
+            reviewer: context.session.user,
+            reviewReason: rawSubmission.reviewReason,
+          },
+        );
+        return {
+          submission,
+          notificationQueuedCount,
+          notificationDeliveryEnabled: runtimeConfig.aiPlanning.notifications.enabled,
+        };
+      },
+    );
+    response.json(result);
+  } catch (error) {
+    sendAiPlanningError(response, error, '拒绝 AI 方案失败');
+  }
+}
+
+async function handleAiPlanRevisionCreate(request, response) {
+  try {
+    const initial = await getAiPlanReviewRequestContext(request);
+    const result = await aiPlanMutationQueue.run(
+      buildAiPlanMutationKey(initial.submission),
+      async () => {
+        const context = await getAiPlanReviewRequestContext(request);
+        assertCanEditAiPlan(context);
+        const submission = aiPlanningService.createReviewRevision({
+          user: context.session.user,
+          submissionId: context.submission.id,
+          projectId: context.project.projectId,
+          allowedToolIds: context.allowedToolIds,
+          title: request.body?.title,
+          summary: request.body?.summary,
+          markdown: request.body?.markdown,
+        });
+        if (!submission) {
+          throw createHttpError('方案已有更新，请刷新后重试', 409);
+        }
+        const rawSubmission = aiPlanningRepository.getSubmission(submission.id);
+        const reviewRecipients = getAiPlanReviewNotificationRecipients(
+          context.workItem,
+          context.projectAccess,
+        );
+        const reviewQueuedCount = enqueueAiPlanNotifications(
+          'plan_review_requested',
+          rawSubmission,
+          reviewRecipients,
+          {
+            project: context.project,
+            workItem: context.workItem,
+            reviewer: context.session.user,
+          },
+        );
+        const authorQueuedCount = enqueueAiPlanNotifications(
+          'plan_edited',
+          rawSubmission,
+          [toMentionableUser(context.submissionAuthor)],
+          {
+            project: context.project,
+            workItem: context.workItem,
+            reviewer: context.session.user,
+          },
+        );
+        return {
+          submission,
+          notificationQueuedCount: reviewQueuedCount + authorQueuedCount,
+          notificationDeliveryEnabled: runtimeConfig.aiPlanning.notifications.enabled,
+          reviewRecipientCount: reviewRecipients.length,
+        };
+      },
+    );
+    response.status(201).json(result);
+  } catch (error) {
+    sendAiPlanningError(response, error, '编辑 AI 方案失败');
   }
 }
 
@@ -1197,8 +1368,14 @@ async function handleAiPlanWithdraw(request, response) {
     if (!current.isOwnPlan) {
       throw createHttpError('只能撤回自己提交的方案', 403);
     }
-    if (current.status === AI_PLAN_STATUSES.ADOPTED) {
-      throw createHttpError('已采纳方案不能直接撤回', 409);
+    const revisions = aiPlanningService.getSubmissionRevisions({
+      user: context.session.user,
+      submissionId,
+      projectId: context.project.projectId,
+      allowedToolIds: context.allowedToolIds,
+    });
+    if (revisions[0]?.id !== current.id || current.status !== AI_PLAN_STATUSES.PENDING_REVIEW) {
+      throw createHttpError('只能撤回最新的待审核方案', 409);
     }
     const submission = aiPlanningService.withdrawSubmission({
       user: context.session.user,
@@ -1340,6 +1517,167 @@ async function getAiPlanProjectRequestContext(request) {
   };
 }
 
+async function getAiPlanReviewRequestContext(request) {
+  const context = await getAiPlanProjectRequestContext(request);
+  return buildAiPlanReviewContext(context, request.params.submissionId);
+}
+
+async function buildAiPlanReviewContext(context, submissionIdValue) {
+  const submissionId = String(submissionIdValue || '').trim();
+  const submission = aiPlanningRepository.getSubmission(submissionId);
+  if (
+    !submission
+    || submission.projectId !== context.project.projectId
+    || !context.allowedToolIds.includes(submission.toolId)
+  ) {
+    throw createHttpError('方案不存在', 404);
+  }
+  const workItem = await tryLoadAiPlanReviewWorkItem(
+    context.token,
+    context.project,
+    context.session.user,
+    submission,
+  );
+  const revisions = aiPlanningRepository.listSubmissionRevisions(
+    submission.rootSubmissionId,
+  );
+  const isLatestRevision = revisions[0]?.id === submission.id;
+  const canReview = canReviewAiPlan({
+    projectAccess: context.projectAccess,
+    workItem,
+    user: context.session.user,
+  });
+  return {
+    ...context,
+    submission,
+    submissionAuthor: {
+      openId: submission.authorOpenId,
+      name: submission.authorName,
+    },
+    workItem,
+    revisions,
+    isLatestRevision,
+    canReview,
+  };
+}
+
+async function buildAiPlanDetailResponse(context, submissionId) {
+  const requestContext = await buildAiPlanReviewContext(context, submissionId);
+  const submission = aiPlanningService.getSubmission({
+    user: context.session.user,
+    submissionId: requestContext.submission.id,
+    projectId: context.project.projectId,
+    allowedToolIds: context.allowedToolIds,
+  });
+  const revisions = aiPlanningService.getSubmissionRevisions({
+    user: context.session.user,
+    submissionId: requestContext.submission.id,
+    projectId: context.project.projectId,
+    allowedToolIds: context.allowedToolIds,
+  });
+  const events = aiPlanningService.getSubmissionEvents({
+    submissionId: requestContext.submission.id,
+    projectId: context.project.projectId,
+    allowedToolIds: context.allowedToolIds,
+  });
+  return {
+    submission,
+    revisions,
+    events,
+    permissions: buildAiPlanPermissions(requestContext, submission),
+    workItem: buildSharedAiPlanWorkItem(requestContext.workItem, requestContext.submission),
+  };
+}
+
+async function tryLoadAiPlanReviewWorkItem(token, project, user, submission) {
+  try {
+    return await loadAiPlanningWorkItem(
+      token,
+      project,
+      user,
+      submission.toolId,
+      submission.recordId,
+    );
+  } catch (error) {
+    const message = String(error?.message || '');
+    if (Number(error?.statusCode) === 404 || message.includes('不存在')) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function canReviewAiPlan({ projectAccess, workItem, user }) {
+  if (canManageAiPlans(projectAccess)) {
+    return true;
+  }
+  return Boolean(
+    workItem?._aiReviewAssignees?.some((assignee) => isSameUser(assignee, user)),
+  );
+}
+
+function buildAiPlanPermissions(context, submission) {
+  const isPending = submission?.status === AI_PLAN_STATUSES.PENDING_REVIEW;
+  return {
+    canApprove: Boolean(context.canReview && context.isLatestRevision && isPending),
+    canReject: Boolean(context.canReview && context.isLatestRevision && isPending),
+    canEdit: Boolean(
+      context.canReview
+      && context.isLatestRevision
+      && ![AI_PLAN_STATUSES.WITHDRAWN, AI_PLAN_STATUSES.SUPERSEDED]
+        .includes(submission?.status),
+    ),
+    canWithdraw: Boolean(
+      submission?.isOwnPlan
+      && context.isLatestRevision
+      && isPending,
+    ),
+  };
+}
+
+function buildSharedAiPlanWorkItem(workItem, submission) {
+  return {
+    exists: Boolean(workItem),
+    recordId: submission.recordId,
+    itemId: workItem?.itemId || submission.workItemId || '',
+    title: workItem?.title || submission.workItemTitle || '',
+    status: workItem?.status || '',
+  };
+}
+
+function assertCanReviewAiPlan(context) {
+  if (!context.canReview) {
+    throw createHttpError('只有当前处理人、研发超级管理员或超级管理员可以审核方案', 403);
+  }
+  if (
+    !context.isLatestRevision
+    || context.submission.status !== AI_PLAN_STATUSES.PENDING_REVIEW
+  ) {
+    throw createHttpError('只能审核最新的待审核方案', 409);
+  }
+}
+
+function assertCanEditAiPlan(context) {
+  if (!context.canReview) {
+    throw createHttpError('只有当前处理人、研发超级管理员或超级管理员可以编辑方案', 403);
+  }
+  if (
+    !context.isLatestRevision
+    || [AI_PLAN_STATUSES.WITHDRAWN, AI_PLAN_STATUSES.SUPERSEDED]
+      .includes(context.submission.status)
+  ) {
+    throw createHttpError('只能编辑修订链中的最新有效方案', 409);
+  }
+}
+
+function buildAiPlanMutationKey(submission) {
+  return [
+    submission.projectId,
+    submission.toolId,
+    submission.recordId,
+  ].join(':');
+}
+
 async function loadAiPlanningWorkItem(token, project, user, toolId, recordId) {
   const toolConfig = getWorkItemToolConfig(toolId);
   const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
@@ -1382,6 +1720,7 @@ async function loadAiPlanningWorkItem(token, project, user, toolId, recordId) {
     rawFields: item.rawFields,
     attachments: attachmentSources.map(({ fileToken: _fileToken, tableId: _tableId, ...attachment }) => attachment),
     _aiAttachmentSources: attachmentSources,
+    _aiReviewAssignees: item.assignees,
   });
 }
 
@@ -1394,7 +1733,7 @@ function sanitizeAiWorkItemContext(value) {
   }
   const result = {};
   for (const [key, item] of Object.entries(value)) {
-    if (key === '_aiAttachmentSources') {
+    if (key === '_aiAttachmentSources' || key === '_aiReviewAssignees') {
       result[key] = item;
       continue;
     }
@@ -2870,6 +3209,24 @@ async function handleWorkItemAssigneeChange(request, response, toolId) {
       request,
       toolConfig,
     });
+    const newlyAddedAssignees = allowedAssignees.filter(
+      (assignee) => !currentAssignees.some((current) => isSameUser(current, assignee)),
+    );
+    const aiPlanNotificationQueuedCount = isAiPlanningWorkItemTool(toolId)
+      && projectAccess.allowedToolIds.has(AI_PLAN_TOOL_ID)
+      && newlyAddedAssignees.length > 0
+      ? enqueuePendingAiPlanNotificationsForAssignees({
+          project,
+          toolId,
+          recordId,
+          workItem: {
+            ...normalizedItem,
+            _aiReviewAssignees: allowedAssignees,
+          },
+          assignees: newlyAddedAssignees,
+          assignmentEventId: comment.id,
+        })
+      : 0;
 
     response.json({
       item: normalizedItem,
@@ -2877,6 +3234,7 @@ async function handleWorkItemAssigneeChange(request, response, toolId) {
       comment,
       comments: normalizeCommentsForClient(nextCommentsDocument),
       notificationResults,
+      aiPlanNotificationQueuedCount,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : `变更${toolConfig.itemLabel}处理人员失败`;
@@ -5804,11 +6162,102 @@ async function notifyWorkItemProposers(token, proposers, context) {
   return results;
 }
 
+function getAiPlanReviewNotificationRecipients(workItem, projectAccess) {
+  const assignees = normalizeMentionedUsers(workItem?._aiReviewAssignees || []);
+  return assignees.length > 0
+    ? assignees
+    : normalizeMentionedUsers(projectAccess?.developmentSuperAdmins || []);
+}
+
+function enqueueAiPlanNotifications(
+  eventType,
+  submission,
+  recipients,
+  {
+    project = null,
+    workItem = null,
+    reviewer = null,
+    reviewReason = '',
+    pendingCount = 0,
+    eventDiscriminator = '',
+  } = {},
+) {
+  if (!submission) {
+    return 0;
+  }
+  let queuedCount = 0;
+  for (const recipient of normalizeMentionedUsers(recipients || [])) {
+    const eventKeyParts = [
+      'ai-plan',
+      eventType,
+      submission.id,
+      submission.revision,
+      recipient.openId,
+    ];
+    const normalizedDiscriminator = String(eventDiscriminator || '').trim();
+    if (normalizedDiscriminator) {
+      eventKeyParts.push(normalizedDiscriminator);
+    }
+    const queued = aiPlanningNotificationService.enqueue(eventType, {
+      eventKey: eventKeyParts.join(':'),
+      recipientOpenId: recipient.openId,
+      submission,
+      project,
+      workItem,
+      reviewer,
+      reviewReason,
+      pendingCount,
+    });
+    if (queued) {
+      queuedCount += 1;
+    }
+  }
+  return queuedCount;
+}
+
+function enqueuePendingAiPlanNotificationsForAssignees({
+  project,
+  toolId,
+  recordId,
+  workItem,
+  assignees,
+  assignmentEventId = '',
+}) {
+  const pendingCount = aiPlanningService.countPendingSubmissionsForWorkItem({
+    projectId: project.projectId,
+    toolId,
+    recordId,
+  });
+  if (pendingCount < 1) {
+    return 0;
+  }
+  const [latest] = aiPlanningService.listPendingSubmissionsForWorkItem({
+    projectId: project.projectId,
+    toolId,
+    recordId,
+    limit: 1,
+  });
+  const rawSubmission = latest
+    ? aiPlanningRepository.getSubmission(latest.id)
+    : null;
+  return enqueueAiPlanNotifications(
+    pendingCount === 1 ? 'plan_review_requested' : 'plan_review_summary',
+    rawSubmission,
+    assignees,
+    {
+      project,
+      workItem,
+      pendingCount,
+      eventDiscriminator: assignmentEventId,
+    },
+  );
+}
+
 async function deliverAiPlanningNotification(notification) {
   const token = await getTenantAccessToken();
   await sendFeishuInteractiveMessage(
     token,
-    notification.ownerOpenId,
+    notification.recipientOpenId || notification.ownerOpenId,
     buildAiPlanningNotificationCard(notification.eventType, notification.payload),
   );
 }
@@ -5818,13 +6267,28 @@ function buildAiPlanningNotificationCard(eventType, payload) {
   const itemLabel = payload.workItemId
     ? `${payload.workItemId} ${payload.workItemTitle || toolConfig.unnamedTitle}`
     : payload.workItemTitle || toolConfig.unnamedTitle;
-  const link = buildPlatformExternalLink('ai-conversation', {
-    projectId: payload.projectId,
-    tool: payload.toolId,
-    recordId: payload.recordId,
-    conversationId: payload.conversationId,
-    focus: payload.focus,
-  });
+  const sharedPlanEvent = [
+    'plan_review_requested',
+    'plan_review_summary',
+    'plan_approved',
+    'plan_rejected',
+    'plan_edited',
+    'plan_superseded',
+  ].includes(eventType);
+  const link = sharedPlanEvent
+    ? buildPlatformExternalLink('ai-plan', {
+        projectId: payload.projectId,
+        tool: AI_PLAN_TOOL_ID,
+        recordId: payload.recordId,
+        submissionId: payload.submissionId,
+      })
+    : buildPlatformExternalLink('ai-conversation', {
+        projectId: payload.projectId,
+        tool: payload.toolId,
+        recordId: payload.recordId,
+        conversationId: payload.conversationId,
+        focus: payload.focus,
+      });
   const definitions = {
     question_required: {
       template: 'orange',
@@ -5847,6 +6311,48 @@ function buildAiPlanningNotificationCard(eventType, payload) {
       detail: payload.errorMessage || '请打开对话查看失败详情',
       button: '查看失败详情',
     },
+    plan_review_requested: {
+      template: 'orange',
+      title: '有新的 AI 计划需要审核',
+      detailLabel: '审核状态',
+      detail: `${payload.submitterName || '项目成员'}提交了修订 ${payload.submissionRevision || 1}`,
+      button: '打开审核方案',
+    },
+    plan_review_summary: {
+      template: 'orange',
+      title: `该工作项有 ${payload.pendingCount || 1} 份 AI 计划待审核`,
+      detailLabel: '审核提示',
+      detail: '请打开方案库查看并处理待审核方案',
+      button: '打开方案库',
+    },
+    plan_approved: {
+      template: 'green',
+      title: 'AI 计划已通过审核',
+      detailLabel: '审核人',
+      detail: payload.reviewerName || '处理人',
+      button: '查看已通过方案',
+    },
+    plan_rejected: {
+      template: 'red',
+      title: 'AI 计划未通过审核',
+      detailLabel: '拒绝原因',
+      detail: payload.reviewReason || '请打开方案查看审核记录',
+      button: '查看审核结果',
+    },
+    plan_edited: {
+      template: 'blue',
+      title: '处理人编辑了 AI 计划',
+      detailLabel: '新修订',
+      detail: `修订 ${payload.submissionRevision || 1} 已重新进入待审核`,
+      button: '查看新修订',
+    },
+    plan_superseded: {
+      template: 'grey',
+      title: '原 AI 计划已被新的通过方案替代',
+      detailLabel: '方案状态',
+      detail: '原方案及审核记录仍保留在修订历史中',
+      button: '查看原方案',
+    },
   };
   const definition = definitions[eventType] || definitions.run_failed;
 
@@ -5867,6 +6373,12 @@ function buildAiPlanningNotificationCard(eventType, payload) {
         `${payload.projectName || '未命名项目'} (${payload.projectId || '无ID'})`,
       ),
       buildCardTextElement(toolConfig.itemNameLabel, itemLabel),
+      ...(sharedPlanEvent
+        ? [buildCardTextElement(
+            '方案',
+            `${payload.submissionTitle || '未命名方案'}（修订 ${payload.submissionRevision || 1}）`,
+          )]
+        : []),
       buildCardTextElement(definition.detailLabel, definition.detail),
       {
         tag: 'action',
@@ -6357,6 +6869,7 @@ function buildPlatformDirectPath(targetType, params = {}) {
     'recordId',
     'commentId',
     'conversationId',
+    'submissionId',
     'focus',
   ];
   for (const key of allowedParams) {

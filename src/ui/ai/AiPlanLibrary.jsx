@@ -2,33 +2,63 @@ import { useEffect, useState } from 'react';
 import {
   Check,
   Download,
+  ExternalLink,
   FileText,
+  History,
   LoaderCircle,
+  Pencil,
   RotateCcw,
   Search,
+  X,
+  XCircle,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
-  adoptAiPlan,
+  approveAiPlan,
+  createAiPlanRevision,
   fetchAiPlan,
   getAiPlanRawUrl,
   listAiPlans,
+  rejectAiPlan,
   withdrawAiPlan,
 } from '../../api/aiPlans.js';
 
-export function AiPlanLibrary({ project }) {
+export function AiPlanLibrary({
+  project,
+  directTarget = null,
+  onOpenWorkItem,
+}) {
   const [filters, setFilters] = useState({ toolId: '', status: '', search: '' });
   const [state, setState] = useState({
     status: 'loading',
     message: '',
     submissions: [],
     allowedToolIds: [],
-    canAdopt: false,
   });
-  const [selectedId, setSelectedId] = useState('');
-  const [detail, setDetail] = useState(null);
+  const [selectedId, setSelectedId] = useState(
+    () => String(directTarget?.submissionId || '').trim(),
+  );
+  const [detailState, setDetailState] = useState({
+    status: 'idle',
+    message: '',
+    submission: null,
+    revisions: [],
+    events: [],
+    permissions: {},
+    workItem: null,
+  });
   const [actionStatus, setActionStatus] = useState({ type: 'idle', message: '' });
+  const [refreshSequence, setRefreshSequence] = useState(0);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+
+  useEffect(() => {
+    const submissionId = String(directTarget?.submissionId || '').trim();
+    if (directTarget?.type === 'ai-plan' && submissionId) {
+      setSelectedId(submissionId);
+    }
+  }, [directTarget?.key, directTarget?.submissionId, directTarget?.type]);
 
   useEffect(() => {
     let active = true;
@@ -44,11 +74,16 @@ export function AiPlanLibrary({ project }) {
           message: '',
           submissions,
           allowedToolIds: payload.allowedToolIds || [],
-          canAdopt: Boolean(payload.canAdopt),
         });
-        setSelectedId((current) => (
-          submissions.some((item) => item.id === current) ? current : submissions[0]?.id || ''
-        ));
+        setSelectedId((current) => {
+          const directSubmissionId = String(directTarget?.submissionId || '').trim();
+          if (directSubmissionId && current === directSubmissionId) {
+            return current;
+          }
+          return submissions.some((item) => item.id === current)
+            ? current
+            : submissions[0]?.id || '';
+        });
       } catch (error) {
         if (active) {
           setState((current) => ({
@@ -64,41 +99,103 @@ export function AiPlanLibrary({ project }) {
       active = false;
       clearTimeout(timeout);
     };
-  }, [filters, project.projectId]);
+  }, [directTarget?.submissionId, filters, project.projectId, refreshSequence]);
 
   useEffect(() => {
     if (!selectedId) {
-      setDetail(null);
+      setDetailState({
+        status: 'idle',
+        message: '',
+        submission: null,
+        revisions: [],
+        events: [],
+        permissions: {},
+        workItem: null,
+      });
       return undefined;
     }
     let active = true;
-    setActionStatus({ type: 'idle', message: '' });
+    setDetailState((current) => ({ ...current, status: 'loading', message: '' }));
     fetchAiPlan(project.projectId, selectedId)
       .then((payload) => {
         if (active) {
-          setDetail(payload.submission || null);
-          setState((current) => ({ ...current, canAdopt: Boolean(payload.canAdopt) }));
+          setDetailState({
+            status: 'ready',
+            message: '',
+            submission: payload.submission || null,
+            revisions: Array.isArray(payload.revisions) ? payload.revisions : [],
+            events: Array.isArray(payload.events) ? payload.events : [],
+            permissions: payload.permissions || {},
+            workItem: payload.workItem || null,
+          });
         }
       })
       .catch((error) => {
         if (active) {
-          setActionStatus({ type: 'error', message: formatPlanError(error) });
+          setDetailState((current) => ({
+            ...current,
+            status: 'error',
+            message: formatPlanError(error),
+            submission: null,
+          }));
         }
       });
     return () => {
       active = false;
     };
-  }, [project.projectId, selectedId]);
+  }, [project.projectId, refreshSequence, selectedId]);
 
-  async function handleAdopt() {
+  const detail = detailState.submission;
+
+  async function handleApprove() {
     if (!detail || actionStatus.type === 'loading') {
       return;
     }
-    setActionStatus({ type: 'loading', message: '正在采纳方案' });
+    if (!window.confirm('确定通过这份 AI 方案吗？它将成为当前工作项的已通过方案。')) {
+      return;
+    }
+    setActionStatus({ type: 'loading', message: '正在通过方案' });
     try {
-      const payload = await adoptAiPlan(project.projectId, detail.id);
-      mergeUpdatedSubmission(payload.submission);
-      setActionStatus({ type: 'success', message: '已将该方案设为当前采纳方案' });
+      const result = await approveAiPlan(project.projectId, detail.id);
+      setActionStatus({
+        type: 'success',
+        message: formatReviewNotificationMessage(result, '方案已通过审核'),
+      });
+      setRefreshSequence((current) => current + 1);
+    } catch (error) {
+      setActionStatus({ type: 'error', message: formatPlanError(error) });
+    }
+  }
+
+  async function handleReject(reason) {
+    setActionStatus({ type: 'loading', message: '正在拒绝方案' });
+    try {
+      const result = await rejectAiPlan(project.projectId, detail.id, reason);
+      setRejectOpen(false);
+      setActionStatus({
+        type: 'success',
+        message: formatReviewNotificationMessage(result, '方案已拒绝'),
+      });
+      setRefreshSequence((current) => current + 1);
+    } catch (error) {
+      setActionStatus({ type: 'error', message: formatPlanError(error) });
+    }
+  }
+
+  async function handleEdit(payload) {
+    setActionStatus({ type: 'loading', message: '正在创建新修订' });
+    try {
+      const result = await createAiPlanRevision(project.projectId, detail.id, payload);
+      setEditOpen(false);
+      setSelectedId(result.submission.id);
+      setActionStatus({
+        type: 'success',
+        message: formatReviewNotificationMessage(
+          result,
+          '已创建新修订并重新进入待审核',
+        ),
+      });
+      setRefreshSequence((current) => current + 1);
     } catch (error) {
       setActionStatus({ type: 'error', message: formatPlanError(error) });
     }
@@ -108,39 +205,17 @@ export function AiPlanLibrary({ project }) {
     if (!detail || actionStatus.type === 'loading') {
       return;
     }
-    const confirmed = window.confirm('确定撤回这份方案吗？撤回后不会出现在默认方案列表中。');
-    if (!confirmed) {
+    if (!window.confirm('确定撤回这份待审核方案吗？撤回后仍会保留在修订历史中。')) {
       return;
     }
     setActionStatus({ type: 'loading', message: '正在撤回方案' });
     try {
       await withdrawAiPlan(project.projectId, detail.id);
-      const remaining = state.submissions.filter((item) => item.id !== detail.id);
-      setState((current) => ({ ...current, submissions: remaining }));
-      setSelectedId(remaining[0]?.id || '');
-      setDetail(null);
-      setActionStatus({ type: 'idle', message: '' });
+      setActionStatus({ type: 'success', message: '方案已撤回' });
+      setRefreshSequence((current) => current + 1);
     } catch (error) {
       setActionStatus({ type: 'error', message: formatPlanError(error) });
     }
-  }
-
-  function mergeUpdatedSubmission(submission) {
-    setDetail(submission);
-    setState((current) => ({
-      ...current,
-      submissions: current.submissions.map((item) => {
-        if (
-          item.toolId === submission.toolId
-          && item.recordId === submission.recordId
-          && item.status === 'adopted'
-          && item.id !== submission.id
-        ) {
-          return { ...item, status: 'candidate' };
-        }
-        return item.id === submission.id ? { ...item, ...submission } : item;
-      }),
-    }));
   }
 
   return (
@@ -148,7 +223,7 @@ export function AiPlanLibrary({ project }) {
       <header className="ai-plan-library-header">
         <div>
           <h1>AI 方案</h1>
-          <span>项目成员提交的需求与 Bug 实施计划</span>
+          <span>查看需求与 Bug 的实施计划、审核状态和修订记录</span>
         </div>
       </header>
       <div className="ai-plan-filters">
@@ -158,13 +233,19 @@ export function AiPlanLibrary({ project }) {
             className="allow-text-select"
             value={filters.search}
             placeholder="搜索标题、摘要、工作项或提交人"
-            onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
+            onChange={(event) => setFilters((current) => ({
+              ...current,
+              search: event.target.value,
+            }))}
           />
         </label>
         <select
           className="allow-text-select"
           value={filters.toolId}
-          onChange={(event) => setFilters((current) => ({ ...current, toolId: event.target.value }))}
+          onChange={(event) => setFilters((current) => ({
+            ...current,
+            toolId: event.target.value,
+          }))}
         >
           <option value="">全部类型</option>
           {state.allowedToolIds.includes('requirements') ? <option value="requirements">需求</option> : null}
@@ -173,12 +254,18 @@ export function AiPlanLibrary({ project }) {
         <select
           className="allow-text-select"
           value={filters.status}
-          onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}
+          onChange={(event) => setFilters((current) => ({
+            ...current,
+            status: event.target.value,
+          }))}
         >
-          <option value="">有效方案</option>
-          <option value="candidate">候选</option>
-          <option value="adopted">已采纳</option>
+          <option value="">待审核与已通过</option>
+          <option value="pending_review">待审核</option>
+          <option value="approved">已通过</option>
+          <option value="rejected">已拒绝</option>
           <option value="withdrawn">已撤回</option>
+          <option value="superseded">已被替代</option>
+          <option value="all">全部历史</option>
         </select>
       </div>
 
@@ -197,7 +284,10 @@ export function AiPlanLibrary({ project }) {
               key={submission.id}
               type="button"
               className={`ai-plan-list-row ${submission.id === selectedId ? 'is-active' : ''}`}
-              onClick={() => setSelectedId(submission.id)}
+              onClick={() => {
+                setActionStatus({ type: 'idle', message: '' });
+                setSelectedId(submission.id);
+              }}
             >
               <div>
                 <span className={`ai-plan-status is-${submission.status}`}>
@@ -207,18 +297,25 @@ export function AiPlanLibrary({ project }) {
               </div>
               <strong>{submission.title}</strong>
               <p>{submission.workItemTitle ? `${submission.workItemTitle} · ${submission.summary || '无摘要'}` : submission.summary || '无摘要'}</p>
-              <small>{submission.authorName} · 修订 {submission.revision} · {formatPlanTime(submission.submittedAt)}</small>
+              <small>
+                {submission.authorName} · 修订 {submission.revision} · {formatPlanTime(submission.submittedAt)}
+              </small>
             </button>
           ))}
         </aside>
 
         <main className="ai-plan-detail">
-          {!detail ? (
+          {detailState.status === 'loading' ? <PlanLoading label="正在读取方案详情" /> : null}
+          {detailState.status === 'error' ? (
+            <p className="ai-inline-status is-error">{detailState.message}</p>
+          ) : null}
+          {detailState.status !== 'loading' && !detail ? (
             <div className="ai-plan-detail-empty">
               <FileText aria-hidden="true" />
               <span>从左侧选择一份方案</span>
             </div>
-          ) : (
+          ) : null}
+          {detail ? (
             <>
               <header className="ai-plan-detail-header">
                 <div>
@@ -229,9 +326,22 @@ export function AiPlanLibrary({ project }) {
                   </div>
                   <h2>{detail.title}</h2>
                   <p>{detail.summary || '无摘要'}</p>
-                  <small>{detail.authorName} 提交于 {formatPlanTime(detail.submittedAt)}</small>
+                  <small>
+                    {detail.authorName} 提交于 {formatPlanTime(detail.submittedAt)}
+                    {detail.revisionAuthorName && detail.revisionAuthorName !== detail.authorName
+                      ? ` · 本修订由 ${detail.revisionAuthorName} 编辑`
+                      : ''}
+                  </small>
                 </div>
                 <div className="ai-plan-detail-actions">
+                  <button
+                    type="button"
+                    className="ai-secondary-button"
+                    onClick={() => onOpenWorkItem?.(detail.toolId, detail.recordId)}
+                  >
+                    <ExternalLink aria-hidden="true" />
+                    原工作项
+                  </button>
                   <a
                     className="ai-secondary-button"
                     href={getAiPlanRawUrl(project.projectId, detail.id)}
@@ -239,15 +349,27 @@ export function AiPlanLibrary({ project }) {
                     rel="noreferrer"
                   >
                     <Download aria-hidden="true" />
-                    原始 Markdown
+                    Markdown
                   </a>
-                  {state.canAdopt && detail.status !== 'adopted' && detail.status !== 'withdrawn' ? (
-                    <button type="button" className="ai-primary-button" onClick={handleAdopt}>
-                      <Check aria-hidden="true" />
-                      采纳
+                  {detailState.permissions.canEdit ? (
+                    <button type="button" className="ai-secondary-button" onClick={() => setEditOpen(true)}>
+                      <Pencil aria-hidden="true" />
+                      编辑
                     </button>
                   ) : null}
-                  {detail.isOwnPlan && detail.status === 'candidate' ? (
+                  {detailState.permissions.canReject ? (
+                    <button type="button" className="ai-danger-button" onClick={() => setRejectOpen(true)}>
+                      <XCircle aria-hidden="true" />
+                      拒绝
+                    </button>
+                  ) : null}
+                  {detailState.permissions.canApprove ? (
+                    <button type="button" className="ai-primary-button" onClick={handleApprove}>
+                      <Check aria-hidden="true" />
+                      通过
+                    </button>
+                  ) : null}
+                  {detailState.permissions.canWithdraw ? (
                     <button type="button" className="ai-danger-button" onClick={handleWithdraw}>
                       <RotateCcw aria-hidden="true" />
                       撤回
@@ -255,7 +377,67 @@ export function AiPlanLibrary({ project }) {
                   ) : null}
                 </div>
               </header>
-              {actionStatus.message ? <p className={`ai-inline-status is-${actionStatus.type}`}>{actionStatus.message}</p> : null}
+
+              {!detailState.workItem?.exists ? (
+                <p className="ai-inline-status is-warning">
+                  原工作项已不存在或暂时无法读取，方案关联和审核记录仍会保留。
+                </p>
+              ) : null}
+              {detail.reviewReason ? (
+                <section className="ai-plan-review-note">
+                  <strong>审核意见</strong>
+                  <span>{detail.reviewReason}</span>
+                  <small>
+                    {detail.reviewedByName || '审核人'} · {formatPlanTime(detail.reviewedAt)}
+                  </small>
+                </section>
+              ) : null}
+              {actionStatus.message ? (
+                <p className={`ai-inline-status is-${actionStatus.type}`}>{actionStatus.message}</p>
+              ) : null}
+
+              {detailState.revisions.length > 1 ? (
+                <section className="ai-plan-revisions" aria-label="修订历史">
+                  <div className="ai-plan-section-heading">
+                    <History aria-hidden="true" />
+                    <strong>修订历史</strong>
+                  </div>
+                  <div className="ai-plan-revision-list">
+                    {detailState.revisions.map((revision) => (
+                      <button
+                        key={revision.id}
+                        type="button"
+                        className={revision.id === detail.id ? 'is-active' : ''}
+                        onClick={() => {
+                          setActionStatus({ type: 'idle', message: '' });
+                          setSelectedId(revision.id);
+                        }}
+                      >
+                        <span>修订 {revision.revision}</span>
+                        <small>{formatPlanStatus(revision.status)} · {revision.revisionAuthorName || revision.authorName}</small>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
+              {detailState.events.length > 0 ? (
+                <section className="ai-plan-audit" aria-label="审核记录">
+                  <div className="ai-plan-section-heading">
+                    <History aria-hidden="true" />
+                    <strong>审核记录</strong>
+                  </div>
+                  <ol>
+                    {detailState.events.map((event) => (
+                      <li key={event.id}>
+                        <span>{formatPlanEvent(event)}</span>
+                        <small>{formatPlanTime(event.createdAt)}</small>
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+              ) : null}
+
               <article className="ai-markdown ai-plan-document">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail.markdown}</ReactMarkdown>
               </article>
@@ -273,10 +455,138 @@ export function AiPlanLibrary({ project }) {
                 </section>
               ) : null}
             </>
-          )}
+          ) : null}
         </main>
       </div>
+
+      {rejectOpen && detail ? (
+        <AiPlanRejectDialog
+          disabled={actionStatus.type === 'loading'}
+          onClose={() => setRejectOpen(false)}
+          onSubmit={handleReject}
+        />
+      ) : null}
+      {editOpen && detail ? (
+        <AiPlanEditDialog
+          submission={detail}
+          disabled={actionStatus.type === 'loading'}
+          onClose={() => setEditOpen(false)}
+          onSubmit={handleEdit}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function AiPlanRejectDialog({ disabled, onClose, onSubmit }) {
+  const [reason, setReason] = useState('');
+  return (
+    <div className="ai-submit-backdrop" role="presentation">
+      <section className="ai-review-dialog" role="dialog" aria-modal="true" aria-label="拒绝 AI 方案">
+        <header>
+          <div>
+            <h3>拒绝 AI 方案</h3>
+            <span>拒绝原因会记录在审核历史中并通知原提交者。</span>
+          </div>
+          <button type="button" className="ai-icon-button" title="关闭" aria-label="关闭" onClick={onClose}>
+            <X aria-hidden="true" />
+          </button>
+        </header>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (reason.trim()) {
+              onSubmit(reason.trim());
+            }
+          }}
+        >
+          <label>
+            <span>拒绝原因</span>
+            <textarea
+              className="allow-text-select"
+              value={reason}
+              maxLength={2000}
+              rows={6}
+              autoFocus
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </label>
+          <div className="ai-submit-actions">
+            <button type="button" className="ai-secondary-button" onClick={onClose}>取消</button>
+            <button type="submit" className="ai-danger-button" disabled={disabled || !reason.trim()}>
+              <XCircle aria-hidden="true" />
+              确认拒绝
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function AiPlanEditDialog({ submission, disabled, onClose, onSubmit }) {
+  const [title, setTitle] = useState(submission.title || '');
+  const [summary, setSummary] = useState(submission.summary || '');
+  const [markdown, setMarkdown] = useState(submission.markdown || '');
+  const [mode, setMode] = useState('edit');
+  return (
+    <div className="ai-submit-backdrop" role="presentation">
+      <section className="ai-submit-dialog" role="dialog" aria-modal="true" aria-label="编辑 AI 方案">
+        <header>
+          <div>
+            <h3>编辑方案并创建新修订</h3>
+            <span>原修订不会被覆盖，新修订会重新进入待审核。</span>
+          </div>
+          <button type="button" className="ai-icon-button" title="关闭" aria-label="关闭" onClick={onClose}>
+            <X aria-hidden="true" />
+          </button>
+        </header>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (title.trim() && markdown.trim()) {
+              onSubmit({
+                title: title.trim(),
+                summary: summary.trim(),
+                markdown: markdown.trim(),
+              });
+            }
+          }}
+        >
+          <label>
+            <span>方案标题</span>
+            <input className="allow-text-select" value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} />
+          </label>
+          <label>
+            <span>摘要</span>
+            <textarea className="allow-text-select" value={summary} maxLength={2000} rows={2} onChange={(event) => setSummary(event.target.value)} />
+          </label>
+          <div className="ai-segmented-control" role="tablist" aria-label="Markdown 模式">
+            <button type="button" className={mode === 'edit' ? 'is-active' : ''} onClick={() => setMode('edit')}>编辑</button>
+            <button type="button" className={mode === 'preview' ? 'is-active' : ''} onClick={() => setMode('preview')}>预览</button>
+          </div>
+          {mode === 'edit' ? (
+            <textarea
+              className="ai-markdown-editor allow-text-select"
+              value={markdown}
+              maxLength={200000}
+              onChange={(event) => setMarkdown(event.target.value)}
+            />
+          ) : (
+            <div className="ai-markdown ai-submit-preview">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+            </div>
+          )}
+          <div className="ai-submit-actions">
+            <button type="button" className="ai-secondary-button" onClick={onClose}>取消</button>
+            <button type="submit" className="ai-primary-button" disabled={disabled || !title.trim() || !markdown.trim()}>
+              <Pencil aria-hidden="true" />
+              创建新修订
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
   );
 }
 
@@ -291,10 +601,26 @@ function PlanLoading({ label }) {
 
 function formatPlanStatus(status) {
   return {
-    candidate: '候选',
-    adopted: '已采纳',
+    pending_review: '待审核',
+    approved: '已通过',
+    rejected: '已拒绝',
     withdrawn: '已撤回',
+    superseded: '已被替代',
   }[status] || '未知';
+}
+
+function formatPlanEvent(event) {
+  const actor = event.actorName || '系统';
+  const labels = {
+    submitted: `${actor}提交了方案`,
+    revision_submitted: `${actor}提交了新修订`,
+    review_revision_created: `${actor}编辑并创建了新修订`,
+    approved: `${actor}通过了方案`,
+    rejected: `${actor}拒绝了方案${event.reason ? `：${event.reason}` : ''}`,
+    withdrawn: `${actor}撤回了方案`,
+    superseded: '方案已被后续修订或通过方案替代',
+  };
+  return labels[event.eventType] || `${actor}更新了方案`;
 }
 
 function formatPlanTime(value) {
@@ -313,4 +639,15 @@ function formatPlanTime(value) {
 
 function formatPlanError(error) {
   return error instanceof Error && error.message ? error.message : '读取方案失败';
+}
+
+function formatReviewNotificationMessage(payload, successMessage) {
+  const queuedCount = Number(payload?.notificationQueuedCount || 0);
+  if (queuedCount > 0) {
+    return `${successMessage}，已安排 ${queuedCount} 条飞书通知`;
+  }
+  if (payload?.notificationDeliveryEnabled === false) {
+    return `${successMessage}，当前未启用飞书 AI 计划通知`;
+  }
+  return `${successMessage}，未新增飞书通知任务`;
 }
