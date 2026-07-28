@@ -257,6 +257,10 @@ rollback release.
   again, fail with `codex_protocol` and never persist the premature plan. After the
   required answer round, the same thread continues until it can automatically
   produce a complete plan draft; later questions are optional.
+- Shared AI plan deletion removes the complete revision chain and its audit
+  events. Only the original submitter, project `研发超级管理员`, or global
+  `超级管理员` may delete it. Deleting an approved plan also removes it from MCP
+  reads.
 - Pending AI questions, answers, attachment summaries, and notification outbox
   entries must survive backend restarts. Restart recovery interrupts only queued or
   running work; it must preserve conversations waiting for user input.

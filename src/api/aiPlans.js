@@ -24,6 +24,13 @@ export function fetchAiPlan(projectId, submissionId) {
   );
 }
 
+export function deleteAiPlan(projectId, submissionId) {
+  return requestJson(
+    `/api/projects/${encodeURIComponent(projectId)}/ai-plans/${encodeURIComponent(submissionId)}`,
+    { method: 'DELETE' },
+  );
+}
+
 export function approveAiPlan(projectId, submissionId) {
   return requestJson(
     `/api/projects/${encodeURIComponent(projectId)}/ai-plans/${encodeURIComponent(submissionId)}/approve`,

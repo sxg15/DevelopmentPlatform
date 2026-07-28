@@ -260,6 +260,23 @@ test('AI planning repository isolates conversations and preserves revisions', ()
       repository.withdrawSubmission(revisionFour.id, 'owner-a', 'Owner A').status,
       AI_PLAN_STATUSES.WITHDRAWN,
     );
+    repository.enqueueNotification({
+      eventKey: `ai-plan:plan_review_requested:${revisionFour.id}:4:owner-a`,
+      ownerOpenId: 'owner-a',
+      eventType: 'plan_review_requested',
+      payload: { submissionId: revisionFour.id },
+    });
+    const deleted = repository.deleteSubmissionChain(revisionTwo.id);
+    assert.equal(deleted.deletedCount, 4);
+    assert.equal(repository.getSubmission(revisionOne.id), null);
+    assert.equal(repository.getSubmission(revisionFour.id), null);
+    assert.deepEqual(repository.listSubmissionEvents(revisionOne.rootSubmissionId), []);
+    assert.deepEqual(repository.listApprovedSubmissionsForProjects({
+      projectIds: ['P1'],
+      toolIds: ['requirements'],
+    }), []);
+    assert.equal(repository.listPendingNotifications(10).length, 0);
+    assert.ok(repository.getConversation(conversation.id, 'owner-a'));
     assert.equal(repository.listSubmissions({
       projectId: 'P1',
       allowedToolIds: ['bugs'],

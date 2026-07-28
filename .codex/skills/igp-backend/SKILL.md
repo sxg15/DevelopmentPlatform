@@ -175,6 +175,9 @@ Read `AGENTS.md`, then locate the owning layer.
   `pending_review`, `approved`, `rejected`, `withdrawn`, and `superseded`
   statuses. Preserve legacy candidate/adopted data during migration, keep one
   pending revision per chain, and keep at most one approved plan per work item.
+- `DELETE /api/projects/:projectId/ai-plans/:submissionId` removes the complete
+  revision chain, audit events, and queued notifications. Permit deletion only to
+  the original submitter, project development super-admins, or global super-admins.
 - Resolve AI plan review permission from the current work-item assignees on every
   mutation. Current assignees, project development super-admins, and global
   super-admins may approve, reject, or create an edited revision; deleted work

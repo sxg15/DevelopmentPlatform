@@ -9,6 +9,7 @@ import {
   Pencil,
   RotateCcw,
   Search,
+  Trash2,
   X,
   XCircle,
 } from 'lucide-react';
@@ -17,6 +18,7 @@ import remarkGfm from 'remark-gfm';
 import {
   approveAiPlan,
   createAiPlanRevision,
+  deleteAiPlan,
   fetchAiPlan,
   getAiPlanRawUrl,
   listAiPlans,
@@ -218,6 +220,33 @@ export function AiPlanLibrary({
     }
   }
 
+  async function handleDelete() {
+    if (!detail || actionStatus.type === 'loading') {
+      return;
+    }
+    if (!window.confirm('确定删除这份 AI 方案及其全部修订记录吗？删除后不可恢复。')) {
+      return;
+    }
+    setActionStatus({ type: 'loading', message: '正在删除方案' });
+    try {
+      await deleteAiPlan(project.projectId, detail.id);
+      setSelectedId('');
+      setDetailState({
+        status: 'idle',
+        message: '',
+        submission: null,
+        revisions: [],
+        events: [],
+        permissions: {},
+        workItem: null,
+      });
+      setActionStatus({ type: 'success', message: '方案及其修订记录已删除' });
+      setRefreshSequence((current) => current + 1);
+    } catch (error) {
+      setActionStatus({ type: 'error', message: formatPlanError(error) });
+    }
+  }
+
   return (
     <section className="ai-plan-library" aria-label="AI 方案库">
       <header className="ai-plan-library-header">
@@ -309,6 +338,9 @@ export function AiPlanLibrary({
           {detailState.status === 'error' ? (
             <p className="ai-inline-status is-error">{detailState.message}</p>
           ) : null}
+          {actionStatus.message ? (
+            <p className={`ai-inline-status is-${actionStatus.type}`}>{actionStatus.message}</p>
+          ) : null}
           {detailState.status !== 'loading' && !detail ? (
             <div className="ai-plan-detail-empty">
               <FileText aria-hidden="true" />
@@ -375,6 +407,12 @@ export function AiPlanLibrary({
                       撤回
                     </button>
                   ) : null}
+                  {detailState.permissions.canDelete ? (
+                    <button type="button" className="ai-danger-button" onClick={handleDelete}>
+                      <Trash2 aria-hidden="true" />
+                      删除
+                    </button>
+                  ) : null}
                 </div>
               </header>
 
@@ -392,10 +430,6 @@ export function AiPlanLibrary({
                   </small>
                 </section>
               ) : null}
-              {actionStatus.message ? (
-                <p className={`ai-inline-status is-${actionStatus.type}`}>{actionStatus.message}</p>
-              ) : null}
-
               {detailState.revisions.length > 1 ? (
                 <section className="ai-plan-revisions" aria-label="修订历史">
                   <div className="ai-plan-section-heading">

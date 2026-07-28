@@ -98,6 +98,9 @@ Treat shared definitions as the canonical frontend/backend contract.
   reviewer edits return to pending review and rejection requires a reason.
 - Keep one approved plan per work item. Replacing it marks the former approved
   plan superseded while preserving its Markdown, revision chain, and audit events.
+- Deleting a shared AI plan removes its complete revision chain and audit events.
+  Only the original submitter, project development super-admins, or global
+  super-admins may delete; current assignee review permission alone is insufficient.
 - New plan review cards target current assignees, or development super-admins for
   unassigned items. Newly assigned handlers receive a single pending-plan notice
   or aggregate notice, and review/edit/replacement outcomes notify the original

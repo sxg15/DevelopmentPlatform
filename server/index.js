@@ -497,6 +497,10 @@ app.get('/api/projects/:projectId/ai-plans/:submissionId', async (request, respo
   await handleAiPlanRead(request, response);
 });
 
+app.delete('/api/projects/:projectId/ai-plans/:submissionId', async (request, response) => {
+  await handleAiPlanDelete(request, response);
+});
+
 app.post('/api/projects/:projectId/ai-plans/:submissionId/adopt', async (request, response) => {
   await handleAiPlanApprove(request, response);
 });
@@ -1212,6 +1216,31 @@ async function handleAiPlanRawRead(request, response) {
   }
 }
 
+async function handleAiPlanDelete(request, response) {
+  try {
+    const initial = await getAiPlanDeleteRequestContext(request);
+    const result = await aiPlanMutationQueue.run(
+      buildAiPlanMutationKey(initial.submission),
+      async () => {
+        const context = await getAiPlanDeleteRequestContext(request);
+        assertCanDeleteAiPlan(context);
+        const deleted = aiPlanningService.deleteSubmission({
+          submissionId: context.submission.id,
+          projectId: context.project.projectId,
+          allowedToolIds: context.allowedToolIds,
+        });
+        if (!deleted) {
+          throw createHttpError('方案不存在', 404);
+        }
+        return deleted;
+      },
+    );
+    response.json(result);
+  } catch (error) {
+    sendAiPlanningError(response, error, '删除 AI 方案失败');
+  }
+}
+
 async function handleAiPlanApprove(request, response) {
   try {
     const initial = await getAiPlanReviewRequestContext(request);
@@ -1545,6 +1574,23 @@ async function getAiPlanReviewRequestContext(request) {
   return buildAiPlanReviewContext(context, request.params.submissionId);
 }
 
+async function getAiPlanDeleteRequestContext(request) {
+  const context = await getAiPlanProjectRequestContext(request);
+  const submissionId = String(request.params.submissionId || '').trim();
+  const submission = aiPlanningRepository.getSubmission(submissionId);
+  if (
+    !submission
+    || submission.projectId !== context.project.projectId
+    || !context.allowedToolIds.includes(submission.toolId)
+  ) {
+    throw createHttpError('方案不存在', 404);
+  }
+  return {
+    ...context,
+    submission,
+  };
+}
+
 async function buildAiPlanReviewContext(context, submissionIdValue) {
   const submissionId = String(submissionIdValue || '').trim();
   const submission = aiPlanningRepository.getSubmission(submissionId);
@@ -1655,6 +1701,7 @@ function buildAiPlanPermissions(context, submission) {
       && context.isLatestRevision
       && isPending,
     ),
+    canDelete: canDeleteAiPlan(context, submission),
   };
 }
 
@@ -1691,6 +1738,21 @@ function assertCanEditAiPlan(context) {
   ) {
     throw createHttpError('只能编辑修订链中的最新有效方案', 409);
   }
+}
+
+function assertCanDeleteAiPlan(context) {
+  if (!canDeleteAiPlan(context, context.submission)) {
+    throw createHttpError('只有原提交者、研发超级管理员或超级管理员可以删除方案', 403);
+  }
+}
+
+function canDeleteAiPlan(context, submission) {
+  const userOpenId = String(context.session?.user?.openId || '').trim();
+  return Boolean(
+    canManageAiPlans(context.projectAccess)
+    || submission?.isOwnPlan
+    || (userOpenId && submission?.authorOpenId === userOpenId),
+  );
 }
 
 function buildAiPlanMutationKey(submission) {

@@ -88,7 +88,8 @@ the current or rollback release.
   Verify project `preludePrompt` input ordering and that same-thread continuations
   do not resend it. Also cover legacy shared-plan migration, immutable revision
   chains, pending/approved uniqueness, reviewer edits, rejection reasons,
-  notification dedupe counts, and idempotent post-submit conversation creation.
+  full-chain deletion and notification cleanup, notification dedupe counts, and
+  idempotent post-submit conversation creation.
 - Same-user settings mutation serialization is covered by
   `test/serverRuntime.test.js`; non-blocking frontend initialization is covered by
   `test/frontendModuleBindings.test.js`.

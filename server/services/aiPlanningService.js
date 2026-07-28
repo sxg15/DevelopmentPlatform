@@ -832,6 +832,22 @@ export function createAiPlanningService({
       : null;
   }
 
+  function deleteSubmission({ submissionId, projectId, allowedToolIds }) {
+    const current = repository.getSubmission(submissionId);
+    const allowed = new Set(allowedToolIds || []);
+    if (
+      !current
+      || current.projectId !== projectId
+      || !allowed.has(current.toolId)
+    ) {
+      return null;
+    }
+    const deleted = repository.deleteSubmissionChain(submissionId);
+    return deleted
+      ? { deletedCount: deleted.deletedCount }
+      : null;
+  }
+
   function publishSnapshot(conversationId, ownerOpenId) {
     const snapshot = repository.getConversation(conversationId, ownerOpenId);
     if (snapshot) {
@@ -853,6 +869,7 @@ export function createAiPlanningService({
     createConversation,
     createReviewRevision,
     createSubmission,
+    deleteSubmission,
     getConversation,
     getSubmission,
     getSubmissionEvents,

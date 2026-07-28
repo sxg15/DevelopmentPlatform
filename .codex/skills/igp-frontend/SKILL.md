@@ -130,9 +130,12 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
   runnable. Opening it creates or selects an idempotent private conversation and
   prefills an unsent prompt; never start Codex until the user sends the prompt.
 - The shared AI plan library supports `ai-plan` direct targets, status filters,
-  original-work-item navigation, immutable revision history, audit events, and
+  original-work-item navigation, revision history, audit events, and
   Markdown download. Render approve/reject/edit controls from server permissions,
   require a rejection reason, and create a new revision for reviewer edits.
+- Show shared-plan deletion only when the detail payload grants `canDelete`.
+  Confirm that deletion removes the complete revision history and clear the
+  selected detail before refreshing the list.
 - Distinguish successful plan mutations from Feishu notification outcomes. State
   whether notification delivery is disabled, no reviewer exists, or no new outbox
   job was created instead of claiming a card was sent.

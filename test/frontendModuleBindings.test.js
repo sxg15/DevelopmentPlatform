@@ -172,6 +172,8 @@ test('AI planning separates private conversations from shared submissions', () =
     'utf8',
   );
   const librarySource = fs.readFileSync('src/ui/ai/AiPlanLibrary.jsx', 'utf8');
+  const aiPlanApiSource = fs.readFileSync('src/api/aiPlans.js', 'utf8');
+  const serverSource = fs.readFileSync('server/index.js', 'utf8');
   const buildSource = fs.readFileSync('scripts/build.ps1', 'utf8');
   const dependencyInstallerSource = fs.readFileSync(
     'scripts/ensure-publish-dependencies.ps1',
@@ -203,7 +205,14 @@ test('AI planning separates private conversations from shared submissions', () =
   assert.match(librarySource, /approveAiPlan/);
   assert.match(librarySource, /rejectAiPlan/);
   assert.match(librarySource, /createAiPlanRevision/);
+  assert.match(librarySource, /deleteAiPlan/);
+  assert.match(librarySource, /permissions\.canDelete/);
+  assert.match(librarySource, /全部修订记录/);
   assert.match(librarySource, /修订历史/);
+  assert.match(aiPlanApiSource, /export function deleteAiPlan/);
+  assert.match(aiPlanApiSource, /method:\s*'DELETE'/);
+  assert.match(serverSource, /app\.delete\('\/api\/projects\/:projectId\/ai-plans\/:submissionId'/);
+  assert.match(serverSource, /只有原提交者、研发超级管理员或超级管理员可以删除方案/);
   assert.match(buildSource, /runtime\\node\.exe/);
   assert.match(buildSource, /runtime\\npm\\bin\\npm-cli\.js/);
   assert.match(buildSource, /title IGP Web Backend Setup/);

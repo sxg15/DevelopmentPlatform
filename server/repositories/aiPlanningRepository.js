@@ -1170,6 +1170,61 @@ export class AiPlanningRepository {
     return this.getSubmission(submissionId);
   }
 
+  deleteSubmissionChain(submissionId) {
+    return this.withTransaction(() => {
+      const submission = this.getSubmission(submissionId);
+      if (!submission) {
+        return null;
+      }
+      const rows = this.database.prepare(`
+        SELECT id FROM plan_submissions
+        WHERE root_submission_id = ?
+      `).all(submission.rootSubmissionId);
+      const submissionIds = rows.map((row) => row.id);
+      if (submissionIds.length === 0) {
+        return null;
+      }
+      const placeholders = submissionIds.map(() => '?').join(', ');
+      const idSet = new Set(submissionIds);
+      const notifications = this.database.prepare(`
+        SELECT id, payload_json FROM notification_outbox
+      `).all();
+      const deleteNotification = this.database.prepare(`
+        DELETE FROM notification_outbox WHERE id = ?
+      `);
+      for (const notification of notifications) {
+        const payload = parseJsonObject(notification.payload_json);
+        if (idSet.has(String(payload?.submissionId || ''))) {
+          deleteNotification.run(notification.id);
+        }
+      }
+      this.database.prepare(`
+        UPDATE plan_submissions
+        SET superseded_by_submission_id = ''
+        WHERE superseded_by_submission_id IN (${placeholders})
+      `).run(...submissionIds);
+      this.database.prepare(`
+        UPDATE plan_submission_events
+        SET related_submission_id = ''
+        WHERE related_submission_id IN (${placeholders})
+          AND submission_id NOT IN (${placeholders})
+      `).run(...submissionIds, ...submissionIds);
+      this.database.prepare(`
+        DELETE FROM plan_submission_events
+        WHERE submission_id IN (${placeholders})
+      `).run(...submissionIds);
+      const result = this.database.prepare(`
+        DELETE FROM plan_submissions
+        WHERE id IN (${placeholders})
+      `).run(...submissionIds);
+      return {
+        rootSubmissionId: submission.rootSubmissionId,
+        submissionIds,
+        deletedCount: result.changes,
+      };
+    });
+  }
+
   markSubmissionSuperseded(submissionId, relatedSubmissionId, createdAt = new Date().toISOString()) {
     const result = this.database.prepare(`
       UPDATE plan_submissions
