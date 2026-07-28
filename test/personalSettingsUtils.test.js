@@ -70,6 +70,13 @@ test('todo notification items include assigned unfinished work across all three 
           assignees: [{ openId: 'ou_current' }],
           remainingDays: -3,
         },
+        {
+          recordId: 'req-3',
+          title: '待验收需求',
+          itemStatus: '待验收',
+          assignees: [{ openId: 'ou_current' }],
+          remainingDays: 1,
+        },
       ],
     },
     {
@@ -106,11 +113,11 @@ test('todo notification items include assigned unfinished work across all three 
     feedback: { completed: ['已完成', '关闭'] },
   });
 
-  assert.deepEqual(items.map((item) => item.recordId), ['bug-1', 'req-1']);
+  assert.deepEqual(items.map((item) => item.recordId), ['bug-1', 'req-3', 'req-1']);
   assert.deepEqual(summarizeTodoNotificationItems(items), {
-    total: 2,
+    total: 3,
     counts: {
-      requirements: 1,
+      requirements: 2,
       bugs: 1,
       feedback: 0,
     },

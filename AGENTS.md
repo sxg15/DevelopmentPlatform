@@ -13,6 +13,8 @@ Read this file before changing code. Also load the matching project skill under
 - `igp-backend` for Express, runtime state, config, and Feishu clients.
 - `igp-work-item-domain` for requirement/Bug/feedback fields and workflow rules.
 - `igp-test-release` for verification, versioning, packaging, and release logs.
+- `igp-lan-deploy` for the Electron LAN deployment tool, remote service control,
+  logs, Inspector tunneling, and required post-change target verification.
 
 Update the relevant skill whenever module ownership, workflow rules, configuration,
 or validation commands change.
@@ -35,6 +37,8 @@ or validation commands change.
   scheduled reminder matching, pending-item filtering, sorting, and summaries.
 - `shared/clientErrorUtils.js`: runtime-neutral client error redaction, truncation,
   and diagnostic identifiers.
+- `shared/aiPlanningDefinitions.js`: AI conversation, run-progress, question,
+  message, and submitted-plan contracts.
 - `shared/updateManifest.js`: update manifest and semantic version handling.
 
 Shared modules must remain runtime-neutral and importable from Node tests.
@@ -68,6 +72,10 @@ Shared modules must remain runtime-neutral and importable from Node tests.
 - `src/ui/work-items/workItemTimelineUtils.js`: pure timeline event classification,
   ordering, filtering, pagination, and timestamp helpers.
 - `src/ui/workItemListUtils.js`: pure list filtering, grouping, and sorting rules.
+- `src/ui/ai/AiPlanningWorkspace.jsx`: owner-private Codex conversation,
+  question/answer workflow, attachment summary, progress, failure, and draft
+  submission UI.
+- `src/ui/ai/AiPlanLibrary.jsx`: project-shared submitted Markdown plan list.
 - `src/ui/localCache.js`: browser cache, drafts, snapshots, and preferences.
 - `src/api/`: all frontend HTTP clients, including personal settings and sanitized
   client-error reporting. Version requests belong in `src/api/versions.js`.
@@ -94,6 +102,11 @@ Shared modules must remain runtime-neutral and importable from Node tests.
   structure caches.
 - `server/integrations/wikiClient.js`: Wiki node lookup, creation, copying, polling,
   and caches.
+- `server/integrations/codexAppServerClient.js`: read-only Codex app-server
+  lifecycle, progress, structured output, local images, user-input requests, and
+  same-thread continuation.
+- `server/integrations/feishuMessageClient.js`: interactive Feishu message HTTP
+  delivery.
 - `server/runtime/`: async cache, sessions, SSE hub, network helpers, and sanitized
   client-error log entries. Browser runtime errors append to
   `logs/client-errors.log` in development and `Publish/logs/client-errors.log` in
@@ -106,6 +119,15 @@ Shared modules must remain runtime-neutral and importable from Node tests.
 - `server/services/versionManagementService.js`: Wiki template provisioning,
   version Bitable schema validation, project-keyed mutations, active-slot
   replacement/rollback, references, associations, status history, and comments.
+- `server/repositories/aiPlanningRepository.js`: SQLite persistence for private
+  conversations, runs, question sets, drafts, submissions, and notification
+  outbox entries.
+- `server/services/aiPlanningService.js`: AI state machine, scheduling, prompts,
+  answer continuation, submissions, and owner-only realtime snapshots.
+- `server/services/aiRunContextService.js`: temporary read-only project junctions,
+  attachment download/conversion, limits, summaries, and cleanup.
+- `server/services/aiPlanningNotificationService.js`: durable question, completion,
+  and failure notification retries.
 - `server/services/todoNotificationScheduler.js`: minute-aligned scheduled reminder
   execution.
 
@@ -113,10 +135,49 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 `server/runtime/`, config behavior in `server/config/`, and route orchestration in
 `server/index.js`.
 
+Managed deployments may set `IGP_CONFIG_PATH` and
+`IGP_CLIENT_ERROR_LOG_PATH` so target-specific configuration and browser diagnostics
+remain outside replaceable release directories. Preserve the existing path fallback
+when those variables are absent.
+
+### LAN Deployment Tool
+
+- `deployment-tool/`: independent Electron/Vite package used on both development
+  and target computers. It must not add dependencies to the application package
+  copied into `Publish`.
+- `deployment-tool/src/main/core/`: target discovery, pinned TLS pairing, secure
+  credentials, offline artifacts, chunked uploads, managed releases, process and
+  log control, automation, and Node Inspector proxy.
+- `deployment-tool/src/renderer/`: dense developer/target operator interfaces.
+- `scripts/deploy-debug.js`: loopback-only Codex automation client used by
+  `npm run deploy:debug`.
+- Deployment-tool packages belong under `deployment-tool/Publish/`; never write
+  them into the application's root `Publish/` directory.
+
+The target agent runs outside managed releases. Deployment archives must exclude
+`config.json`, logs, credentials, and automation state. Validate archive paths and
+all hashes before activation; prepare offline dependencies before stopping the
+service; restore the previous release when activation or remote checks fail.
+Managed backend services run through the stable target-owned
+`managed-runtime/runtime/node.exe`. Keep release-local `runtime/node.exe` as the
+verified upgrade/rollback source, and replace the stable runtime transactionally
+by hash only while the managed service is stopped.
+Windows process inspection must use a bounded timeout. Preserve the recorded PID
+and report the inspection failure when WMI does not respond; do not clear service
+state or start a duplicate process.
+Before accepting a deployment upload, reserve one retention slot by pruning only
+unprotected old releases. Clean interrupted uploads and staging directories at
+target startup, and abort failed client uploads without deleting the current or
+rollback release.
+
 ## Domain Compatibility
 
 - Requirements, Bugs, and feedback share route and field contracts through
   `shared/workItemDefinitions.js`; update frontend and backend consumers together.
+- Requirement and Bug status fields include `待验收`. It is an active processing
+  status: include it in processing totals and pending reminders, exclude it from
+  completed version associations, and idempotently ensure it on templates and
+  existing project tables.
 - Every project tool definition includes an `iconKey`; the project navigation maps
   it to a Lucide icon and uses a generic icon only for stale or unknown tool data.
 - Explicit "不知道该由谁处理" routing is supported only for requirements and Bugs.
@@ -168,6 +229,21 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 - Version association, previous-version, status-history, and comment text fields use
   versioned JSON. Surface malformed documents and never overwrite malformed status
   or comment history during a mutation.
+- Requirement and Bug AI planning is a private multi-turn workflow. Codex may ask
+  one to three material decision questions, the owner answers through the detail
+  page, and the same Codex thread continues until it can automatically produce a
+  complete plan draft.
+- Pending AI questions, answers, attachment summaries, and notification outbox
+  entries must survive backend restarts. Restart recovery interrupts only queued or
+  running work; it must preserve conversations waiting for user input.
+- AI planning includes regular work-item attachments and requirement submission
+  attachments within configured limits. Attachment content and download tokens are
+  ephemeral and must never be persisted in conversations, browser payloads, logs,
+  notifications, or submitted plans.
+- Send AI planning Feishu cards only to the private conversation owner when
+  questions require input, a plan is ready, or a run fails. Card links must target
+  the exact conversation and focused UI section; notification failures never
+  change the AI run result.
 
 ## Configuration And Secrets
 
@@ -177,6 +253,9 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 - AI planning defaults to enabled with Codex model `gpt-5.6-sol`; incomplete Codex
   credentials or project roots must not prevent the rest of the backend from
   starting, but AI endpoints still require complete validation.
+- AI attachment analysis and owner notifications default to enabled. Keep file
+  count, byte, extracted-character, and retention limits configurable through both
+  `config.example.json` and the portable visual editor.
 - When AI is globally enabled but a project lacks a runnable mapping, requirement
   and Bug details show a disabled AI status instead of silently hiding the action.
   The configuration editor validates existing files on load and must surface the
@@ -192,6 +271,9 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
   page paths, browser identifiers, timestamps, and diagnostic IDs. Never attach
   form values, work-item payloads, tokens, or runtime configuration.
 - `Publish/`, `.htybox/`, logs, and runtime config are generated/ignored artifacts.
+- Deployment credentials are stored through Electron `safeStorage`; target state
+  stores only token hashes. Inspector binds to target loopback and is reachable only
+  through the authenticated tool tunnel. Never add a LAN-bound shell.
 - Production packaging must copy the complete `server/` tree because the backend is
   modular.
 - Portable packages include `ConfigureWebBackend.bat`,
@@ -210,19 +292,36 @@ Keep Feishu HTTP details in `server/integrations/`, process-local state in
 5. Run `npm test` and `npx vite build` during implementation.
 6. For UI changes, run the local server and verify desktop/mobile behavior in a real
    browser.
-7. Before release, run `npm run verify` and `git diff --check`.
-8. Run `npm run log-change -- "变动说明"` exactly once for the completed release
+7. After any runtime, UI, backend, shared-contract, configuration, or packaging
+   change, run `npm run deploy:debug`. The developer tool must be running with a
+   paired default target. A failed or unreachable remote deployment is a completion
+   blocker unless the user explicitly waives target verification.
+8. Diagnose remote failures with `npm run deploy:debug -- --status`,
+   `npm run deploy:debug -- --logs stderr`, and
+   `npm run deploy:debug -- --logs client`; service actions use
+   `npm run deploy:debug -- --action <start|stop|restart|rollback>`.
+9. Before release, run `npm run verify` and `git diff --check`.
+10. Run `npm run log-change -- "变动说明"` exactly once for the completed release
    change; it increments `package.json`/`package-lock.json` and updates
    `UploadLog.md`.
-9. Commit generated version/log changes with the implementation. Do not edit
+11. Commit generated version/log changes with the implementation. Do not edit
    `UploadLog.md` manually unless repairing the release tooling itself.
+
+`npm run deploy:debug` is a debug deployment and must not run `log-change` or edit
+the repository. It builds the current tree, sends an offline package, starts the
+target service, and verifies the running version, process, health endpoint, homepage,
+and startup logs.
 
 ## Required Validation
 
 ```powershell
 npm test
 npx vite build
+npm run deploy-tool:test
+npm run deploy-tool:build
+npm --prefix deployment-tool run smoke:e2e
 npm run verify
+npm run deploy:debug
 git diff --check
 ```
 

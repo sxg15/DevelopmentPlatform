@@ -1,12 +1,17 @@
+import {
+  WORK_ITEM_ACCEPTANCE_STATUS,
+  getWorkItemProcessingStatuses as getSharedWorkItemProcessingStatuses,
+} from '../../shared/workItemDefinitions.js';
+
 const DEFAULT_EXPANDED_STATUSES = {
-  requirements: new Set(['待处理', '处理中']),
-  bugs: new Set(['未处理', '修复中']),
+  requirements: new Set(['待处理', ...getSharedWorkItemProcessingStatuses('requirements')]),
+  bugs: new Set(['未处理', ...getSharedWorkItemProcessingStatuses('bugs')]),
   feedback: new Set(['待处理', '处理中']),
 };
 
 const STATUS_ORDERS = {
-  requirements: ['待处理', '处理中', '已完成', '已搁置', '已拒绝', '已处理', '关闭', '未设置状态'],
-  bugs: ['未处理', '修复中', '已修复', '无法复现', '已搁置', '关闭', '未设置状态'],
+  requirements: ['待处理', '处理中', WORK_ITEM_ACCEPTANCE_STATUS, '已完成', '已搁置', '已拒绝', '已处理', '关闭', '未设置状态'],
+  bugs: ['未处理', '修复中', WORK_ITEM_ACCEPTANCE_STATUS, '已修复', '无法复现', '已搁置', '关闭', '未设置状态'],
   feedback: ['待处理', '处理中', '已完成', '已搁置', '已拒绝', '未设置状态'],
 };
 
@@ -63,7 +68,11 @@ export function getWorkItemWaitingStatus(toolId) {
 }
 
 export function getWorkItemProcessingStatus(toolId) {
-  return String(toolId || '').trim() === 'bugs' ? '修复中' : '处理中';
+  return getWorkItemProcessingStatuses(toolId)[0] || '处理中';
+}
+
+export function getWorkItemProcessingStatuses(toolId) {
+  return getSharedWorkItemProcessingStatuses(toolId);
 }
 
 export function shouldShowWorkItemRemainingTime(toolId, item) {

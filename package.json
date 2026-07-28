@@ -1,6 +1,6 @@
 {
   "name": "igp-development-platform",
-  "version": "0.1.95",
+  "version": "0.1.103",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,13 +8,20 @@
     "build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1",
     "test": "node --test test/*.test.js",
     "verify": "npm run test && npm run build && npm run verify:upload-log && npm run verify:secret-exposure",
+    "deploy-tool:install": "npm ci --prefix deployment-tool",
+    "deploy-tool:test": "npm test --prefix deployment-tool",
+    "deploy-tool:build": "npm run build --prefix deployment-tool",
+    "deploy-tool:package": "npm run package --prefix deployment-tool",
+    "deploy:debug": "node scripts/deploy-debug.js",
     "verify:upload-log": "node scripts/verify-upload-log.js",
     "verify:secret-exposure": "node scripts/check-secret-exposure.js",
     "log-change": "node scripts/log-change.js"
   },
   "dependencies": {
     "@openai/codex": "0.145.0",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "file-type": "22.0.1",
+    "officeparser": "7.5.0"
   },
   "devDependencies": {
     "@babel/parser": "^7.29.7",

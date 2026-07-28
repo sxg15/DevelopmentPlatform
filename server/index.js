@@ -88,10 +88,17 @@ import {
 } from './services/personalSettingsService.js';
 import { createTodoNotificationScheduler } from './services/todoNotificationScheduler.js';
 import { createVersionManagementService } from './services/versionManagementService.js';
+import { createAiRunContextService } from './services/aiRunContextService.js';
+import { createAiPlanningNotificationService } from './services/aiPlanningNotificationService.js';
 import {
   createAiPlanningService,
   getAllowedAiPlanToolIds,
 } from './services/aiPlanningService.js';
+import {
+  ensureWorkItemStatusOptions,
+  migrateWorkItemStatusOptions,
+  resolveWorkItemTableContext,
+} from './services/workItemStatusSchemaService.js';
 import {
   exchangeCodeForAccessToken,
   fetchFeishuJson,
@@ -99,6 +106,7 @@ import {
   getTenantAccessToken,
   readJson,
 } from './integrations/feishuClient.js';
+import { sendFeishuInteractiveMessage } from './integrations/feishuMessageClient.js';
 import {
   createBitableRecord,
   deleteBitableRecord,
@@ -188,6 +196,16 @@ const codexAppServerClient = codexRuntimeReady
       requestTimeoutMs: runtimeConfig.aiPlanning.codex.requestTimeoutMs,
     })
   : null;
+const aiRunContextService = createAiRunContextService({
+  tempRoot: aiDataPaths.temp,
+  config: runtimeConfig.aiPlanning.attachments,
+  downloadAttachment: downloadAiPlanningAttachment,
+});
+const aiPlanningNotificationService = createAiPlanningNotificationService({
+  enabled: runtimeConfig.aiPlanning.notifications.enabled,
+  repository: aiPlanningRepository,
+  deliver: deliverAiPlanningNotification,
+});
 const aiPlanningService = createAiPlanningService({
   config: runtimeConfig.aiPlanning,
   repository: aiPlanningRepository,
@@ -195,6 +213,8 @@ const aiPlanningService = createAiPlanningService({
   realtimeHub: aiPlanningRealtimeHub,
   codexClient: codexAppServerClient,
   skillPath: path.join(rootDir, 'server', 'ai', 'skills', 'work-item-plan', 'SKILL.md'),
+  runContextService: aiRunContextService,
+  notificationService: aiPlanningNotificationService,
 });
 
 const app = express();
@@ -220,7 +240,10 @@ app.post('/api/client-errors', (request, response) => {
 });
 
 app.get('/api/health', (_request, response) => {
-  response.json({ ok: true });
+  response.json({
+    ok: true,
+    version: currentAppVersion,
+  });
 });
 
 app.get('/api/config', (_request, response) => {
@@ -419,6 +442,10 @@ app.delete('/api/ai/conversations/:conversationId', async (request, response) =>
 
 app.post('/api/ai/conversations/:conversationId/messages', async (request, response) => {
   await handleAiConversationMessage(request, response);
+});
+
+app.post('/api/ai/conversations/:conversationId/questions/:questionSetId/answers', async (request, response) => {
+  await handleAiConversationQuestionAnswers(request, response);
 });
 
 app.post('/api/ai/conversations/:conversationId/cancel', async (request, response) => {
@@ -985,6 +1012,27 @@ async function handleAiConversationMessage(request, response) {
   }
 }
 
+async function handleAiConversationQuestionAnswers(request, response) {
+  try {
+    validateAiPlanningConfig();
+    const context = await getAiConversationRequestContext(request, { loadWorkItem: true });
+    const result = aiPlanningService.answerQuestions({
+      user: context.session.user,
+      conversationId: context.conversation.id,
+      questionSetId: String(request.params.questionSetId || '').trim(),
+      expectedVersion: request.body?.expectedVersion,
+      clientMutationId: request.body?.clientMutationId,
+      answers: request.body?.answers,
+      additionalContext: request.body?.additionalContext,
+      workItem: context.workItem,
+      project: context.project,
+    });
+    response.status(result.duplicate ? 200 : 202).json(result);
+  } catch (error) {
+    sendAiPlanningError(response, error, '提交 AI 问题回答失败');
+  }
+}
+
 async function handleAiConversationCancel(request, response) {
   try {
     const context = await getAiConversationRequestContext(request);
@@ -1301,6 +1349,24 @@ async function loadAiPlanningWorkItem(token, project, user, toolId, recordId) {
   if (!item) {
     throw createHttpError(toolConfig.missingRecordText, 404);
   }
+  const attachmentSources = [
+    ...normalizeBitableAttachmentListValue(
+      item.rawFields?.[toolConfig.fieldNames.attachments],
+    ).map((attachment) => ({
+      ...attachment,
+      category: 'work_item',
+      tableId,
+    })),
+    ...(toolId === 'requirements'
+      ? normalizeBitableAttachmentListValue(
+          item.rawFields?.[toolConfig.fieldNames.submittedAttachments],
+        ).map((attachment) => ({
+          ...attachment,
+          category: 'submission',
+          tableId,
+        }))
+      : []),
+  ];
   return sanitizeAiWorkItemContext({
     recordId: item.recordId,
     itemId: item.itemId || item[toolConfig.itemIdKey] || '',
@@ -1314,6 +1380,8 @@ async function loadAiPlanningWorkItem(token, project, user, toolId, recordId) {
     proposers: item.proposers,
     comments: item.comments,
     rawFields: item.rawFields,
+    attachments: attachmentSources.map(({ fileToken: _fileToken, tableId: _tableId, ...attachment }) => attachment),
+    _aiAttachmentSources: attachmentSources,
   });
 }
 
@@ -1326,6 +1394,10 @@ function sanitizeAiWorkItemContext(value) {
   }
   const result = {};
   for (const [key, item] of Object.entries(value)) {
+    if (key === '_aiAttachmentSources') {
+      result[key] = item;
+      continue;
+    }
     if (/^(openId|open_id|unionId|userId|avatarUrl|fileToken|tmpUrl|downloadUrl)$/i.test(key)) {
       continue;
     }
@@ -1899,6 +1971,7 @@ async function handleWorkItemCreate(request, response, toolId) {
         fieldNames: {},
       }),
     ]);
+    ({ fields } = await ensureWorkItemStatusOptions(token, { appToken, tableId }, toolConfig));
     validateWorkItemTableSchema(fields, toolConfig);
 
     const uploadedAttachments = attachments.length > 0
@@ -2286,10 +2359,11 @@ async function handleRequirementSubmissionAttachmentsUpdate(request, response) {
     const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
     const { appToken, tableId } = await fetchWorkItemTableContext(token, node, toolConfig);
     await ensureBitableTextField(token, appToken, tableId, toolConfig.fieldNames.comments);
-    const [fields, record] = await Promise.all([
-      fetchCachedBitableFields(token, appToken, tableId),
+    const [statusSchema, record] = await Promise.all([
+      ensureWorkItemStatusOptions(token, { appToken, tableId }, toolConfig),
       fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig),
     ]);
+    const fields = statusSchema.fields;
     validateWorkItemTableSchema(fields, toolConfig);
 
     const fieldNames = toolConfig.fieldNames;
@@ -2614,10 +2688,11 @@ async function handleWorkItemStatusUpdate(request, response, toolId) {
     const fieldNames = toolConfig.fieldNames;
     await ensureBitableTextField(token, appToken, tableId, fieldNames.statusChangeLog);
 
-    const [fields, record] = await Promise.all([
-      fetchCachedBitableFields(token, appToken, tableId),
+    const [statusSchema, record] = await Promise.all([
+      ensureWorkItemStatusOptions(token, { appToken, tableId }, toolConfig),
       fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig),
     ]);
+    const fields = statusSchema.fields;
     const source = record.fields || {};
     const currentStatus = normalizeTextValue(source[fieldNames.status]) || '未设置状态';
     if (currentStatus === newStatus) {
@@ -2874,14 +2949,57 @@ if (isProduction) {
   app.use(vite.middlewares);
 }
 
-app.listen(port, host, () => {
+const httpServer = app.listen(port, host, () => {
   console.log(`Server started on ${host}:${port}`);
   console.log(`Client error log: ${clientErrorLogFilePath}`);
   for (const url of getLocalUrls(port)) {
     console.log(url);
   }
   todoNotificationScheduler.start();
+  void migrateConfiguredWorkItemStatusOptions();
 });
+
+let shuttingDown = false;
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    todoNotificationScheduler.stop();
+    aiPlanningNotificationService.stop();
+    void codexAppServerClient?.stop().finally(() => {
+      httpServer.close(() => process.exit(0));
+    });
+    setTimeout(() => process.exit(1), 5_000).unref();
+  });
+}
+
+async function migrateConfiguredWorkItemStatusOptions() {
+  if (!appId || !appSecret || !runtimeConfig.knowledgeBase.spaceId) {
+    return;
+  }
+
+  try {
+    const token = await getTenantAccessToken();
+    const summary = await migrateWorkItemStatusOptions(token, [
+      getWorkItemToolConfig('requirements'),
+      getWorkItemToolConfig('bugs'),
+    ]);
+    console.log(
+      `Work item status migration completed: scanned=${summary.scanned}, updated=${summary.updated}, unchanged=${summary.unchanged}, failed=${summary.failed}`,
+    );
+    for (const failure of summary.failures) {
+      console.error(
+        `Work item status migration failed: tool=${failure.toolId}, node=${failure.nodeTitle || 'unknown'}, message=${failure.message}`,
+      );
+    }
+  } catch (error) {
+    console.error(
+      `Work item status migration failed: ${error instanceof Error ? error.message : String(error || 'unknown error')}`,
+    );
+  }
+}
 
 function normalizeProjects(records) {
   const fields = runtimeConfig.bitable.projectBase.fieldNames;
@@ -3213,21 +3331,7 @@ async function getCachedWorkItemTableContext(token, node, toolConfig) {
 }
 
 async function fetchWorkItemTableContextUncached(token, node, toolConfig) {
-  if (!node?.objToken) {
-    throw new Error(toolConfig.notLinkedText);
-  }
-
-  const tables = await fetchCachedBitableTables(token, node.objToken);
-  const firstTable = tables[0] || null;
-  const tableId = String(firstTable?.table_id || firstTable?.tableId || '');
-  if (!tableId) {
-    throw new Error(toolConfig.noTableText);
-  }
-
-  return {
-    appToken: node.objToken,
-    tableId,
-  };
+  return resolveWorkItemTableContext(token, node, toolConfig);
 }
 
 function buildPermissionContext(permissionRecords, toolPermissionRecords, user) {
@@ -4331,6 +4435,21 @@ function validateWorkItemTableSchema(fields, toolConfig) {
   const fieldByName = new Map(normalizeBitableFields(fields).map((field) => [field.fieldName, field]));
   const names = toolConfig.fieldNames;
 
+  if (toolConfig.toolId === 'requirements' || toolConfig.toolId === 'bugs') {
+    const statusField = fieldByName.get(names.status);
+    if (!statusField) {
+      throw new Error(`${toolConfig.itemLabel}模板缺少“${names.status}”字段`);
+    }
+    if (!isBitableSingleSelectField(statusField)) {
+      throw new Error(`${toolConfig.itemLabel}模板字段“${names.status}”必须是单选类型`);
+    }
+
+    const acceptanceStatus = String(toolConfig.acceptanceStatus || '').trim();
+    if (acceptanceStatus && !getFieldOptionNames(statusField).includes(acceptanceStatus)) {
+      throw new Error(`${toolConfig.itemLabel}模板“${names.status}”缺少“${acceptanceStatus}”选项`);
+    }
+  }
+
   if (toolConfig.toolId === 'requirements') {
     const requiredField = fieldByName.get(names.requiresSubmissionAttachment);
     if (!requiredField) {
@@ -4913,6 +5032,63 @@ async function getMediaDownloadUrl(token, fileToken, tableId = runtimeConfig.bit
   return matched?.tmp_download_url || matched?.download_url || '';
 }
 
+async function downloadAiPlanningAttachment(source, { maxBytes }) {
+  const fileToken = String(source?.fileToken || '').trim();
+  const tableId = String(source?.tableId || '').trim();
+  if (!fileToken || !tableId) {
+    throw new Error('附件下载信息不完整');
+  }
+  const token = await getTenantAccessToken();
+  const downloadUrl = await getMediaDownloadUrl(token, fileToken, tableId);
+  if (!downloadUrl) {
+    throw new Error('附件不可下载');
+  }
+  const response = await fetch(downloadUrl, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!response.ok) {
+    throw new Error('附件下载失败');
+  }
+  const contentLength = Number(response.headers.get('content-length') || 0);
+  if (contentLength > maxBytes) {
+    throw new Error('附件超过大小限制');
+  }
+  return {
+    buffer: await readFetchBodyWithLimit(response, maxBytes),
+    contentType: String(response.headers.get('content-type') || ''),
+  };
+}
+
+async function readFetchBodyWithLimit(response, maxBytes) {
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > maxBytes) {
+      throw new Error('附件超过大小限制');
+    }
+    return buffer;
+  }
+
+  const chunks = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    const chunk = Buffer.from(value);
+    totalBytes += chunk.length;
+    if (totalBytes > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new Error('附件超过大小限制');
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, totalBytes);
+}
+
 async function getDownloadUrlFromRecordTmpUrl(token, tmpUrl, fileToken) {
   const response = await fetch(tmpUrl, {
     headers: {
@@ -5081,6 +5257,8 @@ async function ensureProjectWorkItemBitable(token, project, currentUser, toolCon
     throw new Error(`${toolConfig.templateName}不是多维表格节点`);
   }
 
+  const templateContext = await resolveWorkItemTableContext(token, templateNode, toolConfig);
+  await ensureWorkItemStatusOptions(token, templateContext, toolConfig);
   const copiedNode = await copyWikiNode(token, templateNode.nodeToken, parentNode.nodeToken, project.projectId);
   setCachedWorkItemNode(toolConfig, project.projectId, copiedNode);
   return buildWorkItemEnsureResult('created', copiedNode, await fetchWorkItemItemsWithCopyRetry(token, copiedNode, currentUser, toolConfig), toolConfig);
@@ -5149,7 +5327,7 @@ function buildWorkItemEnsureResult(status, node, itemData = {}, toolConfig) {
     [toolConfig.itemsKey]: items,
     requirements: toolConfig.toolId === 'requirements' ? items : [],
     priorityColors: itemData.priorityColors || {},
-    statusOptions: Array.isArray(itemData.statusOptions) ? itemData.statusOptions : getFallbackRequirementStatusOptions(),
+    statusOptions: Array.isArray(itemData.statusOptions) ? itemData.statusOptions : getFallbackWorkItemStatusOptions(toolConfig),
   };
 }
 
@@ -5189,7 +5367,8 @@ async function fetchWorkItemItems(token, node, currentUser, toolConfig) {
 
   const { appToken, tableId } = await getCachedWorkItemTableContext(token, node, toolConfig);
 
-  const fields = await ensureCachedBitableTextField(token, appToken, tableId, toolConfig.fieldNames.comments);
+  await ensureCachedBitableTextField(token, appToken, tableId, toolConfig.fieldNames.comments);
+  const { fields } = await ensureWorkItemStatusOptions(token, { appToken, tableId }, toolConfig);
   validateWorkItemTableSchema(fields, toolConfig);
   setCachedWorkItemTableContext(toolConfig, node, { appToken, tableId });
   const records = await fetchBitableRecords(token, {
@@ -5625,29 +5804,78 @@ async function notifyWorkItemProposers(token, proposers, context) {
   return results;
 }
 
-async function sendFeishuInteractiveMessage(token, openId, card) {
-  const query = new URLSearchParams({
-    receive_id_type: 'open_id',
+async function deliverAiPlanningNotification(notification) {
+  const token = await getTenantAccessToken();
+  await sendFeishuInteractiveMessage(
+    token,
+    notification.ownerOpenId,
+    buildAiPlanningNotificationCard(notification.eventType, notification.payload),
+  );
+}
+
+function buildAiPlanningNotificationCard(eventType, payload) {
+  const toolConfig = getWorkItemToolConfig(payload.toolId);
+  const itemLabel = payload.workItemId
+    ? `${payload.workItemId} ${payload.workItemTitle || toolConfig.unnamedTitle}`
+    : payload.workItemTitle || toolConfig.unnamedTitle;
+  const link = buildPlatformExternalLink('ai-conversation', {
+    projectId: payload.projectId,
+    tool: payload.toolId,
+    recordId: payload.recordId,
+    conversationId: payload.conversationId,
+    focus: payload.focus,
   });
-  const response = await fetch(`https://open.feishu.cn/open-apis/im/v1/messages?${query}`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json; charset=utf-8',
+  const definitions = {
+    question_required: {
+      template: 'orange',
+      title: `Codex 需要你确认 ${payload.questionCount || 1} 个决策`,
+      detailLabel: '下一步',
+      detail: '回答后 Codex 会继续只读分析并自动生成方案',
+      button: '打开并回答',
     },
-    body: JSON.stringify({
-      receive_id: openId,
-      msg_type: 'interactive',
-      content: JSON.stringify(card),
-    }),
-  });
-  const payload = await readJson(response);
+    plan_ready: {
+      template: 'green',
+      title: 'Codex 已生成一版实施方案',
+      detailLabel: '方案状态',
+      detail: '方案当前仅你可见，确认后可手动提交到项目方案库',
+      button: '打开方案',
+    },
+    run_failed: {
+      template: 'red',
+      title: 'Codex 生成方案失败',
+      detailLabel: '失败信息',
+      detail: payload.errorMessage || '请打开对话查看失败详情',
+      button: '查看失败详情',
+    },
+  };
+  const definition = definitions[eventType] || definitions.run_failed;
 
-  if (!response.ok || payload.code !== 0) {
-    throw new Error(payload.msg || '发送飞书通知失败');
-  }
-
-  return payload.data || {};
+  return {
+    config: {
+      wide_screen_mode: true,
+    },
+    header: {
+      template: definition.template,
+      title: {
+        tag: 'plain_text',
+        content: definition.title,
+      },
+    },
+    elements: [
+      buildCardTextElement(
+        '项目',
+        `${payload.projectName || '未命名项目'} (${payload.projectId || '无ID'})`,
+      ),
+      buildCardTextElement(toolConfig.itemNameLabel, itemLabel),
+      buildCardTextElement(definition.detailLabel, definition.detail),
+      {
+        tag: 'action',
+        actions: [
+          buildCardLinkButton(definition.button, link),
+        ],
+      },
+    ],
+  };
 }
 
 function buildTodoNotificationCard(_user, context) {
@@ -6123,7 +6351,14 @@ function buildPlatformDirectPath(targetType, params = {}) {
   const direct = String(targetType || 'home').trim() || 'home';
   query.set('direct', direct);
 
-  const allowedParams = ['projectId', 'tool', 'recordId', 'commentId'];
+  const allowedParams = [
+    'projectId',
+    'tool',
+    'recordId',
+    'commentId',
+    'conversationId',
+    'focus',
+  ];
   for (const key of allowedParams) {
     const value = String(params[key] || '').trim();
     if (value) {
@@ -6388,11 +6623,16 @@ function normalizeWorkItemStatusOptions(fields, toolConfig) {
     })
     .filter(Boolean);
 
-  return normalizedOptions.length > 0 ? normalizedOptions : getFallbackRequirementStatusOptions();
+  return normalizedOptions.length > 0 ? normalizedOptions : getFallbackWorkItemStatusOptions(toolConfig);
 }
 
-function getFallbackRequirementStatusOptions() {
-  return ['待处理', '处理中', '已处理', '已完成', '关闭'].map((name) => ({ name, color: '' }));
+function getFallbackWorkItemStatusOptions(toolConfig) {
+  const statuses = toolConfig?.toolId === 'bugs'
+    ? ['未处理', '修复中', '待验收', '已修复', '无法复现', '已搁置', '关闭']
+    : toolConfig?.toolId === 'feedback'
+      ? ['待处理', '处理中', '已完成', '已搁置', '已拒绝']
+      : ['待处理', '处理中', '待验收', '已处理', '已完成', '关闭'];
+  return statuses.map((name) => ({ name, color: '' }));
 }
 
 function mapFeishuBitableOptionColor(colorId) {

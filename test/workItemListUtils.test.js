@@ -6,6 +6,7 @@ import {
   createEmptyWorkItemFilters,
   filterWorkItems,
   hasActiveAdvancedWorkItemFilters,
+  getWorkItemProcessingStatuses,
   isStatusGroupDefaultCollapsed,
   shouldShowWorkItemRemainingTime,
 } from '../src/ui/workItemListUtils.js';
@@ -39,8 +40,10 @@ const items = [
 
 test('each tool uses its own default expanded statuses', () => {
   assert.equal(isStatusGroupDefaultCollapsed('requirements', '待处理'), false);
+  assert.equal(isStatusGroupDefaultCollapsed('requirements', '待验收'), false);
   assert.equal(isStatusGroupDefaultCollapsed('requirements', '已拒绝'), true);
   assert.equal(isStatusGroupDefaultCollapsed('bugs', '未处理'), false);
+  assert.equal(isStatusGroupDefaultCollapsed('bugs', '待验收'), false);
   assert.equal(isStatusGroupDefaultCollapsed('bugs', '已修复'), true);
   assert.equal(isStatusGroupDefaultCollapsed('feedback', '待处理'), false);
   assert.equal(isStatusGroupDefaultCollapsed('feedback', '已拒绝'), true);
@@ -99,7 +102,13 @@ test('related-item filter matches the current assignee and requested workflow st
 });
 
 test('status sorting follows each list workflow', () => {
+  assert.deepEqual(getWorkItemProcessingStatuses('requirements'), ['处理中', '待验收']);
+  assert.deepEqual(getWorkItemProcessingStatuses('bugs'), ['修复中', '待验收']);
   assert.ok(compareWorkItemStatus('requirements', '处理中', '已完成') < 0);
+  assert.ok(compareWorkItemStatus('requirements', '处理中', '待验收') < 0);
+  assert.ok(compareWorkItemStatus('requirements', '待验收', '已完成') < 0);
   assert.ok(compareWorkItemStatus('bugs', '修复中', '已修复') < 0);
+  assert.ok(compareWorkItemStatus('bugs', '修复中', '待验收') < 0);
+  assert.ok(compareWorkItemStatus('bugs', '待验收', '已修复') < 0);
   assert.ok(compareWorkItemStatus('feedback', '处理中', '已完成') < 0);
 });

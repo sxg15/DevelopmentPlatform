@@ -1,6 +1,10 @@
 node_modules/
 dist/
-Publish/
+deployment-tool/dist-renderer/
+deployment-tool/release*/
+deployment-tool/.deploy-tool-vite.pid
+/Publish/
+/deployment-tool/Publish/
 config/config.json
 .idea/
 .htybox/

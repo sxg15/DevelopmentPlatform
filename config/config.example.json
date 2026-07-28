@@ -24,6 +24,18 @@
       "requestTimeoutMs": 600000,
       "maxConcurrentRuns": 3
     },
+    "attachments": {
+      "enabled": true,
+      "maxFiles": 10,
+      "maxFileBytes": 20971520,
+      "maxTotalBytes": 52428800,
+      "maxExtractedCharsPerFile": 100000,
+      "maxExtractedCharsTotal": 300000,
+      "retentionHours": 24
+    },
+    "notifications": {
+      "enabled": true
+    },
     "projects": [
       {
         "projectId": "",
@@ -45,13 +57,13 @@
     "statusGroups": {
       "requirements": {
         "waiting": ["待处理"],
-        "processing": ["处理中"],
+        "processing": ["处理中", "待验收"],
         "completed": ["已完成", "已处理", "关闭"],
         "blocked": ["已搁置", "已拒绝"]
       },
       "bugs": {
         "waiting": ["未处理"],
-        "processing": ["修复中"],
+        "processing": ["修复中", "待验收"],
         "completed": ["已修复", "关闭"],
         "blocked": ["无法复现", "已搁置"]
       },

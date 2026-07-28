@@ -30,6 +30,17 @@ export function sendAiConversationMessage(conversationId, payload) {
   });
 }
 
+export function answerAiConversationQuestions(conversationId, questionSetId, payload) {
+  return requestJson(
+    `/api/ai/conversations/${encodeURIComponent(conversationId)}/questions/${encodeURIComponent(questionSetId)}/answers`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
 export function cancelAiConversationRun(conversationId) {
   return requestJson(`/api/ai/conversations/${encodeURIComponent(conversationId)}/cancel`, {
     method: 'POST',
@@ -49,7 +60,13 @@ export function subscribeAiConversation(conversationId, handlers = {}) {
     `/api/ai/conversations/${encodeURIComponent(conversationId)}/stream`,
   );
   const listeners = [];
-  for (const eventName of ['snapshot', 'assistant-delta', 'run-completed', 'run-failed']) {
+  for (const eventName of [
+    'snapshot',
+    'assistant-delta',
+    'questions-required',
+    'run-completed',
+    'run-failed',
+  ]) {
     const listener = (event) => {
       try {
         handlers[eventName]?.(JSON.parse(event.data || '{}'));

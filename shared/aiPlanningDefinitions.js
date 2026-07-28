@@ -5,11 +5,38 @@ export const AI_CONVERSATION_STATUSES = Object.freeze({
   IDLE: 'idle',
   QUEUED: 'queued',
   RUNNING: 'running',
+  AWAITING_USER: 'awaiting_user',
   READY: 'ready',
   FAILED: 'failed',
   INTERRUPTED: 'interrupted',
   ARCHIVED: 'archived',
 });
+
+export const AI_RUN_PROGRESS_STAGES = Object.freeze({
+  QUEUED: 'queued',
+  STARTING: 'starting',
+  PREPARING: 'preparing',
+  ANALYZING: 'analyzing',
+  AWAITING_USER: 'awaiting_user',
+  COMPOSING: 'composing',
+  COMPLETED: 'completed',
+});
+
+export const AI_MESSAGE_KINDS = Object.freeze({
+  TEXT: 'text',
+  QUESTION_SET: 'question_set',
+  QUESTION_ANSWERS: 'question_answers',
+});
+
+export const AI_QUESTION_SET_STATUSES = Object.freeze({
+  PENDING: 'pending',
+  ANSWERED: 'answered',
+  CANCELLED: 'cancelled',
+});
+
+export const AI_RUN_PROGRESS_STAGE_ORDER = Object.freeze(
+  Object.values(AI_RUN_PROGRESS_STAGES),
+);
 
 export const AI_PLAN_STATUSES = Object.freeze({
   CANDIDATE: 'candidate',

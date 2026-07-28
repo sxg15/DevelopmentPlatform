@@ -6,7 +6,9 @@ import { normalizeClientErrorPayload } from '../../shared/clientErrorUtils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CLIENT_ERROR_LOG_MAX_BYTES = 10 * 1024 * 1024;
-export const clientErrorLogFilePath = path.resolve(__dirname, '../../logs/client-errors.log');
+export const clientErrorLogFilePath = path.resolve(
+  String(process.env.IGP_CLIENT_ERROR_LOG_PATH || path.join(__dirname, '../../logs/client-errors.log')),
+);
 
 export function createClientErrorLogEntry(payload, context = {}) {
   const normalized = normalizeClientErrorPayload({

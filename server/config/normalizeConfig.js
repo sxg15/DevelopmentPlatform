@@ -7,6 +7,8 @@ export function normalizeConfig(config) {
   const dashboardConfig = config?.dashboard || {};
   const aiPlanningConfig = config?.aiPlanning || {};
   const codexConfig = aiPlanningConfig.codex || {};
+  const aiAttachmentConfig = aiPlanningConfig.attachments || {};
+  const aiNotificationConfig = aiPlanningConfig.notifications || {};
   const requirementsFieldNames = config?.knowledgeBase?.requirementsFieldNames || {};
   const bugsFieldNames = config?.knowledgeBase?.bugsFieldNames || {};
   const feedbackFieldNames = config?.knowledgeBase?.feedbackFieldNames || {};
@@ -42,6 +44,24 @@ export function normalizeConfig(config) {
         reasoningEffort: String(codexConfig.reasoningEffort || 'high').trim() || 'high',
         requestTimeoutMs: normalizePositiveInteger(codexConfig.requestTimeoutMs, 600000),
         maxConcurrentRuns: normalizePositiveInteger(codexConfig.maxConcurrentRuns, 3),
+      },
+      attachments: {
+        enabled: aiAttachmentConfig.enabled !== false,
+        maxFiles: normalizePositiveInteger(aiAttachmentConfig.maxFiles, 10),
+        maxFileBytes: normalizePositiveInteger(aiAttachmentConfig.maxFileBytes, 20 * 1024 * 1024),
+        maxTotalBytes: normalizePositiveInteger(aiAttachmentConfig.maxTotalBytes, 50 * 1024 * 1024),
+        maxExtractedCharsPerFile: normalizePositiveInteger(
+          aiAttachmentConfig.maxExtractedCharsPerFile,
+          100_000,
+        ),
+        maxExtractedCharsTotal: normalizePositiveInteger(
+          aiAttachmentConfig.maxExtractedCharsTotal,
+          300_000,
+        ),
+        retentionHours: normalizePositiveInteger(aiAttachmentConfig.retentionHours, 24),
+      },
+      notifications: {
+        enabled: aiNotificationConfig.enabled !== false,
       },
       projects: normalizeAiPlanningProjects(aiPlanningConfig.projects),
     },

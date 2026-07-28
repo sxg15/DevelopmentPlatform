@@ -95,6 +95,23 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
   explicitly submitted Markdown revisions appear in the project AI plan library.
 - Stream conversation updates through the AI API module; do not create EventSource
   connections directly in workspace components.
+- When a conversation is `awaiting_user`, render the persisted question set,
+  support recommended choices plus custom/free-text answers, allow optional overall
+  desired-effect context, disable the normal composer, and resume through the
+  question-answer API with an idempotent client mutation ID.
+- Show attachment processed/skipped totals and safe per-file reasons without
+  exposing attachment tokens, temporary paths, or extracted content.
+- Support `ai-conversation` direct targets with `conversationId` and
+  `focus=questions|plan|failure`. Open the owning requirement/Bug detail first,
+  then the private conversation and focused section; non-owners must receive the
+  normal not-found behavior.
+- While an AI run is active, show its persisted stage sequence, elapsed time,
+  latest-activity age, and activity count without inventing a percentage. After
+  45 seconds without new activity, state that the server task is still waiting
+  for Codex and keep the stop action available.
+- Render terminal AI failures as persistent details with the sanitized error
+  message, human-readable error type, ending stage, timestamps, and duration.
+  Do not duplicate the same terminal failure in the transient action-status row.
 - When AI is globally enabled but the selected requirement/Bug project is not
   runnable, show a disabled `AI 计划未配置` action with the server-provided
   non-sensitive reason instead of silently removing the action.

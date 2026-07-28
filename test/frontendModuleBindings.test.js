@@ -58,7 +58,9 @@ const BROWSER_GLOBALS = new Set([
   'encodeURIComponent',
   'fetch',
   'navigator',
+  'clearInterval',
   'setTimeout',
+  'setInterval',
   'structuredClone',
   'undefined',
   'window',
@@ -160,6 +162,17 @@ test('AI planning separates private conversations from shared submissions', () =
   assert.match(workspaceSource, /这里的对话仅你可见/);
   assert.match(workspaceSource, /submitAiPlan/);
   assert.match(workspaceSource, /subscribeAiConversation/);
+  assert.match(workspaceSource, /answerAiConversationQuestions/);
+  assert.match(workspaceSource, /awaiting_user/);
+  assert.match(workspaceSource, /提交答案并继续/);
+  assert.match(workspaceSource, /setInterval\(\(\) =>/);
+  assert.match(workspaceSource, /function AiRunProgress/);
+  assert.match(workspaceSource, /暂未收到新的 Codex 活动，任务仍在等待模型响应/);
+  assert.match(workspaceSource, /function AiRunFailure/);
+  assert.match(workspaceSource, /Codex 返回格式错误/);
+  assert.match(platformWorkspaceSource, /directTarget\?\.type === 'ai-conversation'/);
+  assert.match(platformWorkspaceSource, /initialConversationId=\{aiDirectTarget\?\.conversationId/);
+  assert.match(platformWorkspaceSource, /initialFocus=\{aiDirectTarget\?\.focus/);
   assert.match(platformWorkspaceSource, /AI 计划未配置/);
   assert.match(platformWorkspaceSource, /aiPlanningUnavailableReason/);
   assert.match(librarySource, /getAiPlanRawUrl/);
@@ -179,4 +192,14 @@ test('AI planning separates private conversations from shared submissions', () =
   assert.match(dependencyInstallerSource, /codex-win32-x64/);
   assert.match(secretExposureSource, /config-editor/);
   assert.match(secretExposureSource, /Publish\/config-editor/);
+});
+
+test('AI planning configuration editor exposes attachment and notification controls', () => {
+  const source = fs.readFileSync('config-editor/main.jsx', 'utf8');
+
+  assert.match(source, /aiPlanning\.attachments\.enabled/);
+  assert.match(source, /aiPlanning\.attachments\.maxFiles/);
+  assert.match(source, /aiPlanning\.attachments\.maxTotalBytes/);
+  assert.match(source, /aiPlanning\.attachments\.maxExtractedCharsTotal/);
+  assert.match(source, /aiPlanning\.notifications\.enabled/);
 });

@@ -45,6 +45,9 @@ Treat shared definitions as the canonical frontend/backend contract.
 - Daily pending reminders include assigned requirements, Bugs, and feedback whose
   current status is not in that tool's configured completed group. Blocked,
   stalled, and unset statuses remain pending.
+- Requirements and Bugs include `待验收` as an active processing status. Keep it
+  in processing totals and pending reminders, exclude it from completed version
+  associations, and ensure the option exists on templates and historical tables.
 - Reminder collection must honor the user's project and tool permissions, treat
   missing work-item tables as empty, and continue when one project/tool read
   fails.
@@ -67,6 +70,16 @@ Treat shared definitions as the canonical frontend/backend contract.
 - Requirement and Bug detail pages may open a private Codex planning conversation.
   Conversation history is owner-only; submitted Markdown revisions are project
   shared and remain filtered by the viewer's underlying requirement/Bug access.
+- Codex first inspects the work item, its regular attachments, requirement
+  submission attachments, and configured project roots. It may persist one to
+  three material decision questions and continue the same private thread after the
+  owner answers; once resolved, it automatically generates the draft.
+- AI attachment files and tokens are temporary server-side context only. Browser
+  payloads may expose safe processed/skipped summaries but never attachment
+  content, tokens, download URLs, or temporary paths.
+- Question-required, plan-ready, and run-failed cards notify only the conversation
+  owner and deep-link to the exact private conversation. Other project members
+  continue to see only explicitly submitted plan revisions.
 - If AI planning is globally enabled but the current project lacks a model
   connection or code-root mapping, requirement and Bug details retain a disabled
   AI status action so the configuration issue is visible.

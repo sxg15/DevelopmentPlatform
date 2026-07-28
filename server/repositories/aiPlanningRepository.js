@@ -2,7 +2,11 @@ import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import {
   AI_CONVERSATION_STATUSES,
+  AI_MESSAGE_KINDS,
   AI_PLAN_STATUSES,
+  AI_QUESTION_SET_STATUSES,
+  AI_RUN_PROGRESS_STAGE_ORDER,
+  AI_RUN_PROGRESS_STAGES,
   normalizeAiPlanSourceReferences,
 } from '../../shared/aiPlanningDefinitions.js';
 
@@ -44,7 +48,9 @@ export class AiPlanningRepository {
         conversation_id TEXT NOT NULL,
         sequence INTEGER NOT NULL,
         role TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'text',
         content TEXT NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '',
         client_mutation_id TEXT NOT NULL DEFAULT '',
         run_id TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
@@ -65,6 +71,11 @@ export class AiPlanningRepository {
         status TEXT NOT NULL,
         error_code TEXT NOT NULL DEFAULT '',
         error_message TEXT NOT NULL DEFAULT '',
+        progress_stage TEXT NOT NULL DEFAULT '',
+        progress_message TEXT NOT NULL DEFAULT '',
+        progress_updated_at TEXT NOT NULL DEFAULT '',
+        activity_count INTEGER NOT NULL DEFAULT 0,
+        attachment_summary_json TEXT NOT NULL DEFAULT '',
         started_at TEXT NOT NULL,
         finished_at TEXT,
         FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
@@ -72,6 +83,27 @@ export class AiPlanningRepository {
 
       CREATE INDEX IF NOT EXISTS idx_runs_conversation
       ON runs(conversation_id, started_at DESC);
+
+      CREATE TABLE IF NOT EXISTS question_sets (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        questions_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        answers_json TEXT NOT NULL DEFAULT '',
+        answer_client_mutation_id TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        answered_at TEXT,
+        cancelled_at TEXT,
+        FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+        FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_question_sets_run
+      ON question_sets(run_id);
+
+      CREATE INDEX IF NOT EXISTS idx_question_sets_pending
+      ON question_sets(conversation_id, status, created_at DESC);
 
       CREATE TABLE IF NOT EXISTS plan_drafts (
         conversation_id TEXT PRIMARY KEY,
@@ -110,10 +142,35 @@ export class AiPlanningRepository {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_submissions_adopted
       ON plan_submissions(project_id, tool_id, record_id)
       WHERE status = 'adopted';
+
+      CREATE TABLE IF NOT EXISTS notification_outbox (
+        id TEXT PRIMARY KEY,
+        event_key TEXT NOT NULL UNIQUE,
+        owner_open_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TEXT NOT NULL,
+        last_error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        sent_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_notification_outbox_pending
+      ON notification_outbox(status, next_attempt_at, created_at);
     `);
     ensureColumn(this.database, 'plan_submissions', 'work_item_id', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.database, 'plan_submissions', 'work_item_title', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.database, 'plan_submissions', 'project_name', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'runs', 'progress_stage', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'runs', 'progress_message', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'runs', 'progress_updated_at', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'runs', 'activity_count', 'INTEGER NOT NULL DEFAULT 0');
+    ensureColumn(this.database, 'runs', 'attachment_summary_json', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'messages', 'kind', "TEXT NOT NULL DEFAULT 'text'");
+    ensureColumn(this.database, 'messages', 'payload_json', "TEXT NOT NULL DEFAULT ''");
 
     this.recoverInterruptedRuns();
   }
@@ -178,12 +235,16 @@ export class AiPlanningRepository {
     const conversation = normalizeConversationRow(row);
     if (includeMessages) {
       conversation.messages = this.database.prepare(`
-        SELECT id, sequence, role, content, run_id, created_at
+        SELECT id, sequence, role, kind, content, payload_json, run_id, created_at
         FROM messages WHERE conversation_id = ? ORDER BY sequence
       `).all(conversationId).map(normalizeMessageRow);
     }
     conversation.draft = this.getDraft(conversationId);
-    conversation.activeRun = this.getActiveRun(conversationId);
+    conversation.latestRun = this.getLatestRun(conversationId);
+    conversation.pendingQuestionSet = this.getPendingQuestionSet(conversationId);
+    conversation.activeRun = conversation.latestRun?.status === 'running'
+      ? conversation.latestRun
+      : null;
     return conversation;
   }
 
@@ -210,7 +271,7 @@ export class AiPlanningRepository {
 
       if (clientMutationId) {
         const duplicate = this.database.prepare(`
-          SELECT id, sequence, role, content, run_id, created_at
+          SELECT id, sequence, role, kind, content, payload_json, run_id, created_at
           FROM messages WHERE conversation_id = ? AND client_mutation_id = ?
         `).get(conversationId, clientMutationId);
         if (duplicate) {
@@ -221,7 +282,11 @@ export class AiPlanningRepository {
           };
         }
       }
-      if (conversation.status === AI_CONVERSATION_STATUSES.RUNNING) {
+      if ([
+        AI_CONVERSATION_STATUSES.RUNNING,
+        AI_CONVERSATION_STATUSES.QUEUED,
+        AI_CONVERSATION_STATUSES.AWAITING_USER,
+      ].includes(conversation.status)) {
         return { busy: true, conversation };
       }
 
@@ -259,9 +324,20 @@ export class AiPlanningRepository {
       const now = new Date().toISOString();
       this.database.prepare(`
         INSERT INTO runs (
-          id, conversation_id, user_message_id, model, status, started_at
-        ) VALUES (?, ?, ?, ?, 'running', ?)
-      `).run(id, conversationId, userMessageId, model, now);
+          id, conversation_id, user_message_id, model, status,
+          progress_stage, progress_message, progress_updated_at, activity_count,
+          started_at
+        ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, 1, ?)
+      `).run(
+        id,
+        conversationId,
+        userMessageId,
+        model,
+        AI_RUN_PROGRESS_STAGES.QUEUED,
+        '任务已进入队列',
+        now,
+        now,
+      );
       this.database.prepare(`
         UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?
       `).run(AI_CONVERSATION_STATUSES.RUNNING, now, conversationId);
@@ -273,6 +349,242 @@ export class AiPlanningRepository {
     this.database.prepare(`
       UPDATE runs SET codex_turn_id = ? WHERE id = ?
     `).run(turnId, runId);
+  }
+
+  updateRunProgress({ runId, stage, message }) {
+    const run = this.getRun(runId);
+    if (!run || run.status !== 'running') {
+      return null;
+    }
+    const currentStage = normalizeProgressStage(run.progressStage)
+      || AI_RUN_PROGRESS_STAGES.QUEUED;
+    const nextStage = normalizeProgressStage(stage) || currentStage;
+    const currentIndex = AI_RUN_PROGRESS_STAGE_ORDER.indexOf(currentStage);
+    const nextIndex = AI_RUN_PROGRESS_STAGE_ORDER.indexOf(nextStage);
+    const resolvedStage = nextIndex >= currentIndex ? nextStage : currentStage;
+    const resolvedMessage = nextIndex >= currentIndex
+      ? String(message || run.progressMessage || '').trim().slice(0, 300)
+      : run.progressMessage;
+    const now = new Date().toISOString();
+    this.database.prepare(`
+      UPDATE runs
+      SET progress_stage = ?, progress_message = ?,
+          progress_updated_at = ?, activity_count = activity_count + 1
+      WHERE id = ? AND status = 'running'
+    `).run(resolvedStage, resolvedMessage, now, runId);
+    return this.getRun(runId);
+  }
+
+  setRunAttachmentSummary(runId, summary) {
+    this.database.prepare(`
+      UPDATE runs SET attachment_summary_json = ? WHERE id = ?
+    `).run(JSON.stringify(normalizeAttachmentSummary(summary)), runId);
+    return this.getRun(runId);
+  }
+
+  awaitUserInput({
+    conversationId,
+    ownerOpenId,
+    runId,
+    questions,
+  }) {
+    return this.withTransaction(() => {
+      const conversation = this.getConversation(conversationId, ownerOpenId, {
+        includeMessages: false,
+      });
+      const run = this.getRun(runId);
+      if (!conversation || !run || run.conversationId !== conversationId) {
+        return { missing: true };
+      }
+      const existing = this.database.prepare(`
+        SELECT * FROM question_sets WHERE run_id = ?
+      `).get(runId);
+      if (existing) {
+        return {
+          duplicate: true,
+          questionSet: normalizeQuestionSetRow(existing),
+          conversation: this.getConversation(conversationId, ownerOpenId),
+        };
+      }
+      if (run.status !== 'running') {
+        return { inactive: true, conversation };
+      }
+
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+      const normalizedQuestions = normalizeStoredQuestions(questions);
+      this.database.prepare(`
+        INSERT INTO question_sets (
+          id, conversation_id, run_id, questions_json, status, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        conversationId,
+        runId,
+        JSON.stringify(normalizedQuestions),
+        AI_QUESTION_SET_STATUSES.PENDING,
+        now,
+      );
+      this.insertMessage({
+        conversationId,
+        role: 'assistant',
+        kind: AI_MESSAGE_KINDS.QUESTION_SET,
+        content: buildQuestionSetMessage(normalizedQuestions),
+        payload: {
+          questionSetId: id,
+          questions: normalizedQuestions,
+          status: AI_QUESTION_SET_STATUSES.PENDING,
+        },
+        runId,
+      });
+      this.database.prepare(`
+        UPDATE runs
+        SET status = ?, progress_stage = ?, progress_message = ?,
+            progress_updated_at = ?, activity_count = activity_count + 1,
+            finished_at = ?
+        WHERE id = ? AND status = 'running'
+      `).run(
+        AI_CONVERSATION_STATUSES.AWAITING_USER,
+        AI_RUN_PROGRESS_STAGES.AWAITING_USER,
+        '等待用户确认关键决策',
+        now,
+        now,
+        runId,
+      );
+      this.database.prepare(`
+        UPDATE conversations
+        SET status = ?, version = version + 1, updated_at = ?
+        WHERE id = ? AND owner_open_id = ?
+      `).run(
+        AI_CONVERSATION_STATUSES.AWAITING_USER,
+        now,
+        conversationId,
+        ownerOpenId,
+      );
+      return {
+        questionSet: this.getQuestionSet(id),
+        conversation: this.getConversation(conversationId, ownerOpenId),
+      };
+    });
+  }
+
+  answerQuestionSet({
+    conversationId,
+    ownerOpenId,
+    questionSetId,
+    answers,
+    additionalContext,
+    expectedVersion,
+    clientMutationId,
+  }) {
+    return this.withTransaction(() => {
+      const conversation = this.getConversation(conversationId, ownerOpenId, {
+        includeMessages: false,
+      });
+      if (!conversation) {
+        return { missing: true };
+      }
+      const questionSet = this.getQuestionSet(questionSetId);
+      if (!questionSet || questionSet.conversationId !== conversationId) {
+        return { missing: true };
+      }
+      if (questionSet.status === AI_QUESTION_SET_STATUSES.ANSWERED) {
+        if (
+          clientMutationId
+          && questionSet.answerClientMutationId === clientMutationId
+        ) {
+          return {
+            duplicate: true,
+            conversation: this.getConversation(conversationId, ownerOpenId),
+          };
+        }
+        return { alreadyAnswered: true, conversation };
+      }
+      if (
+        questionSet.status !== AI_QUESTION_SET_STATUSES.PENDING
+        || conversation.status !== AI_CONVERSATION_STATUSES.AWAITING_USER
+      ) {
+        return { inactive: true, conversation };
+      }
+      if (Number(expectedVersion) !== conversation.version) {
+        return { stale: true, conversation };
+      }
+
+      const now = new Date().toISOString();
+      const payload = {
+        questionSetId,
+        answers,
+        additionalContext,
+      };
+      this.database.prepare(`
+        UPDATE question_sets
+        SET status = ?, answers_json = ?, answer_client_mutation_id = ?,
+            answered_at = ?
+        WHERE id = ? AND status = ?
+      `).run(
+        AI_QUESTION_SET_STATUSES.ANSWERED,
+        JSON.stringify(payload),
+        clientMutationId,
+        now,
+        questionSetId,
+        AI_QUESTION_SET_STATUSES.PENDING,
+      );
+      const message = this.insertMessage({
+        conversationId,
+        role: 'user',
+        kind: AI_MESSAGE_KINDS.QUESTION_ANSWERS,
+        content: buildQuestionAnswersMessage(questionSet.questions, answers, additionalContext),
+        payload,
+        clientMutationId,
+      });
+      this.database.prepare(`
+        UPDATE conversations
+        SET status = ?, version = version + 1, updated_at = ?
+        WHERE id = ? AND owner_open_id = ?
+      `).run(
+        AI_CONVERSATION_STATUSES.QUEUED,
+        now,
+        conversationId,
+        ownerOpenId,
+      );
+      return {
+        message,
+        conversation: this.getConversation(conversationId, ownerOpenId),
+      };
+    });
+  }
+
+  cancelPendingQuestionSets(conversationId, ownerOpenId) {
+    return this.withTransaction(() => {
+      const conversation = this.getConversation(conversationId, ownerOpenId, {
+        includeMessages: false,
+      });
+      if (!conversation) {
+        return null;
+      }
+      const now = new Date().toISOString();
+      this.database.prepare(`
+        UPDATE question_sets
+        SET status = ?, cancelled_at = ?
+        WHERE conversation_id = ? AND status = ?
+      `).run(
+        AI_QUESTION_SET_STATUSES.CANCELLED,
+        now,
+        conversationId,
+        AI_QUESTION_SET_STATUSES.PENDING,
+      );
+      this.database.prepare(`
+        UPDATE conversations
+        SET status = ?, version = version + 1, updated_at = ?
+        WHERE id = ? AND owner_open_id = ?
+      `).run(
+        AI_CONVERSATION_STATUSES.INTERRUPTED,
+        now,
+        conversationId,
+        ownerOpenId,
+      );
+      return this.getConversation(conversationId, ownerOpenId);
+    });
   }
 
   completeRun({ runId, conversationId, assistantContent, plan }) {
@@ -305,13 +617,29 @@ export class AiPlanningRepository {
         );
       }
       this.database.prepare(`
-        UPDATE runs SET status = 'completed', finished_at = ? WHERE id = ?
-      `).run(now, runId);
+        UPDATE runs
+        SET status = 'completed', progress_stage = ?, progress_message = ?,
+            progress_updated_at = ?, activity_count = activity_count + 1,
+            finished_at = ?
+        WHERE id = ?
+      `).run(
+        AI_RUN_PROGRESS_STAGES.COMPLETED,
+        '实施计划已生成',
+        now,
+        now,
+        runId,
+      );
       this.database.prepare(`
         UPDATE conversations
         SET status = ?, version = version + 1, updated_at = ?
         WHERE id = ?
-      `).run(AI_CONVERSATION_STATUSES.READY, now, conversationId);
+      `).run(
+        plan?.markdown || this.getDraft(conversationId)
+          ? AI_CONVERSATION_STATUSES.READY
+          : AI_CONVERSATION_STATUSES.IDLE,
+        now,
+        conversationId,
+      );
       return message;
     });
   }
@@ -320,9 +648,18 @@ export class AiPlanningRepository {
     const now = new Date().toISOString();
     this.database.prepare(`
       UPDATE runs
-      SET status = ?, error_code = ?, error_message = ?, finished_at = ?
+      SET status = ?, error_code = ?, error_message = ?,
+          progress_updated_at = ?, activity_count = activity_count + 1,
+          finished_at = ?
       WHERE id = ?
-    `).run(status, errorCode, String(errorMessage || '').slice(0, 1000), now, runId);
+    `).run(
+      status,
+      errorCode,
+      String(errorMessage || '').slice(0, 1000),
+      now,
+      now,
+      runId,
+    );
     this.database.prepare(`
       UPDATE conversations SET status = ?, version = version + 1, updated_at = ?
       WHERE id = ?
@@ -346,6 +683,22 @@ export class AiPlanningRepository {
       ownerOpenId,
       AI_CONVERSATION_STATUSES.RUNNING,
     ).changes > 0;
+  }
+
+  getQuestionSet(questionSetId) {
+    const row = this.database.prepare(`
+      SELECT * FROM question_sets WHERE id = ?
+    `).get(questionSetId);
+    return row ? normalizeQuestionSetRow(row) : null;
+  }
+
+  getPendingQuestionSet(conversationId) {
+    const row = this.database.prepare(`
+      SELECT * FROM question_sets
+      WHERE conversation_id = ? AND status = ?
+      ORDER BY created_at DESC LIMIT 1
+    `).get(conversationId, AI_QUESTION_SET_STATUSES.PENDING);
+    return row ? normalizeQuestionSetRow(row) : null;
   }
 
   getDraft(conversationId) {
@@ -515,6 +868,90 @@ export class AiPlanningRepository {
     return row ? normalizeRunRow(row) : null;
   }
 
+  getLatestRun(conversationId) {
+    const row = this.database.prepare(`
+      SELECT * FROM runs
+      WHERE conversation_id = ?
+      ORDER BY started_at DESC LIMIT 1
+    `).get(conversationId);
+    return row ? normalizeRunRow(row) : null;
+  }
+
+  enqueueNotification({
+    eventKey,
+    ownerOpenId,
+    eventType,
+    payload,
+  }) {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    this.database.prepare(`
+      INSERT INTO notification_outbox (
+        id, event_key, owner_open_id, event_type, payload_json,
+        status, next_attempt_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+      ON CONFLICT(event_key) DO NOTHING
+    `).run(
+      id,
+      eventKey,
+      ownerOpenId,
+      eventType,
+      JSON.stringify(payload || {}),
+      now,
+      now,
+      now,
+    );
+    return this.database.prepare(`
+      SELECT * FROM notification_outbox WHERE event_key = ?
+    `).get(eventKey);
+  }
+
+  listPendingNotifications(limit = 20) {
+    return this.database.prepare(`
+      SELECT * FROM notification_outbox
+      WHERE status = 'pending' AND next_attempt_at <= ?
+      ORDER BY created_at
+      LIMIT ?
+    `).all(new Date().toISOString(), Math.max(1, Number(limit) || 20))
+      .map(normalizeNotificationRow);
+  }
+
+  markNotificationSent(notificationId) {
+    const now = new Date().toISOString();
+    this.database.prepare(`
+      UPDATE notification_outbox
+      SET status = 'sent', updated_at = ?, sent_at = ?, last_error = ''
+      WHERE id = ?
+    `).run(now, now, notificationId);
+  }
+
+  markNotificationFailed(notificationId, errorMessage, retryAt) {
+    this.database.prepare(`
+      UPDATE notification_outbox
+      SET status = 'pending', attempts = attempts + 1,
+          next_attempt_at = ?, last_error = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      retryAt,
+      String(errorMessage || '').slice(0, 500),
+      new Date().toISOString(),
+      notificationId,
+    );
+  }
+
+  markNotificationAbandoned(notificationId, errorMessage) {
+    this.database.prepare(`
+      UPDATE notification_outbox
+      SET status = 'failed', attempts = attempts + 1,
+          last_error = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      String(errorMessage || '').slice(0, 500),
+      new Date().toISOString(),
+      notificationId,
+    );
+  }
+
   recoverInterruptedRuns() {
     const now = new Date().toISOString();
     this.database.exec('BEGIN IMMEDIATE');
@@ -522,9 +959,11 @@ export class AiPlanningRepository {
       this.database.prepare(`
         UPDATE runs
         SET status = 'interrupted', error_code = 'server_restarted',
-            error_message = '服务重启导致任务中断', finished_at = ?
+            error_message = '服务重启导致任务中断',
+            progress_updated_at = ?, activity_count = activity_count + 1,
+            finished_at = ?
         WHERE status = 'running'
-      `).run(now);
+      `).run(now, now);
       this.database.prepare(`
         UPDATE conversations
         SET status = ?, version = version + 1, updated_at = ?
@@ -545,7 +984,9 @@ export class AiPlanningRepository {
   insertMessage({
     conversationId,
     role,
+    kind = AI_MESSAGE_KINDS.TEXT,
     content,
+    payload = null,
     clientMutationId = '',
     runId = '',
   }) {
@@ -557,15 +998,17 @@ export class AiPlanningRepository {
     const createdAt = new Date().toISOString();
     this.database.prepare(`
       INSERT INTO messages (
-        id, conversation_id, sequence, role, content,
+        id, conversation_id, sequence, role, kind, content, payload_json,
         client_mutation_id, run_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       conversationId,
       sequence,
       role,
+      kind,
       String(content || '').slice(0, 200000),
+      payload ? JSON.stringify(payload) : '',
       clientMutationId,
       runId,
       createdAt,
@@ -574,7 +1017,9 @@ export class AiPlanningRepository {
       id,
       sequence,
       role,
+      kind,
       content: String(content || '').slice(0, 200000),
+      payload,
       runId,
       createdAt,
     };
@@ -617,7 +1062,9 @@ function normalizeMessageRow(row) {
     id: row.id,
     sequence: Number(row.sequence || 0),
     role: row.role,
+    kind: String(row.kind || AI_MESSAGE_KINDS.TEXT),
     content: row.content,
+    payload: parseJsonObject(row.payload_json),
     runId: row.run_id || '',
     createdAt: row.created_at,
   };
@@ -633,8 +1080,45 @@ function normalizeRunRow(row) {
     status: row.status,
     errorCode: row.error_code,
     errorMessage: row.error_message,
+    progressStage: normalizeProgressStage(row.progress_stage),
+    progressMessage: String(row.progress_message || ''),
+    progressUpdatedAt: String(row.progress_updated_at || ''),
+    activityCount: Math.max(0, Number(row.activity_count || 0)),
+    attachmentSummary: normalizeAttachmentSummary(parseJsonObject(row.attachment_summary_json)),
     startedAt: row.started_at,
     finishedAt: row.finished_at || '',
+  };
+}
+
+function normalizeQuestionSetRow(row) {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    runId: row.run_id,
+    questions: normalizeStoredQuestions(parseJsonArray(row.questions_json)),
+    status: row.status,
+    answers: parseJsonObject(row.answers_json),
+    answerClientMutationId: row.answer_client_mutation_id || '',
+    createdAt: row.created_at,
+    answeredAt: row.answered_at || '',
+    cancelledAt: row.cancelled_at || '',
+  };
+}
+
+function normalizeNotificationRow(row) {
+  return {
+    id: row.id,
+    eventKey: row.event_key,
+    ownerOpenId: row.owner_open_id,
+    eventType: row.event_type,
+    payload: parseJsonObject(row.payload_json),
+    status: row.status,
+    attempts: Number(row.attempts || 0),
+    nextAttemptAt: row.next_attempt_at,
+    lastError: row.last_error || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    sentAt: row.sent_at || '',
   };
 }
 
@@ -670,9 +1154,75 @@ function parseJsonArray(value) {
   }
 }
 
+function parseJsonObject(value) {
+  try {
+    const parsed = JSON.parse(String(value || ''));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function ensureColumn(database, tableName, columnName, definition) {
   const columns = database.prepare(`PRAGMA table_info(${tableName})`).all();
   if (!columns.some((column) => column.name === columnName)) {
     database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
   }
+}
+
+function normalizeProgressStage(value) {
+  const stage = String(value || '').trim();
+  return AI_RUN_PROGRESS_STAGE_ORDER.includes(stage) ? stage : '';
+}
+
+function normalizeStoredQuestions(value) {
+  return (Array.isArray(value) ? value : []).slice(0, 3).map((question) => ({
+    id: String(question?.id || '').trim().slice(0, 100),
+    header: String(question?.header || '').trim().slice(0, 80),
+    question: String(question?.question || '').trim().slice(0, 2000),
+    isOther: question?.isOther !== false,
+    options: Array.isArray(question?.options)
+      ? question.options.slice(0, 3).map((option) => ({
+          label: String(option?.label || '').trim().slice(0, 200),
+          description: String(option?.description || '').trim().slice(0, 1000),
+        }))
+      : [],
+  })).filter((question) => question.id && question.question);
+}
+
+function normalizeAttachmentSummary(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    discoveredCount: Math.max(0, Number(source.discoveredCount || 0)),
+    processedCount: Math.max(0, Number(source.processedCount || 0)),
+    skippedCount: Math.max(0, Number(source.skippedCount || 0)),
+    files: (Array.isArray(source.files) ? source.files : []).slice(0, 20).map((file) => ({
+      name: String(file?.name || '附件').slice(0, 300),
+      status: String(file?.status || 'skipped').slice(0, 30),
+      kind: String(file?.kind || '').slice(0, 50),
+      reason: String(file?.reason || '').slice(0, 500),
+    })),
+  };
+}
+
+function buildQuestionSetMessage(questions) {
+  return [
+    '继续生成方案前，需要你确认以下关键决策：',
+    ...questions.map((question, index) => `${index + 1}. ${question.question}`),
+  ].join('\n');
+}
+
+function buildQuestionAnswersMessage(questions, answers, additionalContext) {
+  const answerById = new Map(
+    (Array.isArray(answers) ? answers : []).map((answer) => [answer.questionId, answer]),
+  );
+  const lines = questions.map((question, index) => {
+    const answer = answerById.get(question.id) || {};
+    const text = [answer.optionLabel, answer.customText].filter(Boolean).join('：');
+    return `${index + 1}. ${question.question}\n回答：${text || '未填写'}`;
+  });
+  if (additionalContext) {
+    lines.push(`补充期望：${additionalContext}`);
+  }
+  return lines.join('\n\n');
 }

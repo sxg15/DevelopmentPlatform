@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import {
   AI_PLAN_TOOL_ID,
@@ -12,6 +13,8 @@ import { AiPlanningRepository } from '../server/repositories/aiPlanningRepositor
 import { ensureAiDataDirectories } from '../server/runtime/aiDataPaths.js';
 import { createAiPlanningRealtimeHub } from '../server/runtime/aiPlanningRealtime.js';
 import { createBoundedTaskScheduler } from '../server/runtime/boundedTaskScheduler.js';
+import { createAiRunContextService } from '../server/services/aiRunContextService.js';
+import { createAiPlanningNotificationService } from '../server/services/aiPlanningNotificationService.js';
 import {
   createAiPlanningService,
   getAllowedAiPlanToolIds,
@@ -106,6 +109,27 @@ test('AI planning repository isolates conversations and preserves revisions', ()
       userMessageId: appended.message.id,
       model: 'codex-test',
     });
+    assert.equal(started.run.progressStage, 'queued');
+    assert.equal(started.run.progressMessage, '任务已进入队列');
+    assert.equal(started.run.activityCount, 1);
+    const starting = repository.updateRunProgress({
+      runId: started.run.id,
+      stage: 'starting',
+      message: '正在启动 Codex 只读运行环境',
+    });
+    assert.equal(starting.progressStage, 'starting');
+    const nonRegressed = repository.updateRunProgress({
+      runId: started.run.id,
+      stage: 'queued',
+      message: '不应回退',
+    });
+    assert.equal(nonRegressed.progressStage, 'starting');
+    assert.equal(nonRegressed.progressMessage, '正在启动 Codex 只读运行环境');
+    repository.updateRunProgress({
+      runId: started.run.id,
+      stage: 'analyzing',
+      message: '正在读取项目结构和相关代码',
+    });
     repository.completeRun({
       runId: started.run.id,
       conversationId: conversation.id,
@@ -121,6 +145,10 @@ test('AI planning repository isolates conversations and preserves revisions', ()
     assert.equal(completed.status, 'ready');
     assert.equal(completed.messages.length, 2);
     assert.equal(completed.draft.markdown, '# Plan');
+    assert.equal(completed.latestRun.status, 'completed');
+    assert.equal(completed.latestRun.progressStage, 'completed');
+    assert.equal(completed.latestRun.progressMessage, '实施计划已生成');
+    assert.ok(completed.latestRun.activityCount >= 5);
 
     const revisionOne = repository.createSubmission({
       conversationId: conversation.id,
@@ -165,6 +193,40 @@ test('AI planning repository isolates conversations and preserves revisions', ()
   }
 });
 
+test('AI repository migrates legacy run tables with persistent progress columns', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-migration-'));
+  const databasePath = path.join(root, 'planning.sqlite');
+  const database = new DatabaseSync(databasePath);
+  database.exec(`
+    CREATE TABLE runs (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      user_message_id TEXT NOT NULL,
+      codex_turn_id TEXT NOT NULL DEFAULT '',
+      model TEXT NOT NULL,
+      status TEXT NOT NULL,
+      error_code TEXT NOT NULL DEFAULT '',
+      error_message TEXT NOT NULL DEFAULT '',
+      started_at TEXT NOT NULL,
+      finished_at TEXT
+    );
+  `);
+  database.close();
+
+  const repository = new AiPlanningRepository(databasePath);
+  try {
+    const columns = repository.database.prepare('PRAGMA table_info(runs)').all()
+      .map((column) => column.name);
+    assert.ok(columns.includes('progress_stage'));
+    assert.ok(columns.includes('progress_message'));
+    assert.ok(columns.includes('progress_updated_at'));
+    assert.ok(columns.includes('activity_count'));
+  } finally {
+    repository.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('AI repository recovers running work after restart', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-recovery-'));
   const databasePath = path.join(root, 'planning.sqlite');
@@ -196,7 +258,372 @@ test('AI repository recovers running work after restart', () => {
     const recovered = repository.getConversation(conversation.id, 'owner-a');
     assert.equal(recovered.status, 'interrupted');
     assert.equal(recovered.activeRun, null);
+    assert.equal(recovered.latestRun.errorCode, 'server_restarted');
+    assert.ok(recovered.latestRun.progressUpdatedAt);
   } finally {
+    repository.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AI service persists and publishes safe Codex progress snapshots', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-progress-service-'));
+  const projectRoot = path.join(root, 'project');
+  fs.mkdirSync(projectRoot);
+  const repository = new AiPlanningRepository(path.join(root, 'planning.sqlite'));
+  const realtimeHub = createAiPlanningRealtimeHub();
+  const writes = [];
+  const service = createAiPlanningService({
+    config: {
+      enabled: true,
+      codex: { model: 'codex-test' },
+      projects: [{
+        projectId: 'P1',
+        enabled: true,
+        roots: [{ id: 'main', path: projectRoot, profile: 'auto' }],
+      }],
+    },
+    repository,
+    scheduler: createBoundedTaskScheduler(),
+    realtimeHub,
+    codexClient: {
+      async runTurn({ onThread, onTurn, onProgress }) {
+        onThread('private-thread');
+        onTurn('private-turn');
+        onProgress({
+          stage: 'analyzing',
+          message: '正在读取项目结构和相关代码',
+        });
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        onProgress({
+          stage: 'composing',
+          message: '正在整理最终实施计划',
+        });
+        return {
+          threadId: 'private-thread',
+          turnId: 'private-turn',
+          content: JSON.stringify({
+            message: '计划已生成',
+            plan: null,
+          }),
+        };
+      },
+    },
+    skillPath: '',
+  });
+  try {
+    const user = { openId: 'owner-a', name: 'Owner A' };
+    const conversation = service.createConversation({
+      user,
+      projectId: 'P1',
+      toolId: 'requirements',
+      recordId: 'rec-1',
+      title: 'Plan',
+    });
+    const unsubscribe = service.subscribe({
+      response: { write: (value) => writes.push(value) },
+      user,
+      conversationId: conversation.id,
+    });
+    service.sendMessage({
+      user,
+      conversationId: conversation.id,
+      content: 'Create a plan',
+      expectedVersion: conversation.version,
+      clientMutationId: 'progress-test',
+      workItem: { itemId: 'REQ-001', title: 'Requirement' },
+      project: { projectName: 'Project one' },
+    });
+    const completed = await waitForConversationStatus(
+      repository,
+      conversation.id,
+      user.openId,
+      'idle',
+    );
+    unsubscribe();
+    assert.equal(completed.latestRun.status, 'completed');
+    assert.equal(completed.latestRun.progressStage, 'completed');
+    const events = writes.join('');
+    assert.match(events, /"stage":"starting"/);
+    assert.match(events, /"stage":"analyzing"/);
+    assert.match(events, /"stage":"composing"/);
+    assert.doesNotMatch(events, /private-thread|private-turn/);
+    assert.doesNotMatch(events, /"runId"/);
+  } finally {
+    repository.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AI questions persist, remain owner-only, and resume the same private conversation', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-questions-'));
+  const projectRoot = path.join(root, 'project');
+  fs.mkdirSync(projectRoot);
+  const repository = new AiPlanningRepository(path.join(root, 'planning.sqlite'));
+  const notifications = [];
+  let turnCount = 0;
+  const service = createAiPlanningService({
+    config: {
+      enabled: true,
+      codex: { model: 'codex-test' },
+      projects: [{
+        projectId: 'P1',
+        enabled: true,
+        roots: [{ id: 'main', path: projectRoot, profile: 'auto' }],
+      }],
+    },
+    repository,
+    scheduler: createBoundedTaskScheduler(),
+    realtimeHub: createAiPlanningRealtimeHub(),
+    codexClient: {
+      async runTurn(options) {
+        turnCount += 1;
+        options.onThread('private-thread');
+        options.onTurn(`turn-${turnCount}`);
+        if (turnCount === 1) {
+          await options.onRequestUserInput([{
+            id: 'storage',
+            header: '存储方式',
+            question: '方案数据应保存在哪里？',
+            isOther: true,
+            options: [
+              { label: 'SQLite', description: '沿用现有本地存储' },
+              { label: '飞书', description: '存入远端表格' },
+            ],
+          }]);
+          return { awaitingUser: true };
+        }
+        return {
+          content: JSON.stringify({
+            message: '已按你的选择生成方案',
+            plan: {
+              title: '实施方案',
+              summary: '使用 SQLite',
+              markdown: '# 实施方案',
+              sourceReferences: [],
+            },
+          }),
+        };
+      },
+    },
+    notificationService: {
+      enqueue(type, event) {
+        notifications.push({ type, event });
+      },
+    },
+    skillPath: '',
+  });
+  try {
+    const user = { openId: 'owner-a', name: 'Owner A' };
+    const conversation = service.createConversation({
+      user,
+      projectId: 'P1',
+      toolId: 'requirements',
+      recordId: 'rec-1',
+      title: 'Plan',
+    });
+    service.sendMessage({
+      user,
+      conversationId: conversation.id,
+      content: '生成方案',
+      expectedVersion: conversation.version,
+      clientMutationId: 'question-run-1',
+      workItem: { itemId: 'REQ-1', title: 'Requirement' },
+      project: { projectId: 'P1', projectName: 'Project' },
+    });
+    const awaiting = await waitForConversationStatus(
+      repository,
+      conversation.id,
+      user.openId,
+      'awaiting_user',
+    );
+    assert.equal(awaiting.pendingQuestionSet.questions.length, 1);
+    assert.equal(awaiting.messages.at(-1).kind, 'question_set');
+    assert.equal(repository.getConversation(conversation.id, 'owner-b'), null);
+    assert.equal(notifications[0].type, 'question_required');
+
+    const answerPayload = {
+      user,
+      conversationId: conversation.id,
+      questionSetId: awaiting.pendingQuestionSet.id,
+      expectedVersion: awaiting.version,
+      clientMutationId: 'answer-1',
+      answers: [{
+        questionId: 'storage',
+        optionLabel: 'SQLite',
+        customText: '',
+      }],
+      additionalContext: '保持便携部署',
+      workItem: { itemId: 'REQ-1', title: 'Requirement' },
+      project: { projectId: 'P1', projectName: 'Project' },
+    };
+    service.answerQuestions(answerPayload);
+    const completed = await waitForConversationStatus(
+      repository,
+      conversation.id,
+      user.openId,
+      'ready',
+    );
+    assert.equal(completed.codexThreadId, 'private-thread');
+    assert.equal(completed.messages.at(-2).kind, 'question_answers');
+    assert.equal(completed.draft.markdown, '# 实施方案');
+    assert.equal(turnCount, 2);
+    assert.equal(notifications.at(-1).type, 'plan_ready');
+
+    const duplicate = service.answerQuestions(answerPayload);
+    assert.equal(duplicate.duplicate, true);
+    assert.equal(turnCount, 2);
+  } finally {
+    repository.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AI pending questions survive repository restart without becoming interrupted', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-question-restart-'));
+  const databasePath = path.join(root, 'planning.sqlite');
+  let repository = new AiPlanningRepository(databasePath);
+  try {
+    const conversation = repository.createConversation({
+      ownerOpenId: 'owner-a',
+      ownerName: 'Owner A',
+      projectId: 'P1',
+      toolId: 'bugs',
+      recordId: 'bug-1',
+      title: 'Bug plan',
+    });
+    const appended = repository.appendUserMessage({
+      conversationId: conversation.id,
+      ownerOpenId: 'owner-a',
+      content: 'Investigate',
+      expectedVersion: 1,
+      clientMutationId: 'question-restart',
+    });
+    const started = repository.startRun({
+      conversationId: conversation.id,
+      userMessageId: appended.message.id,
+      model: 'codex-test',
+    });
+    repository.awaitUserInput({
+      conversationId: conversation.id,
+      ownerOpenId: 'owner-a',
+      runId: started.run.id,
+      questions: [{
+        id: 'q1',
+        header: '范围',
+        question: '是否包含旧版本？',
+        isOther: true,
+        options: [
+          { label: '包含', description: '兼容旧版本' },
+          { label: '不包含', description: '仅新版本' },
+        ],
+      }],
+    });
+    repository.close();
+
+    repository = new AiPlanningRepository(databasePath);
+    const recovered = repository.getConversation(conversation.id, 'owner-a');
+    assert.equal(recovered.status, 'awaiting_user');
+    assert.equal(recovered.latestRun.status, 'awaiting_user');
+    assert.equal(recovered.pendingQuestionSet.questions[0].id, 'q1');
+  } finally {
+    repository.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AI run context exposes project roots read-only and cleans attachment files', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-run-context-'));
+  const projectRoot = path.join(root, 'project');
+  const tempRoot = path.join(root, 'temp');
+  fs.mkdirSync(projectRoot);
+  fs.writeFileSync(path.join(projectRoot, 'keep.txt'), 'unchanged', 'utf8');
+  const service = createAiRunContextService({
+    tempRoot,
+    config: {
+      enabled: true,
+      maxFiles: 2,
+      maxFileBytes: 100,
+      maxTotalBytes: 150,
+      maxExtractedCharsPerFile: 100,
+      maxExtractedCharsTotal: 100,
+      retentionHours: 24,
+    },
+    async downloadAttachment(source) {
+      return {
+        buffer: source.fileToken === 'large'
+          ? Buffer.alloc(120)
+          : Buffer.from('attachment text', 'utf8'),
+      };
+    },
+  });
+  try {
+    const context = await service.prepare({
+      runId: 'run-12345678',
+      workspace: {
+        cwd: projectRoot,
+        roots: [{ id: 'main', path: projectRoot, profile: 'auto' }],
+      },
+      workItem: {
+        _aiAttachmentSources: [
+          { fileToken: 'text', name: 'notes.txt', size: 15, mimeType: 'text/plain' },
+          { fileToken: 'large', name: 'large.bin', size: 120 },
+        ],
+      },
+    });
+    assert.equal(fs.existsSync(context.cwd), true);
+    assert.equal(context.attachmentSummary.processedCount, 1);
+    assert.equal(context.attachmentSummary.skippedCount, 1);
+    assert.match(context.attachmentContext, /notes\.txt/);
+    assert.equal(fs.readFileSync(path.join(projectRoot, 'keep.txt'), 'utf8'), 'unchanged');
+    await context.cleanup();
+    assert.equal(fs.existsSync(context.cwd), false);
+    assert.equal(fs.readFileSync(path.join(projectRoot, 'keep.txt'), 'utf8'), 'unchanged');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AI notification outbox is durable and idempotent', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-notifications-'));
+  const repository = new AiPlanningRepository(path.join(root, 'planning.sqlite'));
+  const delivered = [];
+  const service = createAiPlanningNotificationService({
+    repository,
+    pollIntervalMs: 60_000,
+    async deliver(notification) {
+      delivered.push(notification);
+    },
+  });
+  try {
+    const event = {
+      eventKey: 'ai:run-1:plan_ready',
+      ownerOpenId: 'owner-a',
+      conversation: {
+        id: 'conversation-1',
+        projectId: 'P1',
+        toolId: 'requirements',
+        recordId: 'rec-1',
+        title: 'Private plan',
+        codexThreadId: 'must-not-persist',
+      },
+      workItem: {
+        itemId: 'REQ-1',
+        title: 'Requirement',
+        _aiAttachmentSources: [{ fileToken: 'secret-token' }],
+      },
+      project: { projectName: 'Project' },
+      focus: 'plan',
+    };
+    service.enqueue('plan_ready', event);
+    service.enqueue('plan_ready', event);
+    await waitFor(() => delivered.length === 1);
+    const rows = repository.database.prepare('SELECT * FROM notification_outbox').all();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].status, 'sent');
+    assert.doesNotMatch(rows[0].payload_json, /must-not-persist|secret-token/);
+  } finally {
+    service.stop();
     repository.close();
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -318,6 +745,20 @@ test('AI conversation payloads omit owner and Codex runtime identifiers', () => 
       id: 'run-private',
       codexTurnId: 'turn-private',
     },
+    latestRun: {
+      id: 'run-private',
+      codexTurnId: 'turn-private',
+      model: 'private-model',
+      status: 'failed',
+      errorCode: 'codex_failed',
+      errorMessage: 'Codex failed safely',
+      progressStage: 'analyzing',
+      progressMessage: '正在分析代码关系和实现约束',
+      progressUpdatedAt: '2026-07-22T00:00:50.000Z',
+      activityCount: 8,
+      startedAt: '2026-07-22T00:00:30.000Z',
+      finishedAt: '2026-07-22T00:01:00.000Z',
+    },
     draft: null,
   });
   assert.equal(serialized.ownerOpenId, undefined);
@@ -326,8 +767,52 @@ test('AI conversation payloads omit owner and Codex runtime identifiers', () => 
   assert.equal(serialized.contextSummary, undefined);
   assert.equal(serialized.activeRun, undefined);
   assert.equal(serialized.messages[0].runId, undefined);
+  assert.deepEqual(serialized.latestRun, {
+    status: 'failed',
+    errorCode: 'codex_failed',
+    errorMessage: 'Codex failed safely',
+    startedAt: '2026-07-22T00:00:30.000Z',
+    finishedAt: '2026-07-22T00:01:00.000Z',
+    progress: {
+      stage: 'analyzing',
+      message: '正在分析代码关系和实现约束',
+      updatedAt: '2026-07-22T00:00:50.000Z',
+      activityCount: 8,
+    },
+  });
+  assert.equal(serialized.latestRun.id, undefined);
+  assert.equal(serialized.latestRun.codexTurnId, undefined);
+  assert.equal(serialized.latestRun.model, undefined);
   assert.equal(serialized.projectId, 'P1');
 });
+
+async function waitForConversationStatus(
+  repository,
+  conversationId,
+  ownerOpenId,
+  expectedStatus,
+) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const conversation = repository.getConversation(conversationId, ownerOpenId);
+    if (conversation?.status === expectedStatus) {
+      return conversation;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for AI conversation status ${expectedStatus}`);
+}
+
+async function waitFor(predicate) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('Timed out waiting for condition');
+}
 
 test('submitted Markdown redacts configured project roots', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-submission-'));

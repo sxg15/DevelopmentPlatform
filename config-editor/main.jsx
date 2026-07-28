@@ -874,6 +874,71 @@ function AiSection({
         </datalist>
       </ConfigPanel>
 
+      <ConfigPanel title="附件分析与通知" icon={Bot}>
+        <ToggleField
+          label="分析工作项附件"
+          description="自动下载常见图片、文本和 Office/PDF 附件供 Codex 本轮只读分析；失败时跳过并显示原因。"
+          checked={config.aiPlanning.attachments.enabled}
+          onChange={(checked) => onChange('aiPlanning.attachments.enabled', checked)}
+        />
+        <ToggleField
+          label="发送 AI 计划飞书通知"
+          description="仅在需要回答、方案完成或运行失败时通知当前对话用户。"
+          checked={config.aiPlanning.notifications.enabled}
+          onChange={(checked) => onChange('aiPlanning.notifications.enabled', checked)}
+        />
+        <FieldGrid>
+          <NumberField
+            label="单轮附件数量"
+            path="aiPlanning.attachments.maxFiles"
+            value={config.aiPlanning.attachments.maxFiles}
+            error={errors['aiPlanning.attachments.maxFiles']}
+            onChange={onChange}
+            min={1}
+          />
+          <NumberField
+            label="单附件字节上限"
+            path="aiPlanning.attachments.maxFileBytes"
+            value={config.aiPlanning.attachments.maxFileBytes}
+            error={errors['aiPlanning.attachments.maxFileBytes']}
+            onChange={onChange}
+            min={1}
+          />
+          <NumberField
+            label="附件总字节上限"
+            path="aiPlanning.attachments.maxTotalBytes"
+            value={config.aiPlanning.attachments.maxTotalBytes}
+            error={errors['aiPlanning.attachments.maxTotalBytes']}
+            onChange={onChange}
+            min={1}
+          />
+          <NumberField
+            label="单附件提取字符"
+            path="aiPlanning.attachments.maxExtractedCharsPerFile"
+            value={config.aiPlanning.attachments.maxExtractedCharsPerFile}
+            error={errors['aiPlanning.attachments.maxExtractedCharsPerFile']}
+            onChange={onChange}
+            min={1}
+          />
+          <NumberField
+            label="提取字符总上限"
+            path="aiPlanning.attachments.maxExtractedCharsTotal"
+            value={config.aiPlanning.attachments.maxExtractedCharsTotal}
+            error={errors['aiPlanning.attachments.maxExtractedCharsTotal']}
+            onChange={onChange}
+            min={1}
+          />
+          <NumberField
+            label="临时目录保留小时"
+            path="aiPlanning.attachments.retentionHours"
+            value={config.aiPlanning.attachments.retentionHours}
+            error={errors['aiPlanning.attachments.retentionHours']}
+            onChange={onChange}
+            min={1}
+          />
+        </FieldGrid>
+      </ConfigPanel>
+
       <div className="panel-heading-row">
         <div>
           <span>项目代码目录</span>

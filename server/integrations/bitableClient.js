@@ -257,6 +257,26 @@ export async function ensureCachedBitableTextField(token, appToken, tableId, fie
   return nextFields;
 }
 
+export async function updateBitableField(token, appToken, tableId, fieldId, field) {
+  const url = `https://open.feishu.cn/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/fields/${encodeURIComponent(fieldId)}`;
+  const response = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify(field),
+  });
+  const payload = await readJson(response);
+
+  if (!response.ok || payload.code !== 0) {
+    throw new Error(formatFeishuApiError(payload.msg || '更新多维表格字段失败'));
+  }
+
+  invalidateBitableFieldsCache(appToken, tableId);
+  return payload.data?.field || payload.data || null;
+}
+
 export async function updateBitableRecordFields(token, appToken, tableId, recordId, fields) {
   const url = `https://open.feishu.cn/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records/${encodeURIComponent(recordId)}`;
   const response = await fetch(url, {

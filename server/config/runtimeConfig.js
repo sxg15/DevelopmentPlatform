@@ -26,6 +26,15 @@ export function readCurrentAppVersion() {
 }
 
 function findConfigPath() {
+  const configuredPath = String(process.env.IGP_CONFIG_PATH || '').trim();
+  if (configuredPath) {
+    const resolvedConfiguredPath = path.resolve(configuredPath);
+    if (!fs.existsSync(resolvedConfiguredPath) || !fs.statSync(resolvedConfiguredPath).isFile()) {
+      throw new Error('IGP_CONFIG_PATH 指向的配置文件不存在');
+    }
+    return resolvedConfiguredPath;
+  }
+
   const configPaths = isProduction
     ? [path.join(rootDir, 'config.json'), path.join(rootDir, 'Publish/config.json'), path.join(rootDir, 'config/config.json')]
     : [path.join(rootDir, 'config/config.json'), path.join(rootDir, 'Publish/config.json')];

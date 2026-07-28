@@ -1,6 +1,7 @@
 import {
   AI_CONVERSATION_STATUSES,
   AI_PLAN_SUPPORTED_WORK_ITEM_TOOL_IDS,
+  AI_RUN_PROGRESS_STAGES,
   isAiPlanningWorkItemTool,
   normalizeAiPlanSourceReferences,
 } from '../../shared/aiPlanningDefinitions.js';
@@ -57,6 +58,8 @@ export function createAiPlanningService({
   realtimeHub,
   codexClient,
   skillPath,
+  runContextService = null,
+  notificationService = null,
 }) {
   const activeTasks = new Map();
 
@@ -132,9 +135,15 @@ export function createAiPlanningService({
       throw createServiceError('对话不存在', 404);
     }
     if (appended.busy) {
-      throw createServiceError('当前对话正在生成计划', 409, {
-        conversation: serializeAiConversation(appended.conversation),
-      });
+      throw createServiceError(
+        appended.conversation?.status === AI_CONVERSATION_STATUSES.AWAITING_USER
+          ? '请先回答 Codex 正在等待的决策问题'
+          : '当前对话正在生成计划',
+        409,
+        {
+          conversation: serializeAiConversation(appended.conversation),
+        },
+      );
     }
     if (appended.stale) {
       throw createServiceError('对话已在其他页面更新，请刷新后重试', 409, {
@@ -157,29 +166,13 @@ export function createAiPlanningService({
       throw createServiceError('当前对话正在生成计划', 409);
     }
 
-    const taskState = {
-      conversationId,
+    scheduleRun({
+      conversation: appended.conversation,
+      userMessage: appended.message,
+      run: started.run,
       ownerOpenId,
-      runId: started.run.id,
-      threadId: appended.conversation.codexThreadId,
-      turnId: '',
-      cancelRequested: false,
-    };
-    activeTasks.set(conversationId, taskState);
-    publishSnapshot(conversationId, ownerOpenId);
-
-    void scheduler.schedule({
-      userKey: ownerOpenId,
-      projectKey: appended.conversation.projectId,
-      task: () => executeRun({
-        taskState,
-        conversation: appended.conversation,
-        userMessage: appended.message,
-        workItem,
-        project,
-      }),
-    }).catch(() => {
-      // executeRun persists and publishes every terminal failure.
+      workItem,
+      project,
     });
 
     return {
@@ -190,6 +183,134 @@ export function createAiPlanningService({
     };
   }
 
+  function answerQuestions({
+    user,
+    conversationId,
+    questionSetId,
+    expectedVersion,
+    clientMutationId,
+    answers,
+    additionalContext,
+    workItem,
+    project,
+  }) {
+    assertAvailable();
+    const ownerOpenId = getUserOpenId(user);
+    const conversation = repository.getConversation(conversationId, ownerOpenId);
+    if (!conversation) {
+      throw createServiceError('对话不存在', 404);
+    }
+    const mutationId = String(clientMutationId || '').trim().slice(0, 100);
+    if (!mutationId) {
+      throw createServiceError('缺少回答请求标识', 400);
+    }
+    const questionSet = conversation.pendingQuestionSet?.id === questionSetId
+      ? conversation.pendingQuestionSet
+      : repository.getQuestionSet(questionSetId);
+    if (!questionSet || questionSet.conversationId !== conversationId) {
+      throw createServiceError('待回答的问题不存在或已失效', 404);
+    }
+    if (
+      questionSet.status === 'answered'
+      && questionSet.answerClientMutationId === mutationId
+    ) {
+      return {
+        duplicate: true,
+        conversation: serializeAiConversation(conversation),
+      };
+    }
+    const normalized = normalizeQuestionAnswers(
+      questionSet.questions,
+      answers,
+      additionalContext,
+    );
+    const appended = repository.answerQuestionSet({
+      conversationId,
+      ownerOpenId,
+      questionSetId,
+      answers: normalized.answers,
+      additionalContext: normalized.additionalContext,
+      expectedVersion,
+      clientMutationId: mutationId,
+    });
+    if (appended.missing) {
+      throw createServiceError('待回答的问题不存在', 404);
+    }
+    if (appended.stale) {
+      throw createServiceError('对话已在其他页面更新，请刷新后重试', 409, {
+        conversation: serializeAiConversation(appended.conversation),
+      });
+    }
+    if (appended.alreadyAnswered || appended.inactive) {
+      throw createServiceError('该组问题已经回答或取消', 409, {
+        conversation: serializeAiConversation(appended.conversation),
+      });
+    }
+    if (appended.duplicate) {
+      return {
+        duplicate: true,
+        conversation: serializeAiConversation(appended.conversation),
+      };
+    }
+
+    const started = repository.startRun({
+      conversationId,
+      userMessageId: appended.message.id,
+      model: config.codex.model,
+    });
+    if (started.busy) {
+      throw createServiceError('当前对话正在生成计划', 409);
+    }
+    scheduleRun({
+      conversation: appended.conversation,
+      userMessage: appended.message,
+      run: started.run,
+      ownerOpenId,
+      workItem,
+      project,
+    });
+    return {
+      duplicate: false,
+      conversation: serializeAiConversation(
+        repository.getConversation(conversationId, ownerOpenId),
+      ),
+    };
+  }
+
+  function scheduleRun({
+    conversation,
+    userMessage,
+    run,
+    ownerOpenId,
+    workItem,
+    project,
+  }) {
+    const taskState = {
+      conversationId: conversation.id,
+      ownerOpenId,
+      runId: run.id,
+      threadId: conversation.codexThreadId,
+      turnId: '',
+      cancelRequested: false,
+    };
+    activeTasks.set(conversation.id, taskState);
+    publishSnapshot(conversation.id, ownerOpenId);
+
+    void scheduler.schedule({
+      userKey: ownerOpenId,
+      projectKey: conversation.projectId,
+      task: () => executeRun({
+        taskState,
+        conversation,
+        userMessage,
+        workItem,
+        project,
+      }),
+    }).catch(() => {
+      // executeRun persists and publishes every terminal failure.
+    });
+  }
+
   async function executeRun({
     taskState,
     conversation,
@@ -197,23 +318,47 @@ export function createAiPlanningService({
     workItem,
     project,
   }) {
+    let runContext = null;
     try {
+      reportRunProgress(taskState, {
+        stage: AI_RUN_PROGRESS_STAGES.STARTING,
+        message: '正在启动 Codex 只读运行环境',
+      });
       if (taskState.cancelRequested) {
         throw createInterruptedError();
       }
       const workspace = resolveAiProjectWorkspace(config, conversation.projectId);
+      runContext = runContextService
+        ? await runContextService.prepare({
+            runId: taskState.runId,
+            workspace,
+            workItem,
+          })
+        : {
+            cwd: workspace.cwd,
+            workspace,
+            inputItems: [],
+            attachmentSummary: null,
+            attachmentContext: '',
+          };
+      if (runContext.attachmentSummary) {
+        repository.setRunAttachmentSummary(taskState.runId, runContext.attachmentSummary);
+        publishSnapshot(conversation.id, taskState.ownerOpenId);
+      }
       const prompt = buildPlanningPrompt({
         conversation,
         userMessage,
         workItem,
         project,
-        workspace,
+        workspace: runContext.workspace || workspace,
+        attachmentContext: runContext.attachmentContext,
       });
       const result = await codexClient.runTurn({
         threadId: conversation.codexThreadId,
-        cwd: workspace.cwd,
+        cwd: runContext.cwd,
         skillPath,
         prompt,
+        inputItems: runContext.inputItems,
         outputSchema: OUTPUT_SCHEMA,
         onThread(threadId) {
           taskState.threadId = threadId;
@@ -223,11 +368,53 @@ export function createAiPlanningService({
           taskState.turnId = turnId;
           repository.setRunTurnId(taskState.runId, turnId);
         },
+        onProgress(progress) {
+          reportRunProgress(taskState, progress);
+        },
+        onRequestUserInput(questions) {
+          const awaited = repository.awaitUserInput({
+            conversationId: conversation.id,
+            ownerOpenId: taskState.ownerOpenId,
+            runId: taskState.runId,
+            questions,
+          });
+          if (awaited.missing || awaited.inactive) {
+            throw createServiceError('AI 问题无法保存，对话状态已变化', 409);
+          }
+          publishSnapshot(conversation.id, taskState.ownerOpenId);
+          realtimeHub.publish(
+            conversation.id,
+            taskState.ownerOpenId,
+            'questions-required',
+            { questionSetId: awaited.questionSet.id },
+          );
+          enqueueNotification('question_required', {
+            eventKey: `ai:${taskState.runId}:question_required`,
+            ownerOpenId: taskState.ownerOpenId,
+            conversation,
+            workItem,
+            project,
+            focus: 'questions',
+            questionCount: questions.length,
+          });
+        },
       });
       if (taskState.cancelRequested) {
         throw createInterruptedError();
       }
-      const output = parsePlanningOutput(result.content, workspace);
+      if (result.awaitingUser) {
+        return;
+      }
+      const outputWorkspace = {
+        ...workspace,
+        roots: [
+          ...(workspace.roots || []),
+          ...((runContext.workspace?.roots || []).filter((root) => (
+            !(workspace.roots || []).some((item) => item.path === root.path)
+          ))),
+        ],
+      };
+      const output = parsePlanningOutput(result.content, outputWorkspace);
       repository.completeRun({
         runId: taskState.runId,
         conversationId: conversation.id,
@@ -236,16 +423,39 @@ export function createAiPlanningService({
       });
       publishSnapshot(conversation.id, taskState.ownerOpenId);
       realtimeHub.publish(conversation.id, taskState.ownerOpenId, 'run-completed', {
-        runId: taskState.runId,
+        status: 'completed',
       });
+      if (output.plan?.markdown) {
+        enqueueNotification('plan_ready', {
+          eventKey: `ai:${taskState.runId}:plan_ready`,
+          ownerOpenId: taskState.ownerOpenId,
+          conversation,
+          workItem,
+          project,
+          focus: 'plan',
+        });
+      }
     } catch (error) {
       const interrupted = taskState.cancelRequested || error?.code === 'interrupted';
+      const errorCode = interrupted ? 'interrupted' : classifyRunError(error);
       finishFailedRun(taskState, {
         status: interrupted ? 'interrupted' : 'failed',
-        errorCode: interrupted ? 'interrupted' : 'codex_failed',
+        errorCode,
         errorMessage: interrupted ? '任务已取消' : sanitizeRunError(error, config),
       });
+      if (!interrupted) {
+        enqueueNotification('run_failed', {
+          eventKey: `ai:${taskState.runId}:run_failed`,
+          ownerOpenId: taskState.ownerOpenId,
+          conversation,
+          workItem,
+          project,
+          focus: 'failure',
+          errorMessage: sanitizeRunError(error, config),
+        });
+      }
     } finally {
+      await runContext?.cleanup?.().catch(() => {});
       if (activeTasks.get(conversation.id) === taskState) {
         activeTasks.delete(conversation.id);
       }
@@ -259,8 +469,16 @@ export function createAiPlanningService({
       throw createServiceError('对话不存在', 404);
     }
     const run = conversation.activeRun;
+    if (
+      conversation.status === AI_CONVERSATION_STATUSES.AWAITING_USER
+      && conversation.pendingQuestionSet
+    ) {
+      return serializeAiConversation(
+        repository.cancelPendingQuestionSets(conversationId, ownerOpenId),
+      );
+    }
     if (!run) {
-      return conversation;
+      return serializeAiConversation(conversation);
     }
     const taskState = activeTasks.get(conversationId);
     if (taskState) {
@@ -287,6 +505,14 @@ export function createAiPlanningService({
     );
   }
 
+  function enqueueNotification(eventType, event) {
+    try {
+      notificationService?.enqueue(eventType, event);
+    } catch {
+      // Notification delivery never changes the AI run result.
+    }
+  }
+
   function finishFailedRun(taskState, failure) {
     const run = repository.getRun(taskState.runId);
     if (run?.status !== 'running') {
@@ -299,10 +525,24 @@ export function createAiPlanningService({
     });
     publishSnapshot(taskState.conversationId, taskState.ownerOpenId);
     realtimeHub.publish(taskState.conversationId, taskState.ownerOpenId, 'run-failed', {
-      runId: taskState.runId,
       status: failure.status,
       message: failure.errorMessage,
     });
+  }
+
+  function reportRunProgress(taskState, progress) {
+    try {
+      const updatedRun = repository.updateRunProgress({
+        runId: taskState.runId,
+        stage: progress?.stage,
+        message: progress?.message,
+      });
+      if (updatedRun) {
+        publishSnapshot(taskState.conversationId, taskState.ownerOpenId);
+      }
+    } catch {
+      // Progress telemetry must not fail or cancel the underlying Codex run.
+    }
   }
 
   function subscribe({ response, user, conversationId }) {
@@ -441,6 +681,7 @@ export function createAiPlanningService({
 
   return {
     adoptSubmission,
+    answerQuestions,
     archiveConversation,
     cancelRun,
     createConversation,
@@ -506,13 +747,17 @@ export function buildPlanningPrompt({
   workItem,
   project,
   workspace,
+  attachmentContext = '',
 }) {
   const roots = workspace.roots.map((root) => ({
     rootId: root.id,
     path: root.path,
     profile: root.profile,
   }));
-  const workItemContext = limitSerializedValue(workItem, 40_000);
+  const workItemContext = limitSerializedValue(
+    stripPrivateWorkItemContext(workItem),
+    40_000,
+  );
   return [
     'Generate or refine a read-only implementation plan for the current work item.',
     `Project: ${String(project?.projectName || conversation.projectId)} (${conversation.projectId})`,
@@ -521,10 +766,13 @@ export function buildPlanningPrompt({
     `Configured roots: ${JSON.stringify(roots)}`,
     `Current work item data: ${workItemContext}`,
     `User message: ${userMessage.content}`,
+    attachmentContext ? `Attachment context: ${attachmentContext}` : '',
     '',
     'Inspect source only as needed. Do not modify anything or run builds/tests/installers.',
     'Use root-relative references and the configured rootId values. Never include absolute paths in the plan.',
-    'If the user asks a question that does not yet warrant a full plan, answer it and return plan as null.',
+    'If material implementation decisions remain unresolved, use request_user_input with 1 to 3 batched questions and stop this turn.',
+    'Put the recommended option first, allow a custom answer, never ask for secrets, and do not ask questions whose answer is available in source.',
+    'Once uncertainty is resolved, automatically return a complete implementation plan.',
   ].join('\n');
 }
 
@@ -583,10 +831,35 @@ export function serializeAiConversation(conversation) {
       id: message.id,
       sequence: message.sequence,
       role: message.role,
+      kind: message.kind,
       content: message.content,
+      payload: serializeMessagePayload(message),
       createdAt: message.createdAt,
     }));
   }
+  if (Object.prototype.hasOwnProperty.call(conversation, 'latestRun')) {
+    result.latestRun = conversation.latestRun
+      ? {
+          status: conversation.latestRun.status,
+          errorCode: conversation.latestRun.errorCode,
+          errorMessage: conversation.latestRun.errorMessage,
+          startedAt: conversation.latestRun.startedAt,
+          finishedAt: conversation.latestRun.finishedAt,
+          progress: {
+            stage: conversation.latestRun.progressStage,
+            message: conversation.latestRun.progressMessage,
+            updatedAt: conversation.latestRun.progressUpdatedAt,
+            activityCount: conversation.latestRun.activityCount,
+          },
+          ...(conversation.latestRun.attachmentSummary
+            ? { attachmentSummary: conversation.latestRun.attachmentSummary }
+            : {}),
+        }
+      : null;
+  }
+  result.pendingQuestionSet = conversation.pendingQuestionSet
+    ? serializePendingQuestionSet(conversation.pendingQuestionSet)
+    : null;
   result.draft = conversation.draft
     ? {
         title: conversation.draft.title,
@@ -626,6 +899,20 @@ function limitSerializedValue(value, maxLength) {
     : `${serialized.slice(0, maxLength)}...`;
 }
 
+function stripPrivateWorkItemContext(value) {
+  if (Array.isArray(value)) {
+    return value.map(stripPrivateWorkItemContext);
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !key.startsWith('_ai'))
+      .map(([key, item]) => [key, stripPrivateWorkItemContext(item)]),
+  );
+}
+
 function sanitizeRunError(error, config) {
   let message = error instanceof Error ? error.message : '生成计划失败';
   const sensitiveValues = [
@@ -642,6 +929,31 @@ function sanitizeRunError(error, config) {
   return message.slice(0, 1000);
 }
 
+function classifyRunError(error) {
+  const code = String(error?.code || '').trim();
+  if ([
+    'codex_timeout',
+    'codex_process_exit',
+    'codex_runtime_missing',
+    'codex_protocol',
+    'codex_empty_output',
+    'codex_failed',
+  ].includes(code)) {
+    return code;
+  }
+  const message = String(error?.message || '');
+  if (/超时|timed?\s*out|timeout/i.test(message)) {
+    return 'codex_timeout';
+  }
+  if (/格式不正确|invalid.*json|json.*invalid/i.test(message)) {
+    return 'codex_invalid_output';
+  }
+  if (/进程.*退出|process.*exit/i.test(message)) {
+    return 'codex_process_exit';
+  }
+  return 'codex_failed';
+}
+
 function createInterruptedError() {
   const error = new Error('任务已取消');
   error.code = 'interrupted';
@@ -653,6 +965,104 @@ function createServiceError(message, statusCode, details = null) {
   error.statusCode = statusCode;
   error.publicDetails = details;
   return error;
+}
+
+function normalizeQuestionAnswers(questions, value, additionalContext) {
+  const submitted = Array.isArray(value) ? value : [];
+  const answerById = new Map();
+  let totalLength = 0;
+  for (const answer of submitted) {
+    const questionId = String(answer?.questionId || '').trim();
+    if (!questionId || answerById.has(questionId)) {
+      throw createServiceError('问题回答格式不正确', 400);
+    }
+    answerById.set(questionId, answer);
+  }
+
+  const answers = questions.map((question) => {
+    const answer = answerById.get(question.id);
+    if (!answer) {
+      throw createServiceError('请回答全部问题后再继续', 400);
+    }
+    const optionLabel = String(answer.optionLabel || '').trim();
+    const customText = String(answer.customText || '').trim();
+    if (customText.length > 4_000) {
+      throw createServiceError('单个自定义回答不能超过 4000 字', 400);
+    }
+    const optionLabels = new Set((question.options || []).map((option) => option.label));
+    if (optionLabel && !optionLabels.has(optionLabel)) {
+      throw createServiceError('选择的回答选项已失效，请刷新后重试', 409);
+    }
+    if ((question.options || []).length > 0 && !optionLabel && !customText) {
+      throw createServiceError('请选择一个选项或填写自定义回答', 400);
+    }
+    if ((question.options || []).length === 0 && !customText) {
+      throw createServiceError('请填写问题答案', 400);
+    }
+    totalLength += optionLabel.length + customText.length;
+    return {
+      questionId: question.id,
+      optionLabel,
+      customText,
+    };
+  });
+  const normalizedAdditionalContext = String(additionalContext || '').trim();
+  if (normalizedAdditionalContext.length > 4_000) {
+    throw createServiceError('补充期望不能超过 4000 字', 400);
+  }
+  totalLength += normalizedAdditionalContext.length;
+  if (totalLength > 12_000) {
+    throw createServiceError('本轮回答总长度不能超过 12000 字', 400);
+  }
+  return {
+    answers,
+    additionalContext: normalizedAdditionalContext,
+  };
+}
+
+function serializePendingQuestionSet(questionSet) {
+  return {
+    id: questionSet.id,
+    status: questionSet.status,
+    questions: questionSet.questions.map((question) => ({
+      id: question.id,
+      header: question.header,
+      question: question.question,
+      isOther: question.isOther,
+      options: question.options,
+    })),
+    createdAt: questionSet.createdAt,
+  };
+}
+
+function serializeMessagePayload(message) {
+  if (message.kind === 'question_set') {
+    const payload = message.payload || {};
+    return {
+      questionSetId: String(payload.questionSetId || ''),
+      status: String(payload.status || ''),
+      questions: (Array.isArray(payload.questions) ? payload.questions : []).map((question) => ({
+        id: String(question?.id || ''),
+        header: String(question?.header || ''),
+        question: String(question?.question || ''),
+        isOther: question?.isOther !== false,
+        options: Array.isArray(question?.options) ? question.options : [],
+      })),
+    };
+  }
+  if (message.kind === 'question_answers') {
+    const payload = message.payload || {};
+    return {
+      questionSetId: String(payload.questionSetId || ''),
+      answers: (Array.isArray(payload.answers) ? payload.answers : []).map((answer) => ({
+        questionId: String(answer?.questionId || ''),
+        optionLabel: String(answer?.optionLabel || ''),
+        customText: String(answer?.customText || ''),
+      })),
+      additionalContext: String(payload.additionalContext || ''),
+    };
+  }
+  return null;
 }
 
 function escapeRegExp(value) {

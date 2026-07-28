@@ -96,6 +96,41 @@ export function validateConfigDocument(config, options = {}) {
     'aiPlanning.codex.maxConcurrentRuns',
     'Codex 最大并发数',
   );
+  const attachments = aiPlanning.attachments;
+  if (attachments && typeof attachments === 'object') {
+    for (const [field, label] of [
+      ['maxFiles', '附件数量上限'],
+      ['maxFileBytes', '单附件字节上限'],
+      ['maxTotalBytes', '附件总字节上限'],
+      ['maxExtractedCharsPerFile', '单附件提取字符上限'],
+      ['maxExtractedCharsTotal', '附件提取总字符上限'],
+      ['retentionHours', '附件临时目录保留小时数'],
+    ]) {
+      validatePositiveInteger(
+        errors,
+        attachments[field],
+        `aiPlanning.attachments.${field}`,
+        label,
+      );
+    }
+    if (
+      Number(attachments.maxTotalBytes) < Number(attachments.maxFileBytes)
+    ) {
+      errors.push({
+        path: 'aiPlanning.attachments.maxTotalBytes',
+        message: '附件总字节上限不能小于单附件字节上限',
+      });
+    }
+    if (
+      Number(attachments.maxExtractedCharsTotal)
+      < Number(attachments.maxExtractedCharsPerFile)
+    ) {
+      errors.push({
+        path: 'aiPlanning.attachments.maxExtractedCharsTotal',
+        message: '附件提取总字符上限不能小于单附件提取字符上限',
+      });
+    }
+  }
 
   const projects = Array.isArray(aiPlanning.projects) ? aiPlanning.projects : [];
   if (!Array.isArray(aiPlanning.projects)) {

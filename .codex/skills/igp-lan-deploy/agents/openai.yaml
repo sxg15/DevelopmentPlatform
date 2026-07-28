@@ -1,0 +1,4 @@
+interface:
+  display_name: "IGP LAN Deploy"
+  short_description: "Deploy and debug IGP builds across the local network"
+  default_prompt: "Use $igp-lan-deploy to deploy the current IGP build to the configured target and verify it remotely."

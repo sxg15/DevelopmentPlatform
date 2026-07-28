@@ -24,6 +24,11 @@ test('project overview aggregates project and personal scopes with configured st
         status: '处理中',
         assignees: [{ openId: 'ou-other', name: '其他用户' }],
       }),
+      createItem({
+        recordId: 'req-acceptance',
+        status: '待验收',
+        assignees: [{ openId: 'ou-other', name: '其他用户' }],
+      }),
     ],
     bugs: [
       createItem({
@@ -48,13 +53,37 @@ test('project overview aggregates project and personal scopes with configured st
     now: NOW,
   });
 
-  assert.equal(project.summary.active, 3);
+  assert.equal(project.summary.active, 4);
   assert.equal(project.summary.waiting, 2);
-  assert.equal(project.summary.processing, 1);
+  assert.equal(project.summary.processing, 2);
   assert.equal(project.summary.overdue, 1);
   assert.equal(project.summary.unassigned, 1);
   assert.equal(mine.summary.active, 1);
   assert.equal(mine.summary.overdue, 1);
+});
+
+test('acceptance status remains processing even when legacy config omits or misclassifies it', () => {
+  const config = normalizeProjectOverviewConfig({
+    statusGroups: {
+      requirements: {
+        waiting: ['待处理'],
+        processing: ['处理中'],
+        completed: ['已完成', '待验收'],
+        blocked: ['已搁置'],
+      },
+      bugs: {
+        waiting: ['未处理'],
+        processing: ['修复中'],
+        completed: ['已修复'],
+        blocked: ['待验收'],
+      },
+    },
+  });
+
+  assert.deepEqual(config.statusGroups.requirements.processing, ['处理中', '待验收']);
+  assert.equal(config.statusGroups.requirements.completed.includes('待验收'), false);
+  assert.deepEqual(config.statusGroups.bugs.processing, ['修复中', '待验收']);
+  assert.equal(config.statusGroups.bugs.blocked.includes('待验收'), false);
 });
 
 test('project overview identifies attachment, stale, deadline and priority risks', () => {

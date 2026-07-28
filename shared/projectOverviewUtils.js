@@ -1,3 +1,8 @@
+import {
+  getWorkItemAcceptanceStatus,
+  getWorkItemProcessingStatuses,
+} from './workItemDefinitions.js';
+
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -11,13 +16,13 @@ export const DEFAULT_PROJECT_OVERVIEW_CONFIG = {
   statusGroups: {
     requirements: {
       waiting: ['待处理'],
-      processing: ['处理中'],
+      processing: getWorkItemProcessingStatuses('requirements'),
       completed: ['已完成', '已处理', '关闭'],
       blocked: ['已搁置', '已拒绝'],
     },
     bugs: {
       waiting: ['未处理'],
-      processing: ['修复中'],
+      processing: getWorkItemProcessingStatuses('bugs'),
       completed: ['已修复', '关闭'],
       blocked: ['无法复现', '已搁置'],
     },
@@ -63,6 +68,7 @@ export function normalizeProjectOverviewConfig(value = {}) {
       normalizeStatusGroups(
         value.statusGroups?.[toolId],
         DEFAULT_PROJECT_OVERVIEW_CONFIG.statusGroups[toolId],
+        toolId,
       ),
     ])),
   };
@@ -465,11 +471,21 @@ function isCompletedTransition(change, groups) {
     && !groups.completed.includes(change.oldStatus);
 }
 
-function normalizeStatusGroups(value, fallback) {
-  return Object.fromEntries(['waiting', 'processing', 'completed', 'blocked'].map((key) => [
+function normalizeStatusGroups(value, fallback, toolId) {
+  const groups = Object.fromEntries(['waiting', 'processing', 'completed', 'blocked'].map((key) => [
     key,
     normalizeStringArray(value?.[key], fallback[key]),
   ]));
+  const acceptanceStatus = getWorkItemAcceptanceStatus(toolId);
+  if (!acceptanceStatus) {
+    return groups;
+  }
+
+  for (const key of ['waiting', 'completed', 'blocked']) {
+    groups[key] = groups[key].filter((status) => status !== acceptanceStatus);
+  }
+  groups.processing = [...new Set([...groups.processing, acceptanceStatus])];
+  return groups;
 }
 
 function normalizeStringArray(value, fallback) {

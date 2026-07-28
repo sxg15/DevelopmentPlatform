@@ -1,4 +1,5 @@
 export const REQUIREMENT_PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4'];
+export const WORK_ITEM_ACCEPTANCE_STATUS = '待验收';
 
 export const PROJECT_TOOL_DEFINITIONS = Object.freeze([
   { id: 'overview', label: '项目总览', iconKey: 'LayoutDashboard' },
@@ -39,6 +40,8 @@ export const WORK_ITEM_TOOL_DEFINITIONS = Object.freeze({
     supportsPriority: true,
     supportsUnassignedRouting: true,
     dateLabel: '提出时间',
+    processingStatuses: Object.freeze(['处理中', WORK_ITEM_ACCEPTANCE_STATUS]),
+    acceptanceStatus: WORK_ITEM_ACCEPTANCE_STATUS,
   }),
   bugs: Object.freeze({
     toolId: 'bugs',
@@ -67,6 +70,8 @@ export const WORK_ITEM_TOOL_DEFINITIONS = Object.freeze({
     supportsPriority: true,
     supportsUnassignedRouting: true,
     dateLabel: '发现时间',
+    processingStatuses: Object.freeze(['修复中', WORK_ITEM_ACCEPTANCE_STATUS]),
+    acceptanceStatus: WORK_ITEM_ACCEPTANCE_STATUS,
   }),
   feedback: Object.freeze({
     toolId: 'feedback',
@@ -96,6 +101,8 @@ export const WORK_ITEM_TOOL_DEFINITIONS = Object.freeze({
     supportsUnassignedRouting: false,
     dateLabel: '反馈时间',
     channelValue: '内部开发平台',
+    processingStatuses: Object.freeze(['处理中']),
+    acceptanceStatus: '',
   }),
 });
 
@@ -104,4 +111,13 @@ export function getWorkItemToolDefinition(toolId, fallbackToolId = 'requirements
   return WORK_ITEM_TOOL_DEFINITIONS[normalizedToolId]
     || WORK_ITEM_TOOL_DEFINITIONS[fallbackToolId]
     || WORK_ITEM_TOOL_DEFINITIONS.requirements;
+}
+
+export function getWorkItemProcessingStatuses(toolId) {
+  const definition = getWorkItemToolDefinition(toolId);
+  return [...(definition.processingStatuses || [])];
+}
+
+export function getWorkItemAcceptanceStatus(toolId) {
+  return String(getWorkItemToolDefinition(toolId).acceptanceStatus || '').trim();
 }

@@ -675,6 +675,56 @@
     width: 96%;
   }
 
+  .ai-run-progress,
+  .ai-run-failure,
+  .ai-question-form,
+  .ai-attachment-summary {
+    width: 96%;
+    padding: 12px 10px;
+  }
+
+  .ai-question-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-question-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .ai-question-actions button {
+    width: 100%;
+  }
+
+  .ai-attachment-summary {
+    padding: 0;
+  }
+
+  .ai-attachment-summary li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .ai-run-progress-steps {
+    grid-template-columns: repeat(5, minmax(54px, 1fr));
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .ai-run-progress-steps li {
+    min-width: 54px;
+  }
+
+  .ai-run-progress-meta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .ai-run-failure dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .ai-plan-draft {
     max-height: 32%;
     padding-right: 10px;

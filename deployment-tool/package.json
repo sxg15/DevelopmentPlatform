@@ -1,0 +1,62 @@
+{
+  "name": "igp-lan-deploy-tool",
+  "version": "0.1.8",
+  "description": "Windows LAN deployment and remote debugging console for the IGP Development Platform",
+  "author": "IGP Development Platform",
+  "private": true,
+  "type": "module",
+  "main": "src/main/main.js",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "start": "electron .",
+    "build": "vite build",
+    "test": "node --test test/*.test.js",
+    "smoke:ui": "node scripts/capture-ui.mjs",
+    "smoke:e2e": "node scripts/smoke-end-to-end.mjs",
+    "package": "node scripts/package.mjs",
+    "package:installer": "npm run build && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "lucide-react": "1.27.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "selfsigned": "5.5.0",
+    "tar": "7.5.22",
+    "ws": "8.21.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "5.2.0",
+    "electron": "43.2.0",
+    "electron-builder": "26.15.3",
+    "vite": "8.1.5"
+  },
+  "build": {
+    "appId": "com.igp.landeploy",
+    "productName": "IGP LAN Deploy Tool",
+    "electronDist": "node_modules/electron/dist",
+    "asar": true,
+    "directories": {
+      "output": "Publish"
+    },
+    "files": [
+      "dist-renderer/**/*",
+      "src/main/**/*",
+      "src/shared/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { normalizeConfig } from '../server/config/normalizeConfig.js';
 import { DEFAULT_DEVELOPMENT_SUPER_ADMIN_FIELD } from '../shared/workItemAssignmentUtils.js';
@@ -33,6 +37,11 @@ test('server config normalization preserves workflow field defaults', () => {
   assert.equal(config.aiPlanning.codex.apiBaseUrl, 'https://api.openai.com/v1');
   assert.equal(config.aiPlanning.codex.reasoningEffort, 'high');
   assert.equal(config.aiPlanning.codex.requestTimeoutMs, 600000);
+  assert.equal(config.aiPlanning.attachments.enabled, true);
+  assert.equal(config.aiPlanning.attachments.maxFiles, 10);
+  assert.equal(config.aiPlanning.attachments.maxFileBytes, 20 * 1024 * 1024);
+  assert.equal(config.aiPlanning.attachments.maxTotalBytes, 50 * 1024 * 1024);
+  assert.equal(config.aiPlanning.notifications.enabled, true);
 });
 
 test('server config normalization accepts custom work item and permission fields', () => {
@@ -99,4 +108,47 @@ test('server config normalization accepts custom work item and permission fields
   assert.equal(config.aiPlanning.codex.apiBaseUrl, 'https://example.test/v1');
   assert.equal(config.aiPlanning.codex.maxConcurrentRuns, 5);
   assert.equal(config.aiPlanning.projects[0].roots[0].profile, 'unity');
+});
+
+test('runtime config and client error logs honor managed deployment paths', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-managed-runtime-'));
+  try {
+    const configPath = path.join(tempDir, 'persistent-config.json');
+    const logPath = path.join(tempDir, 'persistent-logs', 'client-errors.log');
+    fs.writeFileSync(configPath, JSON.stringify({
+      server: { host: '127.0.0.1', port: 43123 },
+      aiPlanning: { enabled: false },
+    }));
+
+    const runtimeOutput = execFileSync(process.execPath, [
+      '--input-type=module',
+      '-e',
+      "import('./server/config/runtimeConfig.js').then((m) => console.log(m.runtimeConfig.server.port))",
+    ], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        NODE_ENV: 'production',
+        IGP_CONFIG_PATH: configPath,
+      },
+      encoding: 'utf8',
+    }).trim();
+    assert.equal(runtimeOutput, '43123');
+
+    const logOutput = execFileSync(process.execPath, [
+      '--input-type=module',
+      '-e',
+      "import('./server/runtime/clientErrorLog.js').then((m) => console.log(m.clientErrorLogFilePath))",
+    ], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        IGP_CLIENT_ERROR_LOG_PATH: logPath,
+      },
+      encoding: 'utf8',
+    }).trim();
+    assert.equal(path.resolve(logOutput), path.resolve(logPath));
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });

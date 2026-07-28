@@ -7,6 +7,7 @@ import {
   filterWorkItems,
   getWorkItemPersonKey,
   getWorkItemProcessingStatus,
+  getWorkItemProcessingStatuses,
   getWorkItemStatus,
   getWorkItemWaitingStatus,
   hasActiveAdvancedWorkItemFilters,
@@ -859,6 +860,13 @@ function ProjectWorkspace({
                     ? project.aiPlanning?.unavailableReason || ''
                     : ''
                 }
+                aiDirectTarget={
+                  directTarget?.type === 'ai-conversation'
+                  && directTarget.projectId === String(project.projectId || '')
+                  && directTarget.toolId === activeWorkItemConfig.toolId
+                    ? directTarget
+                    : null
+                }
                 onWorkItemCreated={(payload) => {
                   const createdItem = payload.item || payload.requirement;
                   updateWorkItemState(
@@ -921,6 +929,7 @@ function RequirementsStatus({
   isDevelopmentSuperAdmin,
   aiPlanningEnabled,
   aiPlanningUnavailableReason,
+  aiDirectTarget,
   onWorkItemCreated,
   onRequirementUpdated,
   onRequirementDeleted,
@@ -972,7 +981,7 @@ function RequirementsStatus({
     };
 
     if (view === 'processing') {
-      nextFilters.statuses = [getWorkItemProcessingStatus(toolConfig.toolId)];
+      nextFilters.statuses = getWorkItemProcessingStatuses(toolConfig.toolId);
     } else {
       nextFilters.statuses = [getWorkItemWaitingStatus(toolConfig.toolId)];
     }
@@ -1007,6 +1016,7 @@ function RequirementsStatus({
         isDevelopmentSuperAdmin={isDevelopmentSuperAdmin}
         aiPlanningEnabled={aiPlanningEnabled}
         aiPlanningUnavailableReason={aiPlanningUnavailableReason}
+        aiDirectTarget={aiDirectTarget}
         onBack={onRequirementBack}
       />
     );
@@ -1300,8 +1310,9 @@ function RelatedRequirementsSummary({ toolConfig, requirements, user, onView }) 
   const canView = Boolean(getWorkItemPersonKey(user));
   const pendingStatus = getWorkItemWaitingStatus(toolConfig.toolId);
   const processingStatus = getWorkItemProcessingStatus(toolConfig.toolId);
+  const processingStatuses = new Set(getWorkItemProcessingStatuses(toolConfig.toolId));
   const pendingCount = mine.filter((requirement) => getWorkItemStatus(requirement) === pendingStatus).length;
-  const processingCount = mine.filter((requirement) => getWorkItemStatus(requirement) === processingStatus).length;
+  const processingCount = mine.filter((requirement) => processingStatuses.has(getWorkItemStatus(requirement))).length;
   const almostOverdueCount = mine.filter((requirement) => {
     const days = Number(requirement.remainingDays);
     return getWorkItemStatus(requirement) === pendingStatus && Number.isFinite(days) && days >= 0 && days < 1;
@@ -2420,6 +2431,7 @@ function BitableRecordDetail({
   isDevelopmentSuperAdmin,
   aiPlanningEnabled,
   aiPlanningUnavailableReason,
+  aiDirectTarget,
   onRequirementUpdated,
   onRequirementDeleted,
   onBack,
@@ -2464,6 +2476,20 @@ function BitableRecordDetail({
   useEffect(() => {
     setActiveAction(canUpdateStatus ? 'status' : canChangeAssignees ? 'assignees' : 'comments');
   }, [record.recordId, canUpdateStatus, canChangeAssignees]);
+
+  useEffect(() => {
+    if (
+      aiDirectTarget?.type === 'ai-conversation'
+      && String(aiDirectTarget.recordId || '') === String(record.recordId || '')
+    ) {
+      setAiPlanningOpen(true);
+    }
+  }, [
+    aiDirectTarget?.key,
+    aiDirectTarget?.recordId,
+    aiDirectTarget?.type,
+    record.recordId,
+  ]);
 
   async function handleDelete() {
     if (deleteStatus.type === 'loading') {
@@ -2572,6 +2598,8 @@ function BitableRecordDetail({
           projectId={projectId}
           toolConfig={toolConfig}
           record={record}
+          initialConversationId={aiDirectTarget?.conversationId || ''}
+          initialFocus={aiDirectTarget?.focus || ''}
           onClose={() => setAiPlanningOpen(false)}
         />
       ) : null}
@@ -3840,11 +3868,21 @@ function parseDirectTargetFromLocation() {
       toolId: String(url.searchParams.get('tool') || '').trim() || getDefaultDirectToolId(direct),
       recordId: String(url.searchParams.get('recordId') || '').trim(),
       commentId: String(url.searchParams.get('commentId') || '').trim(),
+      conversationId: String(url.searchParams.get('conversationId') || '').trim(),
+      focus: String(url.searchParams.get('focus') || '').trim(),
     };
 
     return {
       ...target,
-      key: [target.type, target.projectId, target.toolId, target.recordId, target.commentId].join('|'),
+      key: [
+        target.type,
+        target.projectId,
+        target.toolId,
+        target.recordId,
+        target.commentId,
+        target.conversationId,
+        target.focus,
+      ].join('|'),
     };
   } catch {
     return null;
@@ -3859,6 +3897,10 @@ function getDefaultDirectToolId(targetType) {
 
   if (direct === 'bug-detail' || direct === 'bug-comment') {
     return 'bugs';
+  }
+
+  if (direct === 'ai-conversation') {
+    return '';
   }
 
   if (direct === 'feedback-detail' || direct === 'feedback-comment') {
@@ -4354,8 +4396,8 @@ function getPendingStatusNames(statusOptions) {
 
 function getProcessingStatusNames(statusOptions) {
   const names = normalizeRequirementStatusOptionsForClient(statusOptions).map((option) => option.name);
-  const matched = names.filter((name) => name.includes('中'));
-  return new Set(matched.length > 0 ? matched : ['处理中', '修复中']);
+  const matched = names.filter((name) => name.includes('中') || name === '待验收');
+  return new Set(matched.length > 0 ? matched : ['处理中', '修复中', '待验收']);
 }
 
 function formatRemainingDays(value) {
@@ -4425,7 +4467,7 @@ function normalizeMentionCandidates(value) {
 }
 
 function normalizeRequirementStatusOptionsForClient(value) {
-  const fallback = ['待处理', '处理中', '已处理', '已完成', '关闭'].map((name) => ({ name, color: '' }));
+  const fallback = ['待处理', '处理中', '待验收', '已处理', '已完成', '关闭'].map((name) => ({ name, color: '' }));
   if (!Array.isArray(value) || value.length === 0) {
     return fallback;
   }

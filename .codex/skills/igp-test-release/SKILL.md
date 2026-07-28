@@ -22,6 +22,34 @@ Use `npm run build` after server module layout or packaging changes. Confirm the
 complete backend module tree exists under `Publish/server/`. Never display or
 commit `Publish/config.json`.
 
+After runtime-affecting changes, keep the developer-side LAN tool running and run:
+
+```powershell
+npm run deploy:debug
+```
+
+Treat a failed target upload, activation, startup, version check, health check,
+homepage check, or startup-log check as unfinished work unless the user explicitly
+waives remote verification. Use `--status`, `--logs stderr`, and `--logs client`
+for diagnosis. This debug deployment does not replace `log-change`.
+
+For deployment-tool changes also run:
+
+```powershell
+npm run deploy-tool:test
+npm run deploy-tool:build
+npm --prefix deployment-tool run smoke:e2e
+```
+
+Managed target services must execute the fixed target-owned
+`managed-runtime/runtime/node.exe` path. Deployment-tool tests must verify that
+different release runtimes update that file without changing its path, interrupted
+runtime replacement recovers, and the spawned Windows process does not execute the
+release-local Node copy. Also cover bounded process inspection and preservation of
+the recorded PID when WMI times out. Cover pre-upload release-slot reservation,
+startup cleanup of interrupted artifacts, and failed-upload removal without pruning
+the current or rollback release.
+
 ## Tests
 
 - Shared work-item rules: `test/workItemDefinitions.test.js`,
@@ -44,7 +72,12 @@ commit `Publish/config.json`.
   `test/versionManagementDisplayUtils.test.js`.
 - AI persistence, ownership, scheduling, structured output, and realtime:
   `test/aiPlanning.test.js`; Codex JSON-RPC and key isolation:
-  `test/codexAppServerClient.test.js`.
+  `test/codexAppServerClient.test.js`. Keep coverage for legacy run-schema
+  migration, monotonic progress persistence, owner-only progress snapshots,
+  safe item-event mapping, inactivity UI text, persistent failure details,
+  durable question/answer continuation, restart preservation, attachment cleanup,
+  notification outbox idempotency, and the required response/interruption ordering
+  for `item/tool/requestUserInput`.
 - Same-user settings mutation serialization is covered by
   `test/serverRuntime.test.js`; non-blocking frontend initialization is covered by
   `test/frontendModuleBindings.test.js`.

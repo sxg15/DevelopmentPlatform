@@ -29,6 +29,11 @@ Read `AGENTS.md`, then locate the owning layer.
   `server/services/aiPlanningService.js`,
   `server/repositories/aiPlanningRepository.js`, and
   `server/runtime/aiDataPaths.js`.
+- AI run attachments and temporary roots:
+  `server/services/aiRunContextService.js`.
+- AI Feishu delivery and durable retries:
+  `server/integrations/feishuMessageClient.js` and
+  `server/services/aiPlanningNotificationService.js`.
 - Daily reminder timing: `server/services/todoNotificationScheduler.js`;
   reminder orchestration and cards remain in `server/index.js`.
 
@@ -49,6 +54,8 @@ Read `AGENTS.md`, then locate the owning layer.
   or `Publish/logs/client-errors.log` in production, and retain one 10 MB rotated
   backup. File-write failures must not change the endpoint response. Never persist
   request bodies or identity details beyond the sanitized diagnostic fields.
+- Honor `IGP_CONFIG_PATH` and `IGP_CLIENT_ERROR_LOG_PATH` for managed deployments
+  while preserving existing development and portable-package path fallbacks.
 - When adding server modules, keep `scripts/build.ps1` copying the complete
   `server/` tree.
 - Keep the portable package lightweight: bundle Node and npm, but install locked
@@ -91,9 +98,35 @@ Read `AGENTS.md`, then locate the owning layer.
 - Store private AI conversations and shared plan revisions under the fixed
   `D:\DevelopmentPlatformDB` root. Another user's conversation must resolve as
   not found even for administrators.
+- Persist question sets, answers, attachment summaries, and notification outbox
+  entries. Preserve pending questions across restart while interrupting only
+  queued/running work.
 - Run Codex with `read-only`, no approvals, and no tool network access. Keep the
   API key out of generated Codex config, browser payloads, logs, errors, and shell
   tool environments.
+- Handle `item/tool/requestUserInput` as a bounded one-to-three-question decision
+  request. Persist it before returning a protocol response, interrupt the current
+  turn, release scheduler capacity, and continue the same thread after the owner
+  answers.
+- Include configured work-item and requirement-submission attachments through an
+  isolated per-run directory. Images may be local-image inputs; supported text and
+  office documents must be normalized for read-only inspection. Skip failures with
+  a safe summary, and remove temporary content after every terminal or waiting
+  outcome.
+- Send durable Feishu cards only for required answers, completed drafts, and
+  failures. Notifications target the conversation owner, use exact deep links, and
+  never affect the run result.
+- Read completed Codex agent output from `item/completed`; use
+  `item/agentMessage/delta` only as a bounded fallback and treat
+  `turn/completed` as the terminal status signal.
+- Persist AI run progress on the `runs` row using the monotonic
+  `queued`, `starting`, `preparing`, `analyzing`, `composing`, and
+  `completed` stages. Map only safe `item/started` and `item/completed`
+  activity labels; never persist or publish commands, absolute paths, item
+  payloads, or reasoning text. Progress-write failures must not fail a Codex run.
+- Publish owner-only conversation snapshots after progress changes. Browser
+  payloads may include the safe stage, message, update time, and activity count,
+  while terminal failures retain a sanitized error code/message and timestamps.
 - Default AI planning to enabled with model `gpt-5.6-sol`. Missing Codex credentials or
   project roots must not block general backend startup; validate them before
   creating or running AI conversations and shared-plan operations.
