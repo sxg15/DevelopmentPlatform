@@ -13,7 +13,8 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
   `src/ui/AppErrorBoundary.jsx`, `src/api/auth.js`,
   `src/api/clientErrors.js`, `src/integrations/feishuH5.js`.
 - Personal settings: `src/ui/settings/PersonalSettingsDialog.jsx`,
-  `src/api/personalSettings.js`, `src/styles/settings.css`.
+  `src/ui/settings/mcpConfigUtils.js`, `src/api/personalSettings.js`, and
+  `src/styles/settings.css`.
 - Project loading/navigation: `src/ui/workspace/PlatformWorkspace.jsx`,
   `src/ui/workspace/ProjectNavigation.jsx`,
   `src/ui/workspace/projectToolDisplayUtils.js`,
@@ -53,6 +54,15 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
   normal use remain available.
 - Personal notification settings use
   `{ receiveTodoNotifications, todoNotificationTime }`, with `HH:mm` time values.
+- Personal settings expose separate development-platform-token and MCP sections.
+  Select MCP when the loaded token is missing and require an explicit token-create
+  action there. The token section supports reveal, copy, and unrestricted
+  regeneration. Token actions must preserve unsaved notification edits, and
+  notification update requests must omit the token.
+- MCP settings render backend-provided endpoint choices and copyable Codex,
+  Claude Code, Cursor, Gemini CLI, and VS Code snippets. Snippets intentionally
+  embed the current user's token and must update immediately after regeneration.
+  Keep exact config generation in `mcpConfigUtils.js`, not in JSX.
 - Reuse `shared/workItemDefinitions.js` instead of duplicating route segments,
   labels, statuses, or field contracts.
 - Keep pure formatting/filtering logic outside JSX when it can be tested.

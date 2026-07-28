@@ -867,6 +867,38 @@
     gap: 14px;
   }
 
+  .personal-settings-token-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .personal-settings-token-regenerate {
+    align-self: stretch;
+  }
+
+  .personal-settings-token-input-row {
+    grid-template-columns: minmax(0, 1fr) 36px 36px;
+  }
+
+  .personal-settings-mcp-endpoint {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+  }
+
+  .personal-settings-mcp-clients {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .personal-settings-mcp-clients button {
+    min-width: 104px;
+    flex: 0 0 auto;
+  }
+
+  .personal-settings-mcp-config pre {
+    min-height: 210px;
+  }
+
   .personal-settings-actions {
     padding: 0 14px;
   }

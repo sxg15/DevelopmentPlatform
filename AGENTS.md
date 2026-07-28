@@ -116,6 +116,11 @@ Shared modules must remain runtime-neutral and importable from Node tests.
 - `server/services/updateService.js`: remote update manifest retrieval.
 - `server/services/personalSettingsService.js`: Wiki-backed personal settings
   schema validation, record lookup, creation, and updates.
+- `server/mcp/developmentPlatformMcpServer.js`: authenticated stateless
+  Streamable HTTP MCP transport, LAN Host/Origin checks, and protocol tool
+  registration.
+- `server/services/mcpAiPlanService.js`: current-assignee filtering, pagination,
+  detail revalidation, and safe serialization for MCP AI plan reads.
 - `server/services/versionManagementService.js`: Wiki template provisioning,
   version Bitable schema validation, project-keyed mutations, active-slot
   replacement/rollback, references, associations, status history, and comments.
@@ -193,13 +198,29 @@ rollback release.
   prefixes; do not create a separate timeline field.
 - Feedback stores normalized identity/contact data in `联系信息数据`.
 - Personal settings use the Wiki-backed Bitable fields `用户`,
-  `接收待办事项通知`, and `待办事项通知时间`. Enabled notifications store
-  the select value `允许`.
+  `接收待办事项通知`, `待办事项通知时间`, and `开发平台令牌`. Enabled
+  notifications store the select value `允许`. The backend idempotently ensures
+  the token text field, generates owner-visible `igp_` tokens on demand, and
+  permits unrestricted regeneration; ordinary notification saves must never
+  overwrite the stored token.
 - After authentication becomes ready, the frontend silently ensures a personal
   settings record. Missing records are created with notifications disabled and
   the configured default time; initialization failures never block the workspace.
-- Automatic settings creation and explicit saves for the same user must run
-  serially to prevent duplicate Bitable records.
+- Automatic settings creation, explicit saves, and token regeneration for the same
+  user must run serially to prevent duplicate Bitable records. When settings opens
+  without a token, the frontend selects the MCP section and asks the user to
+  generate one instead of generating it automatically.
+- MCP is served at `POST /mcp` through stateless Streamable HTTP. Every tool
+  authenticates with `Authorization: Bearer <开发平台令牌>` before dispatch; the
+  token is never a tool argument. Token lookup reads current personal-settings
+  records on every request so regeneration invalidates the old token immediately.
+- The initial MCP surface contains exactly `get_my_approved_ai_plans`. It returns
+  only approved requirement/Bug plans whose current work-item assignee matches the
+  authenticated user by Open ID, User ID, Union ID, or email. Never match by name,
+  and recheck project/tool access plus current assignment for detail reads.
+- MCP Host and Origin checks allow only loopback, local IPv4 addresses, and the
+  machine hostname. Missing, malformed, duplicate, or invalid tokens return the
+  same 401 challenge; failed authentication is limited per client address.
 - Daily pending notifications include assigned requirement, Bug, and feedback
   records whose statuses are not in the configured completed groups. Missing
   work-item tables count as empty; blocked and unset statuses remain pending.
@@ -229,10 +250,13 @@ rollback release.
 - Version association, previous-version, status-history, and comment text fields use
   versioned JSON. Surface malformed documents and never overwrite malformed status
   or comment history during a mutation.
-- Requirement and Bug AI planning is a private multi-turn workflow. Codex may ask
-  one to three material decision questions, the owner answers through the detail
-  page, and the same Codex thread continues until it can automatically produce a
-  complete plan draft.
+- Requirement and Bug AI planning is a private multi-turn workflow. Before the
+  first plan draft, Codex must ask one bounded set of one to three meaningful
+  confirmation questions and the owner must answer through the detail page. If
+  Codex skips that first question set, retry once in the same thread; if it skips
+  again, fail with `codex_protocol` and never persist the premature plan. After the
+  required answer round, the same thread continues until it can automatically
+  produce a complete plan draft; later questions are optional.
 - Pending AI questions, answers, attachment summaries, and notification outbox
   entries must survive backend restarts. Restart recovery interrupts only queued or
   running work; it must preserve conversations waiting for user input.
@@ -253,6 +277,10 @@ rollback release.
 - AI planning defaults to enabled with Codex model `gpt-5.6-sol`; incomplete Codex
   credentials or project roots must not prevent the rest of the backend from
   starting, but AI endpoints still require complete validation.
+- Every `aiPlanning.projects` entry includes an optional `preludePrompt`. Send that
+  project-specific text as the first text input of a new Codex thread, before
+  attachments and the generated work-item prompt; do not resend it when continuing
+  the same thread after questions or later user messages.
 - AI attachment analysis and owner notifications default to enabled. Keep file
   count, byte, extracted-character, and retention limits configurable through both
   `config.example.json` and the portable visual editor.
@@ -267,6 +295,9 @@ rollback release.
   configurable and never add the `versions` tool to the department tool matrix.
 - The browser may receive `appId` and debug identity only; never expose `appSecret`
   or access tokens.
+- Personal settings may return the authenticated user's development-platform token
+  and MCP configuration snippets that embed it. Do not log that token, include it
+  in client diagnostics, or expose another user's token.
 - Client error reports may include only sanitized messages/stacks, component stacks,
   page paths, browser identifiers, timestamps, and diagnostic IDs. Never attach
   form values, work-item payloads, tokens, or runtime configuration.

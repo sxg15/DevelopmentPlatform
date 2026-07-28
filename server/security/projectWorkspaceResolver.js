@@ -15,6 +15,7 @@ export function resolveAiProjectWorkspace(aiPlanningConfig, projectId) {
 
   return {
     projectId: projectConfig.projectId,
+    preludePrompt: String(projectConfig.preludePrompt || '').trim(),
     cwd: roots[0].path,
     roots,
   };

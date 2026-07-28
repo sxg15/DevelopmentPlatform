@@ -194,6 +194,9 @@ export function normalizeConfig(config) {
           todoNotificationTime: String(
             personalSettingsFieldNames.todoNotificationTime || '待办事项通知时间',
           ),
+          developmentPlatformToken: String(
+            personalSettingsFieldNames.developmentPlatformToken || '开发平台令牌',
+          ),
         },
       },
       versionManagement: {
@@ -250,6 +253,7 @@ function normalizeAiPlanningProjects(value) {
       return {
         projectId,
         enabled: project?.enabled !== false,
+        preludePrompt: String(project?.preludePrompt || '').trim(),
         roots,
       };
     })

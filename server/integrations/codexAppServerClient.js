@@ -63,6 +63,7 @@ export class CodexAppServerClient {
     threadId = '',
     cwd,
     skillPath,
+    preludePrompt = '',
     prompt,
     inputItems = [],
     outputSchema,
@@ -85,6 +86,7 @@ export class CodexAppServerClient {
       throw createCodexError('Codex 未返回会话标识', 'codex_protocol');
     }
     onThread?.(resolvedThreadId);
+    const normalizedPreludePrompt = String(preludePrompt || '').trim();
 
     return new Promise(async (resolve, reject) => {
       const activeTurn = {
@@ -129,6 +131,13 @@ export class CodexAppServerClient {
               name: 'work-item-plan',
               path: skillPath,
             },
+            ...(normalizedPreludePrompt
+              ? [{
+                  type: 'text',
+                  text: normalizedPreludePrompt,
+                  text_elements: [],
+                }]
+              : []),
             ...normalizeAdditionalInputItems(inputItems),
             {
               type: 'text',
@@ -313,7 +322,7 @@ export class CodexAppServerClient {
         'You are a read-only software planning agent.',
         'You may inspect only the configured project roots named in the user input.',
         'Never modify files, install dependencies, run builds or tests, use the network, request approval, or expose secrets.',
-        'Follow the selected work-item-plan skill. Use request_user_input for material user decisions, then return only the requested structured JSON after those decisions are resolved.',
+        'Follow the selected work-item-plan skill. When the caller requires an initial user-confirmation round, use request_user_input before returning any plan even if the implementation appears clear. Otherwise use request_user_input for material user decisions, then return only the requested structured JSON after those decisions are resolved.',
       ].join(' '),
       developerInstructions: [
         'Use repository evidence before proposing implementation steps.',

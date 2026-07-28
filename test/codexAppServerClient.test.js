@@ -32,6 +32,15 @@ test('Codex app-server client uses JSONL and a key-free config', async () => {
       } else if (message.method === 'thread/resume') {
         send({ id: message.id, result: { thread: { id: message.params.threadId } } });
       } else if (message.method === 'turn/start') {
+        const textItems = message.params.input.filter((item) => item.type === 'text');
+        if (
+          textItems.length !== 2
+          || textItems[0].text !== 'Project-specific instructions'
+          || textItems[1].text !== 'Plan this'
+        ) {
+          send({ id: message.id, error: { message: 'prompt order is incorrect' } });
+          return;
+        }
         send({ id: message.id, result: { turn: { id: 'turn-1' } } });
         setTimeout(() => {
           send({
@@ -145,6 +154,7 @@ test('Codex app-server client uses JSONL and a key-free config', async () => {
     const result = await client.runTurn({
       cwd: root,
       skillPath: path.join(root, 'SKILL.md'),
+      preludePrompt: 'Project-specific instructions',
       prompt: 'Plan this',
       outputSchema: { type: 'object' },
       onDelta: (delta) => deltas.push(delta),

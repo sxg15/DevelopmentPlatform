@@ -27,6 +27,7 @@ const FRONTEND_MODULES = [
   'src/ui/work-items/workItemFieldUtils.js',
   'src/ui/work-items/workItemTimelineUtils.js',
   'src/ui/settings/PersonalSettingsDialog.jsx',
+  'src/ui/settings/mcpConfigUtils.js',
 ];
 const BROWSER_GLOBALS = new Set([
   'Array',
@@ -125,6 +126,25 @@ test('app initializes personal settings without awaiting workspace startup', () 
   assert.doesNotMatch(source, /await\s+ensurePersonalSettingsRecord\(\)/);
 });
 
+test('personal settings exposes token generation and copyable MCP client configs', () => {
+  const apiSource = fs.readFileSync('src/api/personalSettings.js', 'utf8');
+  const dialogSource = fs.readFileSync('src/ui/settings/PersonalSettingsDialog.jsx', 'utf8');
+  const configSource = fs.readFileSync('src/ui/settings/mcpConfigUtils.js', 'utf8');
+
+  assert.match(apiSource, /\/api\/me\/settings\/token\/regenerate/);
+  assert.match(dialogSource, /regenerateDevelopmentPlatformToken/);
+  assert.match(dialogSource, /developmentPlatformToken/);
+  assert.match(dialogSource, /navigator\.clipboard/);
+  assert.match(dialogSource, /normalized\.developmentPlatformToken \? 'notifications' : 'mcp'/);
+  assert.match(dialogSource, /<span>MCP<\/span>/);
+  assert.match(dialogSource, /function McpSettings/);
+  assert.match(configSource, /Codex/);
+  assert.match(configSource, /Claude Code/);
+  assert.match(configSource, /Cursor/);
+  assert.match(configSource, /Gemini CLI/);
+  assert.match(configSource, /VS Code/);
+});
+
 test('version management renders a local snapshot before refreshing it', () => {
   const versionSource = fs.readFileSync('src/ui/versions/VersionManagement.jsx', 'utf8');
   const workspaceSource = fs.readFileSync('src/ui/workspace/PlatformWorkspace.jsx', 'utf8');
@@ -197,6 +217,9 @@ test('AI planning separates private conversations from shared submissions', () =
   assert.match(dependencyInstallerSource, /'--progress=true'/);
   assert.match(dependencyInstallerSource, /'--loglevel=http'/);
   assert.match(dependencyInstallerSource, /codex-win32-x64/);
+  assert.match(dependencyInstallerSource, /@modelcontextprotocol\\server/);
+  assert.match(dependencyInstallerSource, /@modelcontextprotocol\\node/);
+  assert.match(dependencyInstallerSource, /zod\\package\.json/);
   assert.match(secretExposureSource, /config-editor/);
   assert.match(secretExposureSource, /Publish\/config-editor/);
 });
@@ -209,4 +232,6 @@ test('AI planning configuration editor exposes attachment and notification contr
   assert.match(source, /aiPlanning\.attachments\.maxTotalBytes/);
   assert.match(source, /aiPlanning\.attachments\.maxExtractedCharsTotal/);
   assert.match(source, /aiPlanning\.notifications\.enabled/);
+  assert.match(source, /AI 前置提示词/);
+  assert.match(source, /aiPlanning\.projects\.\$\{projectIndex\}\.preludePrompt/);
 });

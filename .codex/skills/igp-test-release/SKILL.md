@@ -66,7 +66,12 @@ the current or rollback release.
   `test/serverRuntime.test.js`, `test/configEditor.test.js`,
   `test/wikiClient.test.js`.
 - Personal settings and reminder scheduling:
-  `test/personalSettingsUtils.test.js`.
+  `test/personalSettingsUtils.test.js`,
+  `test/personalSettingsService.test.js`.
+- MCP authentication, transport, AI-plan filtering, and client configuration:
+  `test/developmentPlatformMcpServer.test.js`,
+  `test/mcpAiPlanService.test.js`, and
+  `test/mcpConfigUtils.test.js`.
 - Version contracts and workflows: `test/versionManagementUtils.test.js`,
   `test/versionManagementService.test.js`,
   `test/versionManagementDisplayUtils.test.js`.
@@ -77,10 +82,13 @@ the current or rollback release.
   safe item-event mapping, inactivity UI text, persistent failure details,
   durable question/answer continuation, restart preservation, attachment cleanup,
   notification outbox idempotency, and the required response/interruption ordering
-  for `item/tool/requestUserInput`. Also cover legacy shared-plan migration,
-  immutable revision chains, pending/approved uniqueness, reviewer edits,
-  rejection reasons, notification dedupe counts, and idempotent post-submit
-  conversation creation.
+  for `item/tool/requestUserInput`. Verify that the first draft requires a persisted
+  answer round, a skipped question receives one same-thread corrective retry, and
+  a second skip fails with `codex_protocol` without persisting the premature plan.
+  Verify project `preludePrompt` input ordering and that same-thread continuations
+  do not resend it. Also cover legacy shared-plan migration, immutable revision
+  chains, pending/approved uniqueness, reviewer edits, rejection reasons,
+  notification dedupe counts, and idempotent post-submit conversation creation.
 - Same-user settings mutation serialization is covered by
   `test/serverRuntime.test.js`; non-blocking frontend initialization is covered by
   `test/frontendModuleBindings.test.js`.

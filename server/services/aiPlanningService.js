@@ -1,5 +1,6 @@
 import {
   AI_CONVERSATION_STATUSES,
+  AI_MESSAGE_KINDS,
   AI_PLAN_SUPPORTED_WORK_ITEM_TOOL_IDS,
   AI_RUN_PROGRESS_STAGES,
   isAiPlanningWorkItemTool,
@@ -353,6 +354,7 @@ export function createAiPlanningService({
         repository.setRunAttachmentSummary(taskState.runId, runContext.attachmentSummary);
         publishSnapshot(conversation.id, taskState.ownerOpenId);
       }
+      const requiresQuestionRound = !hasCompletedQuestionRound(conversation);
       const prompt = buildPlanningPrompt({
         conversation,
         userMessage,
@@ -360,17 +362,29 @@ export function createAiPlanningService({
         project,
         workspace: runContext.workspace || workspace,
         attachmentContext: runContext.attachmentContext,
+        requiresQuestionRound,
       });
-      const result = await codexClient.runTurn({
-        threadId: conversation.codexThreadId,
+
+      const runCodexTurn = ({
+        threadId,
+        turnPrompt,
+        preludePrompt = '',
+        inputItems = [],
+      }) => codexClient.runTurn({
+        threadId,
         cwd: runContext.cwd,
         skillPath,
-        prompt,
-        inputItems: runContext.inputItems,
+        preludePrompt,
+        prompt: turnPrompt,
+        inputItems,
         outputSchema: OUTPUT_SCHEMA,
-        onThread(threadId) {
-          taskState.threadId = threadId;
-          repository.setConversationThread(conversation.id, taskState.ownerOpenId, threadId);
+        onThread(threadIdValue) {
+          taskState.threadId = threadIdValue;
+          repository.setConversationThread(
+            conversation.id,
+            taskState.ownerOpenId,
+            threadIdValue,
+          );
         },
         onTurn(turnId) {
           taskState.turnId = turnId;
@@ -407,11 +421,32 @@ export function createAiPlanningService({
           });
         },
       });
+
+      let result = await runCodexTurn({
+        threadId: conversation.codexThreadId,
+        turnPrompt: prompt,
+        preludePrompt: conversation.codexThreadId
+          ? ''
+          : workspace.preludePrompt,
+        inputItems: runContext.inputItems,
+      });
+      if (taskState.cancelRequested) {
+        throw createInterruptedError();
+      }
+      if (requiresQuestionRound && !result.awaitingUser) {
+        result = await runCodexTurn({
+          threadId: taskState.threadId,
+          turnPrompt: buildRequiredQuestionRetryPrompt(),
+        });
+      }
       if (taskState.cancelRequested) {
         throw createInterruptedError();
       }
       if (result.awaitingUser) {
         return;
+      }
+      if (requiresQuestionRound) {
+        throw createCodexProtocolError('Codex 未按要求发起首轮确认问题');
       }
       const outputWorkspace = {
         ...workspace,
@@ -888,6 +923,7 @@ export function buildPlanningPrompt({
   project,
   workspace,
   attachmentContext = '',
+  requiresQuestionRound = false,
 }) {
   const roots = workspace.roots.map((root) => ({
     rootId: root.id,
@@ -910,9 +946,31 @@ export function buildPlanningPrompt({
     '',
     'Inspect source only as needed. Do not modify anything or run builds/tests/installers.',
     'Use root-relative references and the configured rootId values. Never include absolute paths in the plan.',
-    'If material implementation decisions remain unresolved, use request_user_input with 1 to 3 batched questions and stop this turn.',
+    ...(requiresQuestionRound ? [
+      'This conversation has not completed its required user-confirmation round.',
+      'Before creating any plan, you MUST call request_user_input once with 1 to 3 high-value clarification or confirmation questions, then stop this turn without returning a plan.',
+      'Even if the implementation appears clear, ask the user to confirm the most consequential interpretation, desired outcome, acceptance criterion, scope boundary, priority, or tradeoff.',
+    ] : [
+      'If material implementation decisions remain unresolved, use request_user_input with 1 to 3 batched questions and stop this turn.',
+    ]),
     'Put the recommended option first, allow a custom answer, never ask for secrets, and do not ask questions whose answer is available in source.',
     'Once uncertainty is resolved, automatically return a complete implementation plan.',
+  ].join('\n');
+}
+
+export function hasCompletedQuestionRound(conversation) {
+  return (Array.isArray(conversation?.messages) ? conversation.messages : [])
+    .some((message) => message?.kind === AI_MESSAGE_KINDS.QUESTION_ANSWERS);
+}
+
+export function buildRequiredQuestionRetryPrompt() {
+  return [
+    'The previous turn returned without completing the required initial user-confirmation round.',
+    'Do not produce, repeat, or refine a plan in this turn.',
+    'Use request_user_input now with 1 to 3 high-value questions that help confirm the user intent before planning.',
+    'Base the questions on the work item and repository evidence already inspected.',
+    'Even if the implementation seems clear, confirm the most consequential desired outcome, acceptance criterion, scope boundary, priority, or tradeoff.',
+    'Do not ask for information already available in source and do not ask for secrets.',
   ].join('\n');
 }
 
@@ -1058,10 +1116,12 @@ function sanitizeRunError(error, config) {
   const sensitiveValues = [
     config?.codex?.apiKey,
     config?.codex?.apiBaseUrl,
+    ...(config?.projects || []).map((project) => project.preludePrompt),
     ...(config?.projects || []).flatMap((project) => (
       (project.roots || []).map((root) => root.path)
     )),
-  ].map((value) => String(value || '')).filter(Boolean);
+  ].map((value) => String(value || '').replaceAll('\r', ' ').replaceAll('\n', ' '))
+    .filter(Boolean);
   message = String(message || '生成计划失败').replaceAll('\r', ' ').replaceAll('\n', ' ');
   for (const value of sensitiveValues) {
     message = message.replaceAll(value, '[REDACTED]');
@@ -1104,6 +1164,12 @@ function createServiceError(message, statusCode, details = null) {
   const error = new Error(message);
   error.statusCode = statusCode;
   error.publicDetails = details;
+  return error;
+}
+
+function createCodexProtocolError(message) {
+  const error = createServiceError(message, 502);
+  error.code = 'codex_protocol';
   return error;
 }
 

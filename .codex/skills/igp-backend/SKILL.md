@@ -23,6 +23,9 @@ Read `AGENTS.md`, then locate the owning layer.
 - Update manifest fetch: `server/services/updateService.js`.
 - Personal settings Bitable workflow:
   `server/services/personalSettingsService.js`.
+- Development-platform MCP transport and AI-plan read service:
+  `server/mcp/developmentPlatformMcpServer.js` and
+  `server/services/mcpAiPlanService.js`.
 - Version management provisioning and mutations:
   `server/services/versionManagementService.js`.
 - Codex read-only planning: `server/integrations/codexAppServerClient.js`,
@@ -72,18 +75,36 @@ Read `AGENTS.md`, then locate the owning layer.
   helper. Do not stop arbitrary processes by scanning ports.
 - Prefer `getCachedValue` for shared promise-aware TTL cache behavior.
 - Resolve personal settings through the configured Wiki node token, validate the
-  exact `用户`, `接收待办事项通知`, and `待办事项通知时间` fields, and reject
-  duplicate records for the same user.
+  exact `用户`, `接收待办事项通知`, `待办事项通知时间`, and `开发平台令牌`
+  fields, and reject duplicate records for the same user. Idempotently create the
+  token field as text when it is missing.
 - Keep reminder scheduling minute-aligned at second five. Do not add startup
   catch-up behavior or send more than once per user and Shanghai calendar day.
-- Settings routes are `GET /api/me/settings` and `PUT /api/me/settings`; require a
-  session and retain the `{ notifications: ... }` contract.
+- Settings routes are `GET /api/me/settings`, `PUT /api/me/settings`, and
+  `POST /api/me/settings/token/regenerate`; require a session and retain the
+  `{ notifications: ... }` update contract. Return the token only to its
+  authenticated owner, allow regeneration without a cooldown, and never include
+  it in reminder recipient objects.
 - `POST /api/me/settings/ensure` creates a missing user record with notifications
   disabled and the configured default time. Existing records must remain
   unchanged.
-- Serialize ensure and save operations for the same Open ID through
-  `server/runtime/keyedTaskQueue.js` so concurrent app tabs cannot create
-  duplicates; different users must remain concurrent.
+- Serialize ensure, save, and token-regeneration operations for the same Open ID
+  through `server/runtime/keyedTaskQueue.js` so concurrent app tabs cannot create
+  duplicates; different users must remain concurrent. Notification saves must
+  preserve the existing token.
+- Serve MCP only at `POST /mcp` using stateless Streamable HTTP. Authenticate every
+  request from the Bearer development-platform token before MCP dispatch, keep the
+  token out of tool arguments, validate LAN Host/Origin values, and rate-limit
+  failed authentication per client address.
+- Resolve MCP tokens from a fresh personal-settings record read on every request.
+  Hash both sides to fixed-length digests before timing-safe comparison, reject
+  malformed or duplicate matches with the same generic 401 response, and never log
+  or return the token from MCP routes.
+- `get_my_approved_ai_plans` is read-only. Query approved submissions only across
+  projects where the user currently has the requirement/Bug and AI-plan access,
+  load each project/tool work-item table once, and require a current assignee match
+  by Open ID, User ID, Union ID, or email. Detail reads must repeat access and
+  assignment checks and return not found after deletion or reassignment.
 - Keep version APIs under `/api/projects/:projectId/versions`. All project members
   may ensure/read/comment; require global or development super-admin access for
   create/edit/status/delete.
@@ -104,6 +125,15 @@ Read `AGENTS.md`, then locate the owning layer.
 - Run Codex with `read-only`, no approvals, and no tool network access. Keep the
   API key out of generated Codex config, browser payloads, logs, errors, and shell
   tool environments.
+- Normalize the optional `preludePrompt` on every `aiPlanning.projects` entry and
+  expose it through the portable configuration editor. For a new Codex thread,
+  send it as the first text input before attachments and the generated work-item
+  prompt. Do not resend it on same-thread continuations.
+- Require every AI planning conversation to persist at least one
+  `question_answers` message before accepting a plan. On the initial run, require
+  one bounded set of meaningful confirmation questions. If Codex returns without
+  asking, retry once in the same thread with a corrective prompt; if it skips
+  again, fail with `codex_protocol` and never persist the premature output.
 - Handle `item/tool/requestUserInput` as a bounded one-to-three-question decision
   request. Persist it before returning a protocol response, interrupt the current
   turn, release scheduler capacity, and continue the same thread after the owner

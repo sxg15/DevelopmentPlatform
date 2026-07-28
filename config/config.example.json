@@ -40,6 +40,7 @@
       {
         "projectId": "",
         "enabled": true,
+        "preludePrompt": "",
         "roots": [
           {
             "id": "main",
@@ -198,7 +199,8 @@
       "fieldNames": {
         "user": "用户",
         "receiveTodoNotifications": "接收待办事项通知",
-        "todoNotificationTime": "待办事项通知时间"
+        "todoNotificationTime": "待办事项通知时间",
+        "developmentPlatformToken": "开发平台令牌"
       }
     },
     "versionManagement": {

@@ -65,7 +65,7 @@ import { ensureAiDataDirectories } from './runtime/aiDataPaths.js';
 import { createAiPlanningRealtimeHub } from './runtime/aiPlanningRealtime.js';
 import { createBoundedTaskScheduler } from './runtime/boundedTaskScheduler.js';
 import { createKeyedTaskQueue } from './runtime/keyedTaskQueue.js';
-import { getLocalUrls } from './runtime/network.js';
+import { getLocalUrls, getMcpServerUrls } from './runtime/network.js';
 import {
   buildClearSessionCookie,
   buildSessionCookie,
@@ -85,6 +85,8 @@ import {
   ensurePersonalSettingsForUser,
   listTodoNotificationRecipients,
   readPersonalSettingsForUser,
+  regenerateDevelopmentPlatformTokenForUser,
+  resolveUserByDevelopmentPlatformToken,
   savePersonalSettingsForUser,
 } from './services/personalSettingsService.js';
 import { createTodoNotificationScheduler } from './services/todoNotificationScheduler.js';
@@ -95,6 +97,8 @@ import {
   createAiPlanningService,
   getAllowedAiPlanToolIds,
 } from './services/aiPlanningService.js';
+import { createMcpAiPlanService } from './services/mcpAiPlanService.js';
+import { registerDevelopmentPlatformMcp } from './mcp/developmentPlatformMcpServer.js';
 import {
   ensureWorkItemStatusOptions,
   migrateWorkItemStatusOptions,
@@ -218,12 +222,27 @@ const aiPlanningService = createAiPlanningService({
   runContextService: aiRunContextService,
   notificationService: aiPlanningNotificationService,
 });
+const mcpAiPlanService = createMcpAiPlanService({
+  repository: aiPlanningRepository,
+  listAccessibleProjects: getAccessibleProjectsForUser,
+  loadProjectWorkItems(token, project, user, toolId) {
+    return getProjectWorkItems(token, project, user, getWorkItemToolConfig(toolId));
+  },
+});
 
 const app = express();
 const allowClientErrorReport = createClientErrorRateLimiter();
 
 app.use(express.json({ limit: '256kb' }));
 app.use(blockDirectConfigAccess);
+registerDevelopmentPlatformMcp(app, {
+  serverVersion: currentAppVersion,
+  authenticate: authenticateDevelopmentPlatformMcpRequest,
+  executeAiPlanTool: executeDevelopmentPlatformMcpAiPlanTool,
+  onError(error, context) {
+    console.error(`[mcp] ${context?.phase || 'request'} 失败`, formatLogError(error));
+  },
+});
 
 app.post('/api/client-errors', (request, response) => {
   if (!allowClientErrorReport(request.ip)) {
@@ -316,6 +335,10 @@ app.put('/api/me/settings', async (request, response) => {
 
 app.post('/api/me/settings/ensure', async (request, response) => {
   await handlePersonalSettingsEnsure(request, response);
+});
+
+app.post('/api/me/settings/token/regenerate', async (request, response) => {
+  await handleDevelopmentPlatformTokenRegenerate(request, response);
 });
 
 app.post('/api/auth/debug', async (_request, response) => {
@@ -1877,7 +1900,12 @@ async function handlePersonalSettingsRead(request, response) {
     const token = await getTenantAccessToken();
     await ensureUserHasPlatformAccess(token, session.user);
     const settings = await readPersonalSettingsForUser(token, session.user);
-    response.json({ settings });
+    response.json({
+      settings,
+      mcp: {
+        serverUrls: getMcpServerUrls(port, getRequestOrigin(request)),
+      },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : '读取个人设置失败';
     response.status(getPersonalSettingsErrorStatus(error, message)).json({ message });
@@ -1945,6 +1973,64 @@ async function handlePersonalSettingsEnsure(request, response) {
     const message = error instanceof Error ? error.message : '初始化个人设置失败';
     response.status(getPersonalSettingsErrorStatus(error, message)).json({ message });
   }
+}
+
+async function handleDevelopmentPlatformTokenRegenerate(request, response) {
+  try {
+    if (!appId || !appSecret) {
+      response.status(500).json({ message: '缺少飞书应用配置' });
+      return;
+    }
+
+    const session = getSession(request);
+    if (!session) {
+      response.status(401).json({ message: '请先登录飞书' });
+      return;
+    }
+
+    const token = await getTenantAccessToken();
+    await ensureUserHasPlatformAccess(token, session.user);
+    const settings = await regenerateDevelopmentPlatformTokenForUser(token, session.user);
+    response.json({ settings });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '生成开发平台令牌失败';
+    response.status(getPersonalSettingsErrorStatus(error, message)).json({ message });
+  }
+}
+
+async function authenticateDevelopmentPlatformMcpRequest(developmentPlatformToken) {
+  if (!appId || !appSecret) {
+    throw new Error('缺少飞书应用配置');
+  }
+  const token = await getTenantAccessToken();
+  const user = await resolveUserByDevelopmentPlatformToken(
+    token,
+    developmentPlatformToken,
+  );
+  return user ? { token, user } : null;
+}
+
+async function executeDevelopmentPlatformMcpAiPlanTool({ authContext, arguments: args }) {
+  if (args.operation === 'detail') {
+    return mcpAiPlanService.getMyApprovedPlan({
+      token: authContext.token,
+      user: authContext.user,
+      submissionId: args.submissionId,
+    });
+  }
+  return mcpAiPlanService.listMyApprovedPlans({
+    token: authContext.token,
+    user: authContext.user,
+    projectId: args.projectId,
+    toolId: args.toolId,
+    limit: args.limit,
+    offset: args.offset,
+  });
+}
+
+function getRequestOrigin(request) {
+  const hostHeader = String(request.get?.('host') || request.headers?.host || '').trim();
+  return hostHeader ? `${request.protocol || 'http'}://${hostHeader}` : '';
 }
 
 function getPersonalSettingsErrorStatus(error, message) {

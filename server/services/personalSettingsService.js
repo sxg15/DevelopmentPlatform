@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import {
   DEFAULT_TODO_NOTIFICATION_TIME,
   DEFAULT_TODO_NOTIFICATION_TIME_ZONE,
@@ -8,6 +9,7 @@ import {
 import { runtimeConfig, validatePersonalSettingsConfig } from '../config/runtimeConfig.js';
 import {
   createBitableRecord,
+  ensureBitableTextField,
   fetchBitableRecords,
   fetchCachedBitableFields,
   fetchCachedBitableTables,
@@ -75,6 +77,69 @@ export async function ensurePersonalSettingsForUser(token, user) {
   );
 }
 
+export async function regenerateDevelopmentPlatformTokenForUser(token, user) {
+  return personalSettingsUserQueue.run(
+    getRequiredPersonalSettingsUserKey(user),
+    async () => {
+      const context = await getPersonalSettingsTableContext(token);
+      const records = await fetchPersonalSettingsRecords(token, context);
+      const matchedRecords = findPersonalSettingsRecordsForUser(
+        records,
+        user,
+        context.config.fieldNames,
+      );
+
+      if (matchedRecords.length > 1) {
+        throw createDuplicatePersonalSettingsError();
+      }
+
+      const developmentPlatformToken = generateDevelopmentPlatformToken();
+      const existingRecord = matchedRecords[0] || null;
+      if (!existingRecord) {
+        const settings = normalizePersonalNotificationSettings({}, {
+          defaultTime: context.config.defaultTime,
+          timeZone: context.config.timeZone,
+        });
+        await createBitableRecord(
+          token,
+          context.appToken,
+          context.tableId,
+          buildPersonalSettingsFields(context, user, {
+            ...settings,
+            developmentPlatformToken,
+          }, {
+            includeUser: true,
+            includeDevelopmentPlatformToken: true,
+          }),
+        );
+        return {
+          ...settings,
+          developmentPlatformToken,
+        };
+      }
+
+      const recordId = String(existingRecord.record_id || existingRecord.recordId || '').trim();
+      await updateBitableRecordFields(token, context.appToken, context.tableId, recordId, {
+        [context.config.fieldNames.developmentPlatformToken]: developmentPlatformToken,
+      });
+      return {
+        ...normalizePersonalSettingsRecord(existingRecord, context.config),
+        developmentPlatformToken,
+      };
+    },
+  );
+}
+
+export async function resolveUserByDevelopmentPlatformToken(token, developmentPlatformToken) {
+  const context = await getPersonalSettingsTableContext(token);
+  const records = await fetchPersonalSettingsRecords(token, context);
+  return resolveDevelopmentPlatformUserFromRecords(
+    records,
+    context.config.fieldNames,
+    developmentPlatformToken,
+  );
+}
+
 async function savePersonalSettingsForUserUnqueued(token, user, value) {
   const context = await getPersonalSettingsTableContext(token);
   const settings = normalizePersonalNotificationSettings(value, {
@@ -99,7 +164,12 @@ async function savePersonalSettingsForUserUnqueued(token, user, value) {
     await updateBitableRecordFields(token, context.appToken, context.tableId, recordId, fields);
   }
 
-  return settings;
+  return {
+    ...settings,
+    developmentPlatformToken: normalizeDevelopmentPlatformToken(
+      matchedRecords[0]?.fields?.[context.config.fieldNames.developmentPlatformToken],
+    ),
+  };
 }
 
 export async function listTodoNotificationRecipients(token) {
@@ -110,7 +180,10 @@ export async function listTodoNotificationRecipients(token) {
   const warnings = [];
 
   for (const record of records) {
-    const settings = normalizePersonalSettingsRecord(record, context.config);
+    const {
+      developmentPlatformToken: _developmentPlatformToken,
+      ...settings
+    } = normalizePersonalSettingsRecord(record, context.config);
     if (!settings.receiveTodoNotifications) {
       continue;
     }
@@ -166,6 +239,12 @@ export async function getPersonalSettingsTableContext(token) {
         throw new Error('个人设置多维表格没有可读取的数据表');
       }
 
+      await ensureBitableTextField(
+        token,
+        node.objToken,
+        tableId,
+        config.fieldNames.developmentPlatformToken,
+      );
       const fields = await fetchCachedBitableFields(token, node.objToken, tableId);
       const normalizedContext = {
         appToken: node.objToken,
@@ -188,7 +267,7 @@ function fetchPersonalSettingsRecords(token, context) {
   });
 }
 
-function normalizePersonalSettingsRecord(record, config) {
+export function normalizePersonalSettingsRecord(record, config) {
   const fields = record?.fields || {};
   const enabledText = normalizeTextValue(fields[config.fieldNames.receiveTodoNotifications]);
   return {
@@ -197,6 +276,9 @@ function normalizePersonalSettingsRecord(record, config) {
       fields[config.fieldNames.todoNotificationTime],
       config.defaultTime || DEFAULT_TODO_NOTIFICATION_TIME,
       config.timeZone || DEFAULT_TODO_NOTIFICATION_TIME_ZONE,
+    ),
+    developmentPlatformToken: normalizeDevelopmentPlatformToken(
+      fields[config.fieldNames.developmentPlatformToken],
     ),
   };
 }
@@ -213,7 +295,7 @@ function findPersonalSettingsRecordsForUser(records, user, fieldNames) {
   ));
 }
 
-function buildPersonalSettingsFields(context, user, settings, options = {}) {
+export function buildPersonalSettingsFields(context, user, settings, options = {}) {
   const names = context.config.fieldNames;
   const values = {};
 
@@ -231,15 +313,24 @@ function buildPersonalSettingsFields(context, user, settings, options = {}) {
     findFieldByName(context.fields, names.todoNotificationTime),
     context.config.timeZone,
   );
+  if (options.includeDevelopmentPlatformToken) {
+    values[names.developmentPlatformToken] = normalizeDevelopmentPlatformToken(
+      settings.developmentPlatformToken,
+    );
+  }
 
   return values;
 }
 
-function validatePersonalSettingsSchema(context) {
+export function validatePersonalSettingsSchema(context) {
   const names = context.config.fieldNames;
   const userField = findRequiredField(context.fields, names.user);
   const enabledField = findRequiredField(context.fields, names.receiveTodoNotifications);
   const timeField = findRequiredField(context.fields, names.todoNotificationTime);
+  const developmentPlatformTokenField = findRequiredField(
+    context.fields,
+    names.developmentPlatformToken,
+  );
 
   if (!isBitableUserField(userField)) {
     throw new Error(`个人设置字段“${names.user}”必须是人员字段`);
@@ -250,6 +341,9 @@ function validatePersonalSettingsSchema(context) {
   if (!isBitableTextField(timeField) && !isBitableDateField(timeField)) {
     throw new Error(`个人设置字段“${names.todoNotificationTime}”必须是文本或日期时间字段`);
   }
+  if (!isBitableTextField(developmentPlatformTokenField)) {
+    throw new Error(`个人设置字段“${names.developmentPlatformToken}”必须是文本字段`);
+  }
 
   const options = enabledField?.property?.options || enabledField?.property?.option || [];
   if (
@@ -259,6 +353,51 @@ function validatePersonalSettingsSchema(context) {
   ) {
     throw new Error(`个人设置字段“${names.receiveTodoNotifications}”缺少“${context.config.enabledValue}”选项`);
   }
+}
+
+export function generateDevelopmentPlatformToken(randomBytes = crypto.randomBytes) {
+  return `igp_${randomBytes(32).toString('base64url')}`;
+}
+
+export function resolveDevelopmentPlatformUserFromRecords(
+  records,
+  fieldNames,
+  developmentPlatformToken,
+) {
+  const providedToken = normalizeDevelopmentPlatformToken(developmentPlatformToken);
+  if (!isDevelopmentPlatformToken(providedToken)) {
+    return null;
+  }
+
+  const providedDigest = hashDevelopmentPlatformToken(providedToken);
+  const matchedRecords = (Array.isArray(records) ? records : []).filter((record) => {
+    const storedToken = normalizeDevelopmentPlatformToken(
+      record?.fields?.[fieldNames.developmentPlatformToken],
+    );
+    const storedDigest = hashDevelopmentPlatformToken(storedToken);
+    return isDevelopmentPlatformToken(storedToken)
+      && crypto.timingSafeEqual(providedDigest, storedDigest);
+  });
+  if (matchedRecords.length !== 1) {
+    return null;
+  }
+
+  const users = normalizeBitableUsers(
+    matchedRecords[0]?.fields?.[fieldNames.user],
+  ).filter(hasStableUserIdentity);
+  return users.length === 1 ? users[0] : null;
+}
+
+export function isDevelopmentPlatformToken(value) {
+  return /^igp_[A-Za-z0-9_-]{43}$/.test(String(value || '').trim());
+}
+
+function normalizeDevelopmentPlatformToken(value) {
+  return normalizeTextValue(value).slice(0, 200);
+}
+
+function hashDevelopmentPlatformToken(value) {
+  return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest();
 }
 
 function serializeTodoNotificationTime(time, field, timeZone) {
@@ -325,6 +464,15 @@ function getUserKeySet(user) {
     user?.id,
     user?.name,
   ].map((item) => String(item || '').trim()).filter(Boolean));
+}
+
+function hasStableUserIdentity(user) {
+  return [
+    user?.openId,
+    user?.userId,
+    user?.unionId,
+    user?.email,
+  ].some((item) => String(item || '').trim());
 }
 
 function normalizeTextValue(value) {

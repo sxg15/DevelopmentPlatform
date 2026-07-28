@@ -30,6 +30,10 @@ test('server config normalization preserves workflow field defaults', () => {
     config.bitable.personalSettings.fieldNames.todoNotificationTime,
     '待办事项通知时间',
   );
+  assert.equal(
+    config.bitable.personalSettings.fieldNames.developmentPlatformToken,
+    '开发平台令牌',
+  );
   assert.equal(config.bitable.versionManagement.wikiNodeToken, 'UVqFwm4EIiBcoPkoz9JcOLNfnVg');
   assert.equal(config.bitable.versionManagement.fieldNames.statusHistory, '状态变动记录');
   assert.equal(config.aiPlanning.enabled, true);
@@ -64,6 +68,7 @@ test('server config normalization accepts custom work item and permission fields
         defaultTime: '09:30',
         fieldNames: {
           todoNotificationTime: '提醒时间',
+          developmentPlatformToken: '访问令牌',
         },
       },
       versionManagement: {
@@ -83,6 +88,7 @@ test('server config normalization accepts custom work item and permission fields
       },
       projects: [{
         projectId: 'P1',
+        preludePrompt: '  Follow the project architecture.\nPrefer existing services.  ',
         roots: [{ id: 'main', path: 'D:\\Projects\\P1', profile: 'unity' }],
       }],
     },
@@ -101,12 +107,17 @@ test('server config normalization accepts custom work item and permission fields
   assert.equal(config.bitable.personalSettings.wikiNodeToken, 'wikcn_custom');
   assert.equal(config.bitable.personalSettings.defaultTime, '09:30');
   assert.equal(config.bitable.personalSettings.fieldNames.todoNotificationTime, '提醒时间');
+  assert.equal(config.bitable.personalSettings.fieldNames.developmentPlatformToken, '访问令牌');
   assert.equal(config.bitable.versionManagement.wikiNodeToken, 'wikcn_version');
   assert.equal(config.bitable.versionManagement.fieldNames.versionNumber, '发布版本');
   assert.equal(config.aiPlanning.enabled, true);
   assert.equal(config.aiPlanning.codex.model, 'codex-custom');
   assert.equal(config.aiPlanning.codex.apiBaseUrl, 'https://example.test/v1');
   assert.equal(config.aiPlanning.codex.maxConcurrentRuns, 5);
+  assert.equal(
+    config.aiPlanning.projects[0].preludePrompt,
+    'Follow the project architecture.\nPrefer existing services.',
+  );
   assert.equal(config.aiPlanning.projects[0].roots[0].profile, 'unity');
 });
 

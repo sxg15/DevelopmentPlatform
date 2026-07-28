@@ -18,8 +18,11 @@ $installedStampFile = Join-Path $nodeModulesDir '.igp-dependency-version'
 $installLockFile = Join-Path $runtimeDir 'dependency-install.lock'
 $requiredDependencyFiles = @(
     (Join-Path $nodeModulesDir 'express\package.json'),
+    (Join-Path $nodeModulesDir '@modelcontextprotocol\server\package.json'),
+    (Join-Path $nodeModulesDir '@modelcontextprotocol\node\package.json'),
     (Join-Path $nodeModulesDir '@openai\codex\package.json'),
     (Join-Path $nodeModulesDir '@openai\codex-win32-x64\package.json'),
+    (Join-Path $nodeModulesDir 'zod\package.json'),
     (Join-Path $nodeModulesDir '@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe')
 )
 

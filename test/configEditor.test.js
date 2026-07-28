@@ -234,6 +234,8 @@ test('config editor renders missing AI project mappings as an actionable inline 
   assert.match(source, /data-field-path="aiPlanning\.projects"/);
   assert.match(source, /添加项目映射/);
   assert.match(source, /payload\.errors/);
+  assert.match(source, /AI 前置提示词/);
+  assert.match(source, /preludePrompt/);
 });
 
 test('config editor store can recover malformed JSON from the example config', () => {

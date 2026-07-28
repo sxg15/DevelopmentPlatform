@@ -71,9 +71,15 @@ Treat shared definitions as the canonical frontend/backend contract.
   Conversation history is owner-only; submitted Markdown revisions are project
   shared and remain filtered by the viewer's underlying requirement/Bug access.
 - Codex first inspects the work item, its regular attachments, requirement
-  submission attachments, and configured project roots. It may persist one to
-  three material decision questions and continue the same private thread after the
-  owner answers; once resolved, it automatically generates the draft.
+  submission attachments, and configured project roots. Before any first draft it
+  must persist one bounded set of one to three meaningful confirmation questions,
+  and the owner must answer them. A skipped question round gets one same-thread
+  corrective retry; a second skip fails without saving the premature plan. After
+  the required answer, the same private thread continues and automatically
+  generates the draft; additional questions are optional.
+- A configured project `preludePrompt` is sent once at the start of each new Codex
+  thread before attachment inputs and the generated work-item planning prompt.
+  Same-thread question answers and later refinements must not resend it.
 - AI attachment files and tokens are temporary server-side context only. Browser
   payloads may expose safe processed/skipped summaries but never attachment
   content, tokens, download URLs, or temporary paths.
@@ -96,6 +102,11 @@ Treat shared definitions as the canonical frontend/backend contract.
   unassigned items. Newly assigned handlers receive a single pending-plan notice
   or aggregate notice, and review/edit/replacement outcomes notify the original
   plan submitter even when reviewer and submitter are the same user.
+- The development-platform MCP read tool exposes approved requirement/Bug plans
+  only while the authenticated user is a current assignee and still has both the
+  project tool and AI-plan access. Match stable Feishu identifiers only, omit
+  missing/deleted/reassigned items, and repeat the same checks before returning
+  full Markdown.
 
 ## Change Sequence
 

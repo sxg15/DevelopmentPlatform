@@ -392,6 +392,11 @@ button:disabled {
   line-height: 1.5;
 }
 
+.form-field textarea.ai-project-prompt-input {
+  min-height: 132px;
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+
 .form-field input:focus,
 .form-field select:focus,
 .form-field textarea:focus,

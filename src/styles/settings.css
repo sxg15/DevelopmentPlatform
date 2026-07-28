@@ -35,8 +35,8 @@
 
 .personal-settings-dialog {
   display: flex;
-  width: min(760px, 100%);
-  height: min(520px, calc(100vh - 48px));
+  width: min(860px, 100%);
+  height: min(620px, calc(100vh - 48px));
   min-width: 0;
   min-height: 360px;
   flex-direction: column;
@@ -110,6 +110,11 @@
   color: #0c675d;
   background: #e8f4f0;
   border-color: #cbe2db;
+}
+
+.personal-settings-nav-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
 .personal-settings-content {
@@ -223,6 +228,246 @@
 .personal-settings-time-input:focus {
   border-color: #167c6f;
   outline: 2px solid rgb(22 124 111 / 16%);
+}
+
+.personal-settings-token-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-top: 22px;
+}
+
+.personal-settings-token-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.personal-settings-token-field label strong,
+.personal-settings-token-empty strong {
+  color: #1b2925;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.personal-settings-token-input-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 36px 36px;
+  gap: 8px;
+}
+
+.personal-settings-token-input {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 11px;
+  color: #16231f;
+  background: #f8faf9;
+  border: 1px solid #cbd8d3;
+  border-radius: 6px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 13px;
+}
+
+.personal-settings-token-input:focus {
+  border-color: #167c6f;
+  outline: 2px solid rgb(22 124 111 / 16%);
+}
+
+.personal-settings-token-icon-button {
+  width: 36px;
+  height: 36px;
+  flex-basis: 36px;
+  color: #3e4c47;
+  background: #ffffff;
+  border-color: #cbd8d3;
+}
+
+.personal-settings-token-actions {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #edf1ef;
+}
+
+.personal-settings-token-actions > span {
+  color: #687770;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.personal-settings-token-regenerate {
+  display: inline-flex;
+  min-height: 34px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  color: #8b2c1d;
+  background: #ffffff;
+  border: 1px solid #d8ada5;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.personal-settings-token-regenerate:hover:not(:disabled),
+.personal-settings-token-regenerate:focus-visible:not(:disabled) {
+  color: #6f2015;
+  background: #fff5f3;
+  border-color: #c8887d;
+}
+
+.personal-settings-token-regenerate:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.personal-settings-token-empty {
+  display: flex;
+  min-height: 220px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 14px;
+  color: #687770;
+  text-align: center;
+}
+
+.personal-settings-token-empty > svg {
+  color: #0d7164;
+}
+
+.personal-settings-token-empty .personal-settings-message {
+  width: min(360px, 100%);
+}
+
+.personal-settings-mcp-panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 20px;
+}
+
+.personal-settings-mcp-empty > svg {
+  color: #1769a6;
+}
+
+.personal-settings-mcp-endpoint {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.personal-settings-mcp-endpoint strong {
+  color: #1b2925;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.personal-settings-mcp-endpoint select {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 34px 0 10px;
+  color: #16231f;
+  background: #ffffff;
+  border: 1px solid #cbd8d3;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.personal-settings-mcp-endpoint select:focus {
+  border-color: #167c6f;
+  outline: 2px solid rgb(22 124 111 / 16%);
+}
+
+.personal-settings-mcp-clients {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border: 1px solid #cbd8d3;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.personal-settings-mcp-clients button {
+  min-width: 0;
+  min-height: 36px;
+  padding: 7px 8px;
+  color: #4a5954;
+  background: #ffffff;
+  border: 0;
+  border-right: 1px solid #dce6e2;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 18px;
+}
+
+.personal-settings-mcp-clients button:last-child {
+  border-right: 0;
+}
+
+.personal-settings-mcp-clients button:hover,
+.personal-settings-mcp-clients button:focus-visible {
+  color: #0c675d;
+  background: #f1f8f6;
+}
+
+.personal-settings-mcp-clients button.is-active {
+  color: #ffffff;
+  background: #176f65;
+}
+
+.personal-settings-mcp-config {
+  min-width: 0;
+  border: 1px solid #cbd8d3;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.personal-settings-mcp-config-heading {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 8px 0 12px;
+  color: #40504a;
+  background: #f5f8f7;
+  border-bottom: 1px solid #dce6e2;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+}
+
+.personal-settings-mcp-config pre {
+  min-height: 220px;
+  max-height: 292px;
+  margin: 0;
+  overflow: auto;
+  padding: 16px;
+  color: #16231f;
+  background: #fbfcfc;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 19px;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.personal-settings-mcp-config pre:focus {
+  outline: 2px solid rgb(22 124 111 / 18%);
+  outline-offset: -2px;
 }
 
 .personal-settings-state {

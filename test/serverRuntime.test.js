@@ -12,6 +12,7 @@ import {
 import { createWorkItemRealtimeHub } from '../server/runtime/workItemRealtime.js';
 import { getCachedValue } from '../server/runtime/asyncCache.js';
 import { createKeyedTaskQueue } from '../server/runtime/keyedTaskQueue.js';
+import { getMcpServerUrls } from '../server/runtime/network.js';
 
 test('async cache shares pending loads and evicts failed values', async () => {
   const cache = new Map();
@@ -123,4 +124,29 @@ test('keyed task queue serializes one user without blocking other users', async 
 
   assert.deepEqual(order, ['first-start', 'other', 'first-end', 'second']);
   assert.equal(queue.size(), 0);
+});
+
+test('MCP server URLs prefer the current LAN origin and keep loopback last', () => {
+  const localUrls = [
+    'http://127.0.0.1:3000/',
+    'http://192.168.1.20:3000/',
+    'http://10.0.0.8:3000/',
+  ];
+  assert.deepEqual(
+    getMcpServerUrls(3000, 'http://10.0.0.9:3000/settings', localUrls),
+    [
+      'http://10.0.0.9:3000/mcp',
+      'http://192.168.1.20:3000/mcp',
+      'http://10.0.0.8:3000/mcp',
+      'http://127.0.0.1:3000/mcp',
+    ],
+  );
+  assert.deepEqual(
+    getMcpServerUrls(3000, 'http://127.0.0.1:3000', localUrls),
+    [
+      'http://192.168.1.20:3000/mcp',
+      'http://10.0.0.8:3000/mcp',
+      'http://127.0.0.1:3000/mcp',
+    ],
+  );
 });

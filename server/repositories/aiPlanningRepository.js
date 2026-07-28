@@ -910,6 +910,34 @@ export class AiPlanningRepository {
     `).all(...params).map(normalizeSubmissionRow);
   }
 
+  listApprovedSubmissionsForProjects({ projectIds, toolIds = [] }) {
+    const projects = [...new Set(projectIds || [])]
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+    if (projects.length === 0) {
+      return [];
+    }
+
+    const tools = [...new Set(toolIds || [])]
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+    const where = [
+      `project_id IN (${projects.map(() => '?').join(', ')})`,
+      'status = ?',
+    ];
+    const params = [...projects, AI_PLAN_STATUSES.APPROVED];
+    if (tools.length > 0) {
+      where.push(`tool_id IN (${tools.map(() => '?').join(', ')})`);
+      params.push(...tools);
+    }
+
+    return this.database.prepare(`
+      SELECT * FROM plan_submissions
+      WHERE ${where.join(' AND ')}
+      ORDER BY COALESCE(reviewed_at, submitted_at) DESC, submitted_at DESC, id ASC
+    `).all(...params).map(normalizeSubmissionRow);
+  }
+
   getSubmission(submissionId) {
     const row = this.database.prepare(`
       SELECT * FROM plan_submissions WHERE id = ?

@@ -689,6 +689,7 @@ function BitableSection({ config, errors, onChange }) {
             ['user', '用户'],
             ['receiveTodoNotifications', '接收待办事项通知'],
             ['todoNotificationTime', '待办事项通知时间'],
+            ['developmentPlatformToken', '开发平台令牌'],
           ]}
           config={config}
           errors={errors}
@@ -783,6 +784,7 @@ function AiSection({
       {
         projectId: '',
         enabled: true,
+        preludePrompt: '',
         roots: [{ id: 'main', path: '', profile: 'auto' }],
       },
     ]);
@@ -999,6 +1001,15 @@ function AiSection({
             wide
           />
 
+          <TextAreaField
+            label="AI 前置提示词"
+            path={`aiPlanning.projects.${projectIndex}.preludePrompt`}
+            value={project.preludePrompt}
+            error={errors[`aiPlanning.projects.${projectIndex}.preludePrompt`]}
+            onChange={onChange}
+            className="ai-project-prompt-input"
+          />
+
           <div className="root-list-heading">
             <strong>只读代码目录</strong>
             <button type="button" className="text-button" onClick={() => addRoot(projectIndex)}>
@@ -1162,6 +1173,30 @@ function TextField({
         type={type}
         value={value ?? ''}
         list={list}
+        aria-invalid={Boolean(error)}
+        onChange={(event) => onChange(path, event.target.value)}
+      />
+      {error ? <FieldError>{error}</FieldError> : null}
+    </div>
+  );
+}
+
+function TextAreaField({
+  label,
+  path,
+  value,
+  error,
+  onChange,
+  className = '',
+}) {
+  return (
+    <div className="form-field is-wide" data-field-path={path}>
+      <label htmlFor={toFieldId(path)}>{label}</label>
+      <textarea
+        id={toFieldId(path)}
+        className={className}
+        value={value ?? ''}
+        spellCheck="false"
         aria-invalid={Boolean(error)}
         onChange={(event) => onChange(path, event.target.value)}
       />

@@ -17,8 +17,11 @@ import { createBoundedTaskScheduler } from '../server/runtime/boundedTaskSchedul
 import { createAiRunContextService } from '../server/services/aiRunContextService.js';
 import { createAiPlanningNotificationService } from '../server/services/aiPlanningNotificationService.js';
 import {
+  buildPlanningPrompt,
+  buildRequiredQuestionRetryPrompt,
   createAiPlanningService,
   getAllowedAiPlanToolIds,
+  hasCompletedQuestionRound,
   parsePlanningOutput,
   serializeAiConversation,
 } from '../server/services/aiPlanningService.js';
@@ -51,6 +54,32 @@ test('AI plan definitions keep source paths relative and permission-derived', ()
       note: 'entry',
     },
   ]);
+});
+
+test('AI planning requires one completed question round before plan generation', () => {
+  assert.equal(hasCompletedQuestionRound({ messages: [] }), false);
+  assert.equal(hasCompletedQuestionRound({
+    messages: [{ kind: 'question_set' }],
+  }), false);
+  assert.equal(hasCompletedQuestionRound({
+    messages: [{ kind: 'question_answers' }],
+  }), true);
+
+  const prompt = buildPlanningPrompt({
+    conversation: {
+      projectId: 'P1',
+      toolId: 'requirements',
+      recordId: 'rec-1',
+    },
+    userMessage: { content: 'Generate a plan' },
+    workItem: { title: 'Requirement' },
+    project: { projectName: 'Project one' },
+    workspace: { roots: [] },
+    requiresQuestionRound: true,
+  });
+  assert.match(prompt, /MUST call request_user_input once/);
+  assert.match(prompt, /without returning a plan/);
+  assert.match(buildRequiredQuestionRetryPrompt(), /previous turn returned without/);
 });
 
 test('AI data directories are created with a writable probe', () => {
@@ -184,6 +213,13 @@ test('AI planning repository isolates conversations and preserves revisions', ()
       openId: 'reviewer-a',
       name: 'Reviewer A',
     }).status, AI_PLAN_STATUSES.APPROVED);
+    assert.deepEqual(
+      repository.listApprovedSubmissionsForProjects({
+        projectIds: ['P1'],
+        toolIds: ['requirements'],
+      }).map((submission) => submission.id),
+      [revisionTwo.id],
+    );
 
     const reviewRevision = repository.createReviewRevision({
       submissionId: revisionTwo.id,
@@ -436,6 +472,8 @@ test('AI service persists and publishes safe Codex progress snapshots', async ()
   const repository = new AiPlanningRepository(path.join(root, 'planning.sqlite'));
   const realtimeHub = createAiPlanningRealtimeHub();
   const writes = [];
+  const turnOptions = [];
+  let turnCount = 0;
   const service = createAiPlanningService({
     config: {
       enabled: true,
@@ -450,9 +488,20 @@ test('AI service persists and publishes safe Codex progress snapshots', async ()
     scheduler: createBoundedTaskScheduler(),
     realtimeHub,
     codexClient: {
-      async runTurn({ onThread, onTurn, onProgress }) {
+      async runTurn(options) {
+        turnCount += 1;
+        turnOptions.push({
+          threadId: options.threadId,
+          prompt: options.prompt,
+        });
+        const {
+          onThread,
+          onTurn,
+          onProgress,
+          onRequestUserInput,
+        } = options;
         onThread('private-thread');
-        onTurn('private-turn');
+        onTurn(`private-turn-${turnCount}`);
         onProgress({
           stage: 'analyzing',
           message: '正在读取项目结构和相关代码',
@@ -462,11 +511,24 @@ test('AI service persists and publishes safe Codex progress snapshots', async ()
           stage: 'composing',
           message: '正在整理最终实施计划',
         });
+        if (turnCount === 2) {
+          await onRequestUserInput([{
+            id: 'acceptance',
+            header: '验收重点',
+            question: '本次方案最需要优先保证什么？',
+            isOther: true,
+            options: [
+              { label: '兼容性', description: '优先保持现有行为兼容' },
+              { label: '交付速度', description: '优先缩小本次改动范围' },
+            ],
+          }]);
+          return { awaitingUser: true };
+        }
         return {
           threadId: 'private-thread',
-          turnId: 'private-turn',
+          turnId: `private-turn-${turnCount}`,
           content: JSON.stringify({
-            message: '计划已生成',
+            message: turnCount === 1 ? '过早生成的方案' : '计划已生成',
             plan: null,
           }),
         };
@@ -497,6 +559,28 @@ test('AI service persists and publishes safe Codex progress snapshots', async ()
       workItem: { itemId: 'REQ-001', title: 'Requirement' },
       project: { projectName: 'Project one' },
     });
+    const awaiting = await waitForConversationStatus(
+      repository,
+      conversation.id,
+      user.openId,
+      'awaiting_user',
+    );
+    assert.equal(awaiting.pendingQuestionSet.questions.length, 1);
+    service.answerQuestions({
+      user,
+      conversationId: conversation.id,
+      questionSetId: awaiting.pendingQuestionSet.id,
+      expectedVersion: awaiting.version,
+      clientMutationId: 'progress-answer',
+      answers: [{
+        questionId: 'acceptance',
+        optionLabel: '兼容性',
+        customText: '',
+      }],
+      additionalContext: '',
+      workItem: { itemId: 'REQ-001', title: 'Requirement' },
+      project: { projectId: 'P1', projectName: 'Project one' },
+    });
     const completed = await waitForConversationStatus(
       repository,
       conversation.id,
@@ -506,6 +590,15 @@ test('AI service persists and publishes safe Codex progress snapshots', async ()
     unsubscribe();
     assert.equal(completed.latestRun.status, 'completed');
     assert.equal(completed.latestRun.progressStage, 'completed');
+    assert.equal(turnCount, 3);
+    assert.deepEqual(turnOptions.map((item) => item.threadId), [
+      '',
+      'private-thread',
+      'private-thread',
+    ]);
+    assert.match(turnOptions[0].prompt, /MUST call request_user_input once/);
+    assert.match(turnOptions[1].prompt, /previous turn returned without/);
+    assert.doesNotMatch(turnOptions[2].prompt, /MUST call request_user_input once/);
     const events = writes.join('');
     assert.match(events, /"stage":"starting"/);
     assert.match(events, /"stage":"analyzing"/);
@@ -518,12 +611,12 @@ test('AI service persists and publishes safe Codex progress snapshots', async ()
   }
 });
 
-test('AI questions persist, remain owner-only, and resume the same private conversation', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-questions-'));
+test('AI service rejects premature plans when Codex skips the required question round twice', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-required-question-'));
   const projectRoot = path.join(root, 'project');
   fs.mkdirSync(projectRoot);
   const repository = new AiPlanningRepository(path.join(root, 'planning.sqlite'));
-  const notifications = [];
+  const prompts = [];
   let turnCount = 0;
   const service = createAiPlanningService({
     config: {
@@ -541,6 +634,94 @@ test('AI questions persist, remain owner-only, and resume the same private conve
     codexClient: {
       async runTurn(options) {
         turnCount += 1;
+        prompts.push(options.prompt);
+        options.onThread('private-thread');
+        options.onTurn(`turn-${turnCount}`);
+        return {
+          content: JSON.stringify({
+            message: `Premature plan ${turnCount}`,
+            plan: {
+              title: 'Must not persist',
+              summary: 'Codex skipped the required user confirmation',
+              markdown: '# Must not persist',
+              sourceReferences: [],
+            },
+          }),
+        };
+      },
+    },
+    skillPath: '',
+  });
+  try {
+    const user = { openId: 'owner-a', name: 'Owner A' };
+    const conversation = service.createConversation({
+      user,
+      projectId: 'P1',
+      toolId: 'requirements',
+      recordId: 'rec-1',
+      title: 'Plan',
+    });
+    service.sendMessage({
+      user,
+      conversationId: conversation.id,
+      content: 'Generate a plan',
+      expectedVersion: conversation.version,
+      clientMutationId: 'required-question-failure',
+      workItem: { itemId: 'REQ-001', title: 'Requirement' },
+      project: { projectId: 'P1', projectName: 'Project one' },
+    });
+
+    const failed = await waitForConversationStatus(
+      repository,
+      conversation.id,
+      user.openId,
+      'failed',
+    );
+    assert.equal(turnCount, 2);
+    assert.match(prompts[0], /MUST call request_user_input once/);
+    assert.match(prompts[1], /previous turn returned without/);
+    assert.equal(failed.latestRun.status, 'failed');
+    assert.equal(failed.latestRun.errorCode, 'codex_protocol');
+    assert.equal(failed.draft, null);
+    assert.equal(
+      failed.messages.some((message) => message.role === 'assistant'),
+      false,
+    );
+  } finally {
+    repository.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('AI questions persist, remain owner-only, and resume the same private conversation', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-questions-'));
+  const projectRoot = path.join(root, 'project');
+  fs.mkdirSync(projectRoot);
+  const repository = new AiPlanningRepository(path.join(root, 'planning.sqlite'));
+  const notifications = [];
+  const runOptions = [];
+  let turnCount = 0;
+  const service = createAiPlanningService({
+    config: {
+      enabled: true,
+      codex: { model: 'codex-test' },
+      projects: [{
+        projectId: 'P1',
+        enabled: true,
+        preludePrompt: 'Use the project service layer and existing naming rules.',
+        roots: [{ id: 'main', path: projectRoot, profile: 'auto' }],
+      }],
+    },
+    repository,
+    scheduler: createBoundedTaskScheduler(),
+    realtimeHub: createAiPlanningRealtimeHub(),
+    codexClient: {
+      async runTurn(options) {
+        turnCount += 1;
+        runOptions.push({
+          threadId: options.threadId,
+          preludePrompt: options.preludePrompt,
+        });
         options.onThread('private-thread');
         options.onTurn(`turn-${turnCount}`);
         if (turnCount === 1) {
@@ -631,6 +812,16 @@ test('AI questions persist, remain owner-only, and resume the same private conve
     assert.equal(completed.messages.at(-2).kind, 'question_answers');
     assert.equal(completed.draft.markdown, '# 实施方案');
     assert.equal(turnCount, 2);
+    assert.deepEqual(runOptions, [
+      {
+        threadId: '',
+        preludePrompt: 'Use the project service layer and existing naming rules.',
+      },
+      {
+        threadId: 'private-thread',
+        preludePrompt: '',
+      },
+    ]);
     assert.equal(notifications.at(-1).type, 'plan_ready');
 
     const duplicate = service.answerQuestions(answerPayload);
