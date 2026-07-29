@@ -73,6 +73,10 @@ Read `AGENTS.md`, then locate the owning layer.
   validate write origins, redact existing `feishu.appSecret` and Codex API keys,
   preserve unknown config keys, detect revision conflicts, and save through a
   backup-and-rollback transaction.
+- Allow the configuration editor to receive separate config and asset roots.
+  Managed-release launchers must edit `managed-runtime/state/config.json` while
+  serving the current release's editor assets; portable launchers keep both roots
+  at the package directory.
 - Stop the portable configuration editor through
   `StopConfigureWebBackend.bat` and its token-authenticated loopback shutdown
   helper. Do not stop arbitrary processes by scanning ports.

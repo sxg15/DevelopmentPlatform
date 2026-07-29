@@ -319,6 +319,11 @@ rollback release.
   `config.example.json`. The configuration editor must run with the bundled Node
   runtime before application dependencies are installed, bind only to loopback,
   and never return existing secrets to the browser.
+- When those configuration launchers run from a managed release, they must edit
+  the target-owned `managed-runtime/state/config.json`, use
+  `managed-runtime/runtime/node.exe`, and serve the editor assets from the current
+  release. Portable packages continue to use their own root for both config and
+  assets.
 
 ## Change Workflow
 

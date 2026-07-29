@@ -10,8 +10,10 @@ const LOOPBACK_HOST = '127.0.0.1';
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const rootDir = resolveRootDir(process.argv.slice(2));
-const assetsDir = resolveAssetsDir(rootDir);
+const args = process.argv.slice(2);
+const rootDir = resolveRootDir(args);
+const assetsRootDir = resolveAssetsRootDir(args, rootDir);
+const assetsDir = resolveAssetsDir(assetsRootDir);
 const folderPickerPath = path.join(__dirname, 'selectFolder.ps1');
 const runtimeDir = path.join(rootDir, 'runtime');
 const lockPath = path.join(runtimeDir, 'config-editor.lock');
@@ -378,9 +380,17 @@ function isProcessRunning(pid) {
 }
 
 function resolveRootDir(args) {
-  const rootIndex = args.indexOf('--root');
-  const value = rootIndex >= 0 ? args[rootIndex + 1] : process.cwd();
-  return path.resolve(value || process.cwd());
+  return resolveDirectoryArgument(args, '--root', process.cwd());
+}
+
+function resolveAssetsRootDir(args, resolvedRoot) {
+  return resolveDirectoryArgument(args, '--assets-root', resolvedRoot);
+}
+
+function resolveDirectoryArgument(args, argumentName, fallback) {
+  const argumentIndex = args.indexOf(argumentName);
+  const value = argumentIndex >= 0 ? args[argumentIndex + 1] : fallback;
+  return path.resolve(value || fallback);
 }
 
 function resolveAssetsDir(resolvedRoot) {

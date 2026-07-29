@@ -81,12 +81,15 @@ try {
         $env:IGP_CONFIG_EDITOR_NO_BROWSER = '1'
         $editorScriptArgument = '"{0}"' -f (Join-Path $smokeDir 'server\config\configEditorServer.js')
         $editorRootArgument = '"{0}"' -f $smokeDir
+        $editorAssetsRootArgument = '"{0}"' -f $smokeDir
         $configEditorProcess = Start-Process `
             -FilePath (Join-Path $smokeDir 'runtime\node.exe') `
             -ArgumentList @(
                 $editorScriptArgument,
                 '--root',
-                $editorRootArgument
+                $editorRootArgument,
+                '--assets-root',
+                $editorAssetsRootArgument
             ) `
             -WorkingDirectory $smokeDir `
             -WindowStyle Hidden `
@@ -141,6 +144,14 @@ try {
         throw 'Portable config editor exposed an existing secret'
     }
     $editorConfig.config.debug.userName = 'Portable Config Smoke'
+    $editorConfig.config.aiPlanning.projects = @(
+        @{
+            projectId = '50'
+            enabled = $false
+            preludePrompt = 'Portable prompt save smoke'
+            roots = @()
+        }
+    )
     $savePayload = @{
         revision = $editorConfig.revision
         config = $editorConfig.config
@@ -162,6 +173,15 @@ try {
         -TimeoutSec 10
     if ($saveResult.ok -ne $true -or $saveResult.restartRequired -ne $true) {
         throw 'Portable config editor failed to save the config'
+    }
+    $persistedEditorConfig = Get-Content `
+        -LiteralPath (Join-Path $smokeDir 'config.json') `
+        -Raw | ConvertFrom-Json
+    if (
+        $persistedEditorConfig.aiPlanning.projects[0].preludePrompt `
+        -ne 'Portable prompt save smoke'
+    ) {
+        throw 'Portable config editor failed to persist the AI prelude prompt'
     }
     if (Test-Path -LiteralPath (Join-Path $smokeDir 'node_modules')) {
         throw 'Portable config editor unexpectedly installed application dependencies'

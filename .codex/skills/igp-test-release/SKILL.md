@@ -113,6 +113,9 @@ Production packages must also contain `ConfigureWebBackend.bat`,
 config editor start/stop helpers and folder picker under `server/config/`. The
 config editor must start before dependencies are installed and must not create
 `node_modules`.
+Verify that the packaged launchers keep portable config local but switch managed
+releases to the target-owned state config and stable Node runtime while serving
+assets from the active release.
 The packaged `config.example.json` must retain the enabled AI project `50` preset
 with root ID `main`, path `D:\DevelopmentPlatformProject`, and profile `auto`.
 Use `scripts/smoke-portable.ps1` to copy `Publish` to a temporary relocated path,

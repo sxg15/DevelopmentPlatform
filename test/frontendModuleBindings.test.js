@@ -218,6 +218,8 @@ test('AI planning separates private conversations from shared submissions', () =
   assert.match(buildSource, /title IGP Web Backend Setup/);
   assert.match(buildSource, /ConfigureWebBackend\.bat/);
   assert.match(buildSource, /StopConfigureWebBackend\.bat/);
+  assert.match(buildSource, /--assets-root/);
+  assert.match(buildSource, /\.\.\\\.\.\\state\\deployment\.json/);
   assert.match(buildSource, /config-editor\\index\.html/);
   assert.match(buildSource, /config\.example\.json/);
   assert.doesNotMatch(buildSource, /npm\.cmd ci --omit=dev/);

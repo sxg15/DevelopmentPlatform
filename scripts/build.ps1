@@ -170,24 +170,31 @@ $configureBat = @'
 setlocal
 title IGP Runtime Configuration
 cd /d "%~dp0"
-if not exist runtime\node.exe (
+set "CONFIG_ROOT=%CD%"
+set "ASSETS_ROOT=%CD%"
+set "NODE_EXE=%CD%\runtime\node.exe"
+if exist "..\..\state\deployment.json" (
+  for %%I in ("..\..\state") do set "CONFIG_ROOT=%%~fI"
+  for %%I in ("..\..\runtime\node.exe") do set "NODE_EXE=%%~fI"
+)
+if not exist "%NODE_EXE%" (
   echo Bundled Node runtime is missing.
   pause
   exit /b 1
 )
-if not exist server\config\configEditorServer.js (
+if not exist "%ASSETS_ROOT%\server\config\configEditorServer.js" (
   echo Runtime configuration tool is missing.
   pause
   exit /b 1
 )
-if not exist config-editor\index.html (
+if not exist "%ASSETS_ROOT%\config-editor\index.html" (
   echo Runtime configuration page is missing.
   pause
   exit /b 1
 )
 echo Starting IGP Runtime Configuration...
 echo.
-runtime\node.exe server\config\configEditorServer.js --root "%CD%"
+"%NODE_EXE%" "%ASSETS_ROOT%\server\config\configEditorServer.js" --root "%CONFIG_ROOT%" --assets-root "%ASSETS_ROOT%"
 if errorlevel 1 (
   echo.
   echo Runtime configuration tool exited with an error.
@@ -205,17 +212,24 @@ $stopConfigureBat = @'
 setlocal
 title Stop IGP Runtime Configuration
 cd /d "%~dp0"
-if not exist runtime\node.exe (
+set "CONFIG_ROOT=%CD%"
+set "ASSETS_ROOT=%CD%"
+set "NODE_EXE=%CD%\runtime\node.exe"
+if exist "..\..\state\deployment.json" (
+  for %%I in ("..\..\state") do set "CONFIG_ROOT=%%~fI"
+  for %%I in ("..\..\runtime\node.exe") do set "NODE_EXE=%%~fI"
+)
+if not exist "%NODE_EXE%" (
   echo Bundled Node runtime is missing.
   pause
   exit /b 1
 )
-if not exist server\config\stopConfigEditor.js (
+if not exist "%ASSETS_ROOT%\server\config\stopConfigEditor.js" (
   echo Runtime configuration stop tool is missing.
   pause
   exit /b 1
 )
-runtime\node.exe server\config\stopConfigEditor.js --root "%CD%"
+"%NODE_EXE%" "%ASSETS_ROOT%\server\config\stopConfigEditor.js" --root "%CONFIG_ROOT%"
 if errorlevel 1 (
   echo.
   pause

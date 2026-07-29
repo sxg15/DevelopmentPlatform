@@ -50,6 +50,9 @@ to the application package copied into `Publish`.
   pending/rollback files, and recover interrupted replacements at target startup.
   The release copy remains required as the verified source for upgrades and
   rollback.
+- Configuration launchers inside a managed release must use the same stable Node
+  runtime and edit `managed-runtime/state/config.json`; the static editor assets
+  and server modules still come from the current release directory.
 - Before spawning a service, reject an application port occupied by an unmanaged
   process. A successful health response must report the active release version.
 - Service status reads must remain available when the managed process is alive but
