@@ -7,6 +7,7 @@ import {
   normalizeAiPlanSourceReferences,
 } from '../../shared/aiPlanningDefinitions.js';
 import { isRecoverableCodexTransportError } from '../integrations/codexErrorUtils.js';
+import { createMutationFingerprint } from '../runtime/mutationFingerprint.js';
 import { resolveAiProjectWorkspace } from '../security/projectWorkspaceResolver.js';
 
 const OUTPUT_SCHEMA = Object.freeze({
@@ -674,6 +675,60 @@ export function createAiPlanningService({
     return serializeSubmission(submission, user, { includeMarkdown: true });
   }
 
+  function createExternalSubmission({
+    user,
+    projectId,
+    toolId,
+    recordId,
+    title,
+    summary,
+    markdown,
+    sourceReferences,
+    clientMutationId,
+    workItem,
+    project,
+  }) {
+    assertSupportedTool(toolId);
+    const normalizedMarkdown = String(markdown || '').trim();
+    if (!normalizedMarkdown) {
+      throw createServiceError('方案 Markdown 不能为空', 400);
+    }
+    if (normalizedMarkdown.length > 200_000) {
+      throw createServiceError('方案 Markdown 不能超过 200000 字', 400);
+    }
+    const workspace = resolveAiProjectWorkspace(config, projectId);
+    const allowedRootIds = new Set(workspace.roots.map((root) => root.id));
+    const normalizedReferences = normalizeAiPlanSourceReferences(sourceReferences)
+      .filter((reference) => allowedRootIds.has(reference.rootId))
+      .map((reference) => ({
+        ...reference,
+        note: redactWorkspacePaths(reference.note, workspace),
+      }));
+    const normalizedPayload = {
+      projectId: String(projectId || '').trim(),
+      toolId: String(toolId || '').trim(),
+      recordId: String(recordId || '').trim(),
+      title: redactWorkspacePaths(String(title || '').trim(), workspace),
+      summary: redactWorkspacePaths(String(summary || '').trim(), workspace),
+      markdown: redactWorkspacePaths(normalizedMarkdown, workspace),
+      sourceReferences: normalizedReferences,
+    };
+    const result = repository.createExternalSubmission({
+      ownerOpenId: getUserOpenId(user),
+      ownerName: getUserName(user),
+      ...normalizedPayload,
+      workItemId: String(workItem?.itemId || ''),
+      workItemTitle: String(workItem?.title || ''),
+      projectName: String(project?.projectName || ''),
+      clientMutationId: String(clientMutationId || '').trim(),
+      mutationFingerprint: createMutationFingerprint(normalizedPayload),
+    });
+    return {
+      submission: serializeSubmission(result.submission, user, { includeMarkdown: true }),
+      duplicate: result.duplicate,
+    };
+  }
+
   function listSubmissions({
     user,
     projectId,
@@ -893,6 +948,7 @@ export function createAiPlanningService({
     archiveConversation,
     cancelRun,
     createConversation,
+    createExternalSubmission,
     createReviewRevision,
     createSubmission,
     deleteSubmission,
@@ -1322,6 +1378,8 @@ function serializeSubmission(submission, user, { includeMarkdown }) {
     revisionAuthorOpenId: undefined,
     reviewedByOpenId: undefined,
     conversationId: undefined,
+    clientMutationId: undefined,
+    mutationFingerprint: undefined,
     isOwnPlan: Boolean(openId && submission.authorOpenId === openId),
   };
   if (!includeMarkdown) {

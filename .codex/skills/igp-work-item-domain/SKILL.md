@@ -104,11 +104,22 @@ Treat shared definitions as the canonical frontend/backend contract.
   unassigned items. Newly assigned handlers receive a single pending-plan notice
   or aggregate notice, and review/edit/replacement outcomes notify the original
   plan submitter even when reviewer and submitter are the same user.
-- The development-platform MCP read tool exposes approved requirement/Bug plans
-  only while the authenticated user is a current assignee and still has both the
-  project tool and AI-plan access. Match stable Feishu identifiers only, omit
-  missing/deleted/reassigned items, and repeat the same checks before returning
-  full Markdown.
+- Development-platform MCP reads expose assigned work summaries, safe details,
+  project/version overviews, pending reviews, and approved requirement/Bug plans.
+  Approved plans remain visible only while the authenticated user is a current
+  assignee with project tool and AI-plan access. Match stable Feishu identifiers
+  only and repeat access/assignment checks before returning full Markdown.
+- MCP work-item comments, version comments, external AI-plan submissions, and
+  status updates require idempotency IDs. Retry matches must not repeat writes,
+  realtime events, or notifications; conflicting reuse must fail. Hidden
+  idempotency metadata stays in stored JSON/SQLite rows and is removed from client
+  payloads.
+- MCP status updates remain assignee-only, require an expected current status, and
+  preserve the requirement attachment confirmation workflow. Mention and proposer
+  notifications are always explicit caller choices.
+- MCP external AI plans have no private conversation. They join the submitter's
+  `conversation_id=''` revision chain for that work item and notify the same
+  current reviewers as web submissions.
 
 ## Change Sequence
 

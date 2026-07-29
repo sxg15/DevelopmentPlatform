@@ -306,6 +306,9 @@ export function buildVersionComment({
   content,
   mentionedUsers = [],
   createdAt,
+  clientMutationId = '',
+  mutationFingerprint = '',
+  notifyMentioned = false,
 }) {
   const normalizedContent = String(content || '').trim();
   if (!normalizedContent) {
@@ -322,6 +325,41 @@ export function buildVersionComment({
     content: normalizedContent,
     mentionedOpenIds: users.map((user) => user.openId),
     mentionedUsers: users,
+    clientMutationId: String(clientMutationId || '').trim(),
+    mutationFingerprint: String(mutationFingerprint || '').trim(),
+    notifyMentioned: Boolean(notifyMentioned),
+  };
+}
+
+export function serializeVersionCommentForClient(comment) {
+  if (!comment || typeof comment !== 'object') {
+    return null;
+  }
+  return {
+    id: String(comment.id || '').trim(),
+    authorOpenId: String(comment.authorOpenId || '').trim(),
+    authorName: String(comment.authorName || '').trim(),
+    authorAvatarUrl: String(comment.authorAvatarUrl || '').trim(),
+    createdAt: String(comment.createdAt || '').trim(),
+    content: String(comment.content || '').trim(),
+    mentionedOpenIds: Array.isArray(comment.mentionedOpenIds)
+      ? [...comment.mentionedOpenIds]
+      : [],
+    mentionedUsers: Array.isArray(comment.mentionedUsers)
+      ? comment.mentionedUsers.map((user) => ({ ...user }))
+      : [],
+  };
+}
+
+export function serializeVersionRecordForClient(version) {
+  if (!version || typeof version !== 'object') {
+    return null;
+  }
+  return {
+    ...version,
+    comments: (Array.isArray(version.comments) ? version.comments : [])
+      .map(serializeVersionCommentForClient)
+      .filter(Boolean),
   };
 }
 
@@ -496,6 +534,9 @@ function normalizeVersionComment(item) {
       ].map((openId) => String(openId || '').trim()).filter(Boolean),
     )],
     mentionedUsers,
+    clientMutationId: String(item.clientMutationId || item.client_mutation_id || '').trim(),
+    mutationFingerprint: String(item.mutationFingerprint || item.mutation_fingerprint || '').trim(),
+    notifyMentioned: Boolean(item.notifyMentioned ?? item.notify_mentioned),
   };
 }
 

@@ -23,8 +23,9 @@ Read `AGENTS.md`, then locate the owning layer.
 - Update manifest fetch: `server/services/updateService.js`.
 - Personal settings Bitable workflow:
   `server/services/personalSettingsService.js`.
-- Development-platform MCP transport and AI-plan read service:
+- Development-platform MCP transport, dispatcher, and AI-plan read service:
   `server/mcp/developmentPlatformMcpServer.js` and
+  `server/services/developmentPlatformMcpService.js` and
   `server/services/mcpAiPlanService.js`.
 - Version management provisioning and mutations:
   `server/services/versionManagementService.js`.
@@ -108,11 +109,32 @@ Read `AGENTS.md`, then locate the owning layer.
   Hash both sides to fixed-length digests before timing-safe comparison, reject
   malformed or duplicate matches with the same generic 401 response, and never log
   or return the token from MCP routes.
-- `get_my_approved_ai_plans` is read-only. Query approved submissions only across
-  projects where the user currently has the requirement/Bug and AI-plan access,
-  load each project/tool work-item table once, and require a current assignee match
-  by Open ID, User ID, Union ID, or email. Detail reads must repeat access and
-  assignment checks and return not found after deletion or reassignment.
+- Keep the MCP surface at the registered eleven tools for project discovery,
+  assigned work items, safe work-item detail, project/version overviews, pending
+  AI-plan reviews, approved AI plans, comments, external AI-plan submission, and
+  status updates. Update protocol and dispatcher tests together when this contract
+  changes.
+- Query approved submissions only across projects where the user currently has
+  requirement/Bug and AI-plan access. Require a current assignee match by Open ID,
+  User ID, Union ID, or email, and repeat access plus assignment checks for detail
+  reads. Pending review reads permit current assignees and project/global
+  administrators; deleted work items remain visible only to administrators.
+- Keep MCP project/version overviews side-effect free and serialize work-item
+  detail through an allowlist that excludes raw fields, feedback contacts, and
+  attachment access credentials.
+- Require `clientMutationId` for every MCP write. Store a normalized payload
+  fingerprint with the mutation, return duplicates without repeating SSE events or
+  notifications, and return conflict when the same actor reuses the ID for another
+  payload. Never expose stored mutation IDs, fingerprints, or notification flags
+  in browser or MCP read payloads.
+- Require explicit mention/proposer notification booleans. Status updates also
+  require `expectedCurrentStatus`; missing required requirement attachments return
+  `confirmation_required` until the caller retries with
+  `confirmWithoutRequiredAttachment=true`.
+- External MCP plan submissions use `conversation_id=''`, retain immutable
+  per-author work-item revision chains, filter source references to configured
+  roots, redact absolute paths, and enqueue normal review notifications exactly
+  once for each newly created revision.
 - Keep version APIs under `/api/projects/:projectId/versions`. All project members
   may ensure/read/comment; require global or development super-admin access for
   create/edit/status/delete.

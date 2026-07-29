@@ -144,7 +144,10 @@ export class AiPlanningRepository {
         reviewed_at TEXT,
         review_reason TEXT NOT NULL DEFAULT '',
         superseded_by_submission_id TEXT NOT NULL DEFAULT '',
-        superseded_at TEXT
+        superseded_at TEXT,
+        submission_source TEXT NOT NULL DEFAULT 'web',
+        client_mutation_id TEXT NOT NULL DEFAULT '',
+        mutation_fingerprint TEXT NOT NULL DEFAULT ''
       );
 
       CREATE INDEX IF NOT EXISTS idx_plan_submissions_project
@@ -197,6 +200,9 @@ export class AiPlanningRepository {
     ensureColumn(this.database, 'plan_submissions', 'review_reason', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.database, 'plan_submissions', 'superseded_by_submission_id', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.database, 'plan_submissions', 'superseded_at', 'TEXT');
+    ensureColumn(this.database, 'plan_submissions', 'submission_source', "TEXT NOT NULL DEFAULT 'web'");
+    ensureColumn(this.database, 'plan_submissions', 'client_mutation_id', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'plan_submissions', 'mutation_fingerprint', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.database, 'runs', 'progress_stage', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.database, 'runs', 'progress_message', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.database, 'runs', 'progress_updated_at', "TEXT NOT NULL DEFAULT ''");
@@ -863,6 +869,107 @@ export class AiPlanningRepository {
     });
   }
 
+  createExternalSubmission({
+    ownerOpenId,
+    ownerName,
+    projectId,
+    toolId,
+    recordId,
+    workItemId = '',
+    workItemTitle = '',
+    projectName = '',
+    title,
+    summary,
+    markdown,
+    sourceReferences,
+    clientMutationId,
+    mutationFingerprint,
+  }) {
+    return this.withTransaction(() => {
+      const normalizedMutationId = String(clientMutationId || '').trim().slice(0, 100);
+      const normalizedFingerprint = String(mutationFingerprint || '').trim().slice(0, 100);
+      const existing = normalizedMutationId
+        ? this.database.prepare(`
+            SELECT * FROM plan_submissions
+            WHERE author_open_id = ? AND client_mutation_id = ?
+          `).get(ownerOpenId, normalizedMutationId)
+        : null;
+      if (existing) {
+        if (existing.mutation_fingerprint !== normalizedFingerprint) {
+          const error = new Error('clientMutationId 已用于不同的 AI 方案提交');
+          error.statusCode = 409;
+          throw error;
+        }
+        return {
+          submission: normalizeSubmissionRow(existing),
+          duplicate: true,
+        };
+      }
+
+      const previous = this.database.prepare(`
+        SELECT * FROM plan_submissions
+        WHERE conversation_id = ''
+          AND project_id = ?
+          AND tool_id = ?
+          AND record_id = ?
+          AND author_open_id = ?
+        ORDER BY revision DESC, submitted_at DESC
+        LIMIT 1
+      `).get(projectId, toolId, recordId, ownerOpenId);
+      const id = crypto.randomUUID();
+      const revision = Number(previous?.revision || 0) + 1;
+      const rootSubmissionId = previous?.root_submission_id || previous?.id || id;
+      const now = new Date().toISOString();
+      if (previous?.status === AI_PLAN_STATUSES.PENDING_REVIEW) {
+        this.markSubmissionSuperseded(previous.id, id, now);
+      }
+      this.database.prepare(`
+        INSERT INTO plan_submissions (
+          id, conversation_id, project_id, tool_id, record_id, work_item_id, work_item_title,
+          project_name, author_open_id, author_name, revision_author_open_id,
+          revision_author_name, title, summary, markdown, source_references_json, revision,
+          parent_submission_id, root_submission_id, status, submitted_at,
+          submission_source, client_mutation_id, mutation_fingerprint
+        ) VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'mcp', ?, ?)
+      `).run(
+        id,
+        projectId,
+        toolId,
+        recordId,
+        String(workItemId || '').slice(0, 200),
+        String(workItemTitle || '').slice(0, 500),
+        String(projectName || '').slice(0, 500),
+        ownerOpenId,
+        String(ownerName || ownerOpenId).slice(0, 200),
+        ownerOpenId,
+        String(ownerName || ownerOpenId).slice(0, 200),
+        String(title || '未命名方案').slice(0, 200),
+        String(summary || '').slice(0, 2000),
+        String(markdown || '').slice(0, 200000),
+        JSON.stringify(normalizeAiPlanSourceReferences(sourceReferences)),
+        revision,
+        previous?.id || '',
+        rootSubmissionId,
+        AI_PLAN_STATUSES.PENDING_REVIEW,
+        now,
+        normalizedMutationId,
+        normalizedFingerprint,
+      );
+      this.insertSubmissionEvent({
+        submissionId: id,
+        eventType: previous ? 'revision_submitted' : 'submitted',
+        actorOpenId: ownerOpenId,
+        actorName: ownerName,
+        relatedSubmissionId: previous?.id || '',
+        createdAt: now,
+      });
+      return {
+        submission: this.getSubmission(id),
+        duplicate: false,
+      };
+    });
+  }
+
   listSubmissions({
     projectId,
     allowedToolIds,
@@ -1382,6 +1489,9 @@ export class AiPlanningRepository {
         CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_submissions_pending_root
         ON plan_submissions(root_submission_id)
         WHERE status = 'pending_review';
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_submissions_author_mutation
+        ON plan_submissions(author_open_id, client_mutation_id)
+        WHERE client_mutation_id <> '';
       `);
     });
   }
@@ -1688,6 +1798,9 @@ function normalizeSubmissionRow(row) {
     reviewReason: row.review_reason || '',
     supersededBySubmissionId: row.superseded_by_submission_id || '',
     supersededAt: row.superseded_at || '',
+    submissionSource: row.submission_source || 'web',
+    clientMutationId: row.client_mutation_id || '',
+    mutationFingerprint: row.mutation_fingerprint || '',
   };
 }
 

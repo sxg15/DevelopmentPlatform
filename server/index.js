@@ -97,6 +97,10 @@ import {
   createAiPlanningService,
   getAllowedAiPlanToolIds,
 } from './services/aiPlanningService.js';
+import {
+  McpToolExecutionError,
+  createDevelopmentPlatformMcpService,
+} from './services/developmentPlatformMcpService.js';
 import { createMcpAiPlanService } from './services/mcpAiPlanService.js';
 import { registerDevelopmentPlatformMcp } from './mcp/developmentPlatformMcpServer.js';
 import {
@@ -134,6 +138,8 @@ import {
   wait,
 } from './integrations/wikiClient.js';
 import { getCachedValue } from './runtime/asyncCache.js';
+import { findIdempotentMutation } from './runtime/idempotentMutation.js';
+import { createMutationFingerprint } from './runtime/mutationFingerprint.js';
 
 const host = runtimeConfig.server.host;
 const port = runtimeConfig.server.port;
@@ -178,6 +184,7 @@ const todoNotificationScheduler = createTodoNotificationScheduler({
 const aiDataPaths = ensureAiDataDirectories();
 const aiPlanningRepository = new AiPlanningRepository(aiDataPaths.database);
 const aiPlanMutationQueue = createKeyedTaskQueue();
+const workItemMutationQueue = createKeyedTaskQueue();
 const aiPlanningRealtimeHub = createAiPlanningRealtimeHub();
 const aiPlanningScheduler = createBoundedTaskScheduler({
   maxConcurrent: runtimeConfig.aiPlanning.codex.maxConcurrentRuns,
@@ -229,6 +236,23 @@ const mcpAiPlanService = createMcpAiPlanService({
     return getProjectWorkItems(token, project, user, getWorkItemToolConfig(toolId));
   },
 });
+const developmentPlatformMcpService = createDevelopmentPlatformMcpService({
+  statusGroups: runtimeConfig.dashboard.statusGroups,
+  listAccessibleProjects({ token, user }) {
+    return getAccessibleProjectsForUser(token, user);
+  },
+  loadProjectWorkItems({ token, user, project, toolId }) {
+    return getProjectWorkItems(token, project, user, getWorkItemToolConfig(toolId));
+  },
+  loadWorkItemDetail: loadDevelopmentPlatformMcpWorkItemDetail,
+  loadProjectOverview: loadDevelopmentPlatformMcpProjectOverview,
+  loadProjectVersionOverview: loadDevelopmentPlatformMcpVersionOverview,
+  aiPlanService: mcpAiPlanService,
+  addWorkItemComment: addDevelopmentPlatformMcpWorkItemComment,
+  submitAiPlanForReview: submitDevelopmentPlatformMcpAiPlan,
+  addVersionComment: addDevelopmentPlatformMcpVersionComment,
+  updateWorkItemStatus: updateDevelopmentPlatformMcpWorkItemStatus,
+});
 
 const app = express();
 const allowClientErrorReport = createClientErrorRateLimiter();
@@ -238,7 +262,7 @@ app.use(blockDirectConfigAccess);
 registerDevelopmentPlatformMcp(app, {
   serverVersion: currentAppVersion,
   authenticate: authenticateDevelopmentPlatformMcpRequest,
-  executeAiPlanTool: executeDevelopmentPlatformMcpAiPlanTool,
+  executeTool: executeDevelopmentPlatformMcpTool,
   onError(error, context) {
     console.error(`[mcp] ${context?.phase || 'request'} 失败`, formatLogError(error));
   },
@@ -833,39 +857,89 @@ async function handleVersionCommentCreate(request, response) {
       return;
     }
     const context = await getVersionRequestContext(request);
-    const requestedMentions = normalizeMentionedUsers(
+    const mentionedUsers = normalizeMentionedUsers(
       request.body?.mentionedUsers || request.body?.mentions || [],
     );
-    const mentionedUsers = filterMentionedUsersByCandidates(
-      requestedMentions,
-      context.projectAccess.mentionableUsersByTool.versions || [],
-    );
-    const result = await versionManagementService.createComment(
-      context.token,
-      context.project,
-      context.session.user,
+    const result = await executeVersionCommentMutation({
+      token: context.token,
+      user: context.session.user,
+      projectId: context.project.projectId,
       recordId,
-      {
-        ...request.body,
-        mentionedUsers,
-      },
-    );
-    publishVersionUpdate(context.project.projectId, recordId);
-    const notificationResults = request.body?.notifyMentioned
-      ? await notifyVersionMentionedUsers(context.token, mentionedUsers, {
-          project: context.project,
-          version: result.version,
-          comment: result.comment,
-          request,
-        })
-      : [];
-    response.json({
-      ...result,
-      notificationResults,
+      content: request.body?.content,
+      mentionedUsers,
+      notifyMentioned: Boolean(request.body?.notifyMentioned),
+      request,
     });
+    response.json(result);
   } catch (error) {
     sendVersionError(response, error, '发送版本留言失败');
   }
+}
+
+async function executeVersionCommentMutation({
+  token,
+  user,
+  projectId,
+  recordId,
+  content,
+  mentionedUsers = [],
+  requestedMentionedUserOpenIds = [],
+  notifyMentioned = false,
+  clientMutationId = '',
+  request = null,
+}) {
+  const { project, projectAccess } = await getAuthorizedProjectAccess(
+    token,
+    projectId,
+    user,
+    VERSION_MANAGEMENT_TOOL_ID,
+  );
+  const acceptedUsers = filterMentionedUsersByCandidates(
+    mentionedUsers,
+    projectAccess.mentionableUsersByTool.versions || [],
+  );
+  const normalizedMutationId = String(clientMutationId || '').trim().slice(0, 100);
+  const mutationFingerprint = normalizedMutationId
+    ? createMutationFingerprint({
+        projectId,
+        recordId,
+        content: String(content || '').trim(),
+        mentionedUserOpenIds: normalizeOpenIdList(requestedMentionedUserOpenIds).sort(),
+        notifyMentioned: Boolean(notifyMentioned),
+      })
+    : '';
+  const result = await versionManagementService.createComment(
+    token,
+    project,
+    user,
+    recordId,
+    {
+      content,
+      mentionedUsers: acceptedUsers,
+      notifyMentioned,
+      clientMutationId: normalizedMutationId,
+      mutationFingerprint,
+    },
+  );
+  if (!result.duplicate) {
+    publishVersionUpdate(project.projectId, recordId);
+  }
+  const notificationResults = notifyMentioned && !result.duplicate
+    ? await notifyVersionMentionedUsers(token, acceptedUsers, {
+        project,
+        version: result.version,
+        comment: result.comment,
+        request,
+      })
+    : [];
+  const acceptedOpenIds = acceptedUsers.map((item) => item.openId).filter(Boolean);
+  return {
+    ...result,
+    notificationResults,
+    acceptedMentionedUserOpenIds: acceptedOpenIds,
+    ignoredMentionedUserOpenIds: normalizeOpenIdList(requestedMentionedUserOpenIds)
+      .filter((openId) => !acceptedOpenIds.includes(openId)),
+  };
 }
 
 async function handleVersionCommentDelete(request, response) {
@@ -2072,22 +2146,403 @@ async function authenticateDevelopmentPlatformMcpRequest(developmentPlatformToke
   return user ? { token, user } : null;
 }
 
-async function executeDevelopmentPlatformMcpAiPlanTool({ authContext, arguments: args }) {
-  if (args.operation === 'detail') {
-    return mcpAiPlanService.getMyApprovedPlan({
-      token: authContext.token,
-      user: authContext.user,
-      submissionId: args.submissionId,
+async function executeDevelopmentPlatformMcpTool(context) {
+  return developmentPlatformMcpService.execute(context);
+}
+
+async function loadDevelopmentPlatformMcpWorkItemDetail({
+  token,
+  user,
+  projectId,
+  toolId,
+  recordId,
+}) {
+  return runMcpOperation(async () => {
+    const toolConfig = getWorkItemToolConfig(toolId);
+    const { project } = await getAuthorizedProjectAccess(token, projectId, user, toolId);
+    const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
+    const { appToken, tableId } = await fetchWorkItemTableContext(token, node, toolConfig);
+    const record = await fetchWorkItemRecordById(
+      token,
+      appToken,
+      tableId,
+      recordId,
+      toolConfig,
+    );
+    const item = normalizeWorkItemRecords([record], user, toolConfig)[0] || null;
+    if (!item) {
+      throw createHttpError(toolConfig.missingRecordText, 404);
+    }
+    return {
+      projectId: project.projectId,
+      projectName: project.projectName,
+      toolId,
+      toolName: toolConfig.itemLabel,
+      item: serializeDevelopmentPlatformMcpWorkItem(item, toolConfig),
+    };
+  }, `获取${getWorkItemToolConfig(toolId).itemLabel}详情失败`);
+}
+
+async function loadDevelopmentPlatformMcpProjectOverview({
+  token,
+  user,
+  projectId,
+  scope,
+  trendDays,
+}) {
+  return runMcpOperation(async () => ({
+    projectId,
+    scope,
+    trendDays,
+    overview: await loadProjectOverviewData({
+      token,
+      user,
+      projectId,
+      scope,
+      trendDays,
+    }),
+  }), '获取项目总览失败');
+}
+
+async function loadDevelopmentPlatformMcpVersionOverview({
+  token,
+  user,
+  projectId,
+}) {
+  return runMcpOperation(async () => {
+    const { project } = await getAuthorizedProjectAccess(
+      token,
+      projectId,
+      user,
+      VERSION_MANAGEMENT_TOOL_ID,
+    );
+    return {
+      projectId: project.projectId,
+      projectName: project.projectName,
+      overview: await versionManagementService.readOverview(token, project.projectId),
+    };
+  }, '获取项目版本总览失败');
+}
+
+async function addDevelopmentPlatformMcpWorkItemComment({
+  token,
+  user,
+  projectId,
+  toolId,
+  recordId,
+  content,
+  mentionedUserOpenIds,
+  notifyMentioned,
+  clientMutationId,
+}) {
+  return runMcpOperation(async () => {
+    const { projectAccess } = await getAuthorizedProjectAccess(
+      token,
+      projectId,
+      user,
+      toolId,
+    );
+    const mentionedUsers = resolveMentionedUsersByOpenIds(
+      mentionedUserOpenIds,
+      projectAccess.mentionableUsersByTool[toolId] || [],
+    );
+    const result = await executeWorkItemCommentMutation({
+      token,
+      user,
+      projectId,
+      toolId,
+      recordId,
+      content,
+      mentionedUsers,
+      requestedMentionedUserOpenIds: mentionedUserOpenIds,
+      notifyMentioned,
+      clientMutationId,
     });
+    return {
+      comment: result.comment,
+      acceptedMentionedUserOpenIds: result.acceptedMentionedUserOpenIds,
+      ignoredMentionedUserOpenIds: result.ignoredMentionedUserOpenIds,
+      notifications: summarizeNotificationResults(result.notificationResults),
+      duplicate: result.duplicate,
+    };
+  }, '添加工作项留言失败');
+}
+
+async function submitDevelopmentPlatformMcpAiPlan({
+  token,
+  user,
+  projectId,
+  toolId,
+  recordId,
+  title,
+  summary,
+  markdown,
+  sourceReferences,
+  clientMutationId,
+}) {
+  return runMcpOperation(
+    () => aiPlanMutationQueue.run(
+      [projectId, toolId, recordId].join(':'),
+      async () => {
+        const { project, projectAccess } = await getAuthorizedProjectAccess(
+          token,
+          projectId,
+          user,
+          toolId,
+        );
+        if (!projectAccess.allowedToolIds.has(AI_PLAN_TOOL_ID)) {
+          throw createHttpError('当前项目未启用 AI 计划', 404);
+        }
+        const workItem = await loadAiPlanningWorkItem(
+          token,
+          project,
+          user,
+          toolId,
+          recordId,
+        );
+        const result = aiPlanningService.createExternalSubmission({
+          user,
+          projectId,
+          toolId,
+          recordId,
+          title,
+          summary,
+          markdown,
+          sourceReferences,
+          clientMutationId,
+          workItem,
+          project,
+        });
+        let notificationQueuedCount = 0;
+        let reviewRecipientCount = 0;
+        if (!result.duplicate) {
+          const rawSubmission = aiPlanningRepository.getSubmission(
+            result.submission.id,
+          );
+          const reviewRecipients = getAiPlanReviewNotificationRecipients(
+            workItem,
+            projectAccess,
+          );
+          reviewRecipientCount = reviewRecipients.length;
+          notificationQueuedCount = enqueueAiPlanNotifications(
+            'plan_review_requested',
+            rawSubmission,
+            reviewRecipients,
+            { project, workItem },
+          );
+        }
+        return {
+          submission: result.submission,
+          duplicate: result.duplicate,
+          notificationQueuedCount,
+          notificationDeliveryEnabled: runtimeConfig.aiPlanning.notifications.enabled,
+          reviewRecipientCount,
+        };
+      },
+    ),
+    '提交 AI 方案失败',
+  );
+}
+
+async function addDevelopmentPlatformMcpVersionComment({
+  token,
+  user,
+  projectId,
+  recordId,
+  content,
+  mentionedUserOpenIds,
+  notifyMentioned,
+  clientMutationId,
+}) {
+  return runMcpOperation(async () => {
+    const { projectAccess } = await getAuthorizedProjectAccess(
+      token,
+      projectId,
+      user,
+      VERSION_MANAGEMENT_TOOL_ID,
+    );
+    const mentionedUsers = resolveMentionedUsersByOpenIds(
+      mentionedUserOpenIds,
+      projectAccess.mentionableUsersByTool.versions || [],
+    );
+    const result = await executeVersionCommentMutation({
+      token,
+      user,
+      projectId,
+      recordId,
+      content,
+      mentionedUsers,
+      requestedMentionedUserOpenIds: mentionedUserOpenIds,
+      notifyMentioned,
+      clientMutationId,
+    });
+    return {
+      comment: serializeDevelopmentPlatformMcpVersionComment(result.comment),
+      version: {
+        recordId: result.version.recordId,
+        versionNumber: result.version.versionNumber,
+        platform: result.version.platform,
+        status: result.version.status,
+      },
+      acceptedMentionedUserOpenIds: result.acceptedMentionedUserOpenIds,
+      ignoredMentionedUserOpenIds: result.ignoredMentionedUserOpenIds,
+      notifications: summarizeNotificationResults(result.notificationResults),
+      warnings: result.warnings,
+      duplicate: result.duplicate,
+    };
+  }, '添加版本留言失败');
+}
+
+async function updateDevelopmentPlatformMcpWorkItemStatus({
+  token,
+  user,
+  projectId,
+  toolId,
+  recordId,
+  expectedCurrentStatus,
+  newStatus,
+  message,
+  notifyProposer,
+  confirmWithoutRequiredAttachment,
+  clientMutationId,
+}) {
+  return runMcpOperation(async () => {
+    const toolConfig = getWorkItemToolConfig(toolId);
+    const result = await executeWorkItemStatusMutation({
+      token,
+      user,
+      projectId,
+      toolId,
+      recordId,
+      expectedCurrentStatus,
+      newStatus,
+      message,
+      notifyProposer,
+      confirmWithoutRequiredAttachment,
+      clientMutationId,
+    });
+    return {
+      item: serializeDevelopmentPlatformMcpWorkItem(result.item, toolConfig),
+      statusChange: result.statusChange,
+      notifications: summarizeNotificationResults(result.notificationResults),
+      duplicate: result.duplicate,
+    };
+  }, '更新工作项状态失败');
+}
+
+function serializeDevelopmentPlatformMcpWorkItem(item, toolConfig) {
+  const rawFields = item?.rawFields && typeof item.rawFields === 'object'
+    ? item.rawFields
+    : {};
+  const regularAttachments = normalizeBitableAttachmentListValue(
+    rawFields[toolConfig.fieldNames.attachments],
+  ).map((attachment) => serializeDevelopmentPlatformMcpAttachment(
+    attachment,
+    'work_item',
+  ));
+  const submissionAttachments = toolConfig.toolId === 'requirements'
+    ? normalizeBitableAttachmentListValue(
+        rawFields[toolConfig.fieldNames.submittedAttachments],
+      ).map((attachment) => serializeDevelopmentPlatformMcpAttachment(
+        attachment,
+        'submission',
+      ))
+    : [];
+  return {
+    recordId: String(item?.recordId || ''),
+    itemId: String(item?.itemId || ''),
+    title: String(item?.title || toolConfig.unnamedTitle),
+    description: String(item?.description || ''),
+    priority: String(item?.priority || ''),
+    status: String(item?.itemStatus || item?.requirementStatus || ''),
+    assignees: serializeDevelopmentPlatformMcpUsers(item?.assignees),
+    proposers: serializeDevelopmentPlatformMcpUsers(item?.proposers),
+    proposedAt: item?.proposedAt || null,
+    expectedDays: item?.expectedDays ?? null,
+    remainingDays: item?.remainingDays ?? null,
+    channel: String(item?.channel || ''),
+    requiresSubmissionAttachment: Boolean(item?.requiresSubmissionAttachment),
+    comments: Array.isArray(item?.comments) ? item.comments : [],
+    commentsParseError: String(item?.commentsParseError || ''),
+    statusChangeLog: Array.isArray(item?.statusChangeLog) ? item.statusChangeLog : [],
+    statusChangeLogParseError: String(item?.statusChangeLogParseError || ''),
+    attachments: [...regularAttachments, ...submissionAttachments],
+  };
+}
+
+function serializeDevelopmentPlatformMcpAttachment(attachment, category) {
+  return {
+    category,
+    name: String(attachment?.name || '附件'),
+    size: Number(attachment?.size || 0),
+    mimeType: String(attachment?.mimeType || ''),
+  };
+}
+
+function serializeDevelopmentPlatformMcpUsers(users) {
+  return (Array.isArray(users) ? users : []).map((user) => ({
+    openId: String(user?.openId || user?.open_id || ''),
+    userId: String(user?.userId || user?.user_id || ''),
+    unionId: String(user?.unionId || user?.union_id || ''),
+    email: String(user?.email || ''),
+    name: String(user?.name || ''),
+  })).filter((user) => user.openId || user.userId || user.unionId || user.email);
+}
+
+function serializeDevelopmentPlatformMcpVersionComment(comment) {
+  return {
+    id: String(comment?.id || ''),
+    authorOpenId: String(comment?.authorOpenId || ''),
+    authorName: String(comment?.authorName || ''),
+    createdAt: String(comment?.createdAt || ''),
+    content: String(comment?.content || ''),
+    mentionedOpenIds: normalizeOpenIdList(comment?.mentionedOpenIds),
+    mentionedUsers: normalizeMentionedUsers(comment?.mentionedUsers),
+  };
+}
+
+function resolveMentionedUsersByOpenIds(openIds, candidates) {
+  const requested = new Set(normalizeOpenIdList(openIds));
+  return normalizeMentionedUsers(candidates)
+    .filter((candidate) => requested.has(candidate.openId));
+}
+
+function summarizeNotificationResults(results) {
+  const source = Array.isArray(results) ? results : [];
+  return {
+    requestedCount: source.length,
+    succeededCount: source.filter((item) => item?.ok).length,
+    failedCount: source.filter((item) => !item?.ok).length,
+  };
+}
+
+async function runMcpOperation(task, fallbackMessage) {
+  try {
+    return await task();
+  } catch (error) {
+    if (error instanceof McpToolExecutionError || error?.mcpCode) {
+      throw error;
+    }
+    const statusCode = Number(error?.statusCode);
+    const message = String(error?.message || fallbackMessage);
+    if (statusCode === 400) {
+      throw new McpToolExecutionError('invalid_argument', message, error?.publicDetails);
+    }
+    if (statusCode === 403 || message.includes('权限') || message.includes('只有')) {
+      throw new McpToolExecutionError('forbidden', message);
+    }
+    if (statusCode === 404 || message.includes('不存在') || message.includes('尚未初始化')) {
+      throw new McpToolExecutionError('not_found', message);
+    }
+    if (statusCode === 409 || message.includes('JSON') || message.includes('已变化')) {
+      throw new McpToolExecutionError('conflict', message, error?.publicDetails);
+    }
+    throw new McpToolExecutionError('dependency_unavailable', fallbackMessage);
   }
-  return mcpAiPlanService.listMyApprovedPlans({
-    token: authContext.token,
-    user: authContext.user,
-    projectId: args.projectId,
-    toolId: args.toolId,
-    limit: args.limit,
-    offset: args.offset,
-  });
+}
+
+function buildWorkItemMutationKey(projectId, toolId, recordId) {
+  return ['work-item', projectId, toolId, recordId].join(':');
 }
 
 function getRequestOrigin(request) {
@@ -2207,81 +2662,13 @@ async function handleProjectOverview(request, response) {
     }
 
     const token = await getTenantAccessToken();
-    const { project, projectAccess } = await getAuthorizedProjectAccess(
+    const result = await loadProjectOverviewData({
       token,
+      user: session.user,
       projectId,
-      session.user,
-      'overview',
-    );
-    const allowedToolIds = PROJECT_OVERVIEW_TOOL_ORDER.filter(
-      (toolId) => projectAccess.allowedToolIds.has(toolId),
-    );
-    const cacheKey = buildProjectOverviewCacheKey({
-      projectId: project.projectId,
-      allowedToolIds,
       scope,
       trendDays,
-      user: session.user,
     });
-    const result = await getCachedValue(
-      projectOverviewCache,
-      cacheKey,
-      runtimeConfig.dashboard.cacheTtlMs,
-      async () => {
-        const toolResults = await mapWithConcurrency(allowedToolIds, 3, async (toolId) => {
-          const toolConfig = getWorkItemToolConfig(toolId);
-          try {
-            const items = await fetchExistingProjectOverviewItems(
-              token,
-              project,
-              session.user,
-              toolConfig,
-            );
-            return { toolId, items, unavailable: null };
-          } catch (error) {
-            const message = error instanceof Error ? error.message : `读取${toolConfig.listLabel}失败`;
-            return {
-              toolId,
-              items: null,
-              unavailable: {
-                toolId,
-                label: toolConfig.listLabel,
-                reason: isMissingWorkItemListError(error, toolConfig) ? 'notConfigured' : 'unavailable',
-                message,
-              },
-            };
-          }
-        });
-        const toolItems = Object.fromEntries(
-          toolResults
-            .filter((item) => Array.isArray(item.items))
-            .map((item) => [item.toolId, item.items]),
-        );
-        let versions = null;
-        try {
-          versions = await versionManagementService.readOverview(token, project.projectId);
-        } catch (error) {
-          versions = {
-            initialized: false,
-            platforms: [],
-            recentFormalReleases: [],
-            warnings: [error instanceof Error ? error.message : '读取版本信息失败'],
-          };
-        }
-        const overview = buildProjectOverviewData({
-          toolItems,
-          currentUser: session.user,
-          scope,
-          trendDays,
-          config: runtimeConfig.dashboard,
-          unavailableTools: toolResults.map((item) => item.unavailable).filter(Boolean),
-        });
-        return {
-          ...overview,
-          versions,
-        };
-      },
-    );
 
     response.json(result);
   } catch (error) {
@@ -2295,6 +2682,90 @@ async function handleProjectOverview(request, response) {
           : 502;
     response.status(status).json({ message });
   }
+}
+
+async function loadProjectOverviewData({
+  token,
+  user,
+  projectId,
+  scope,
+  trendDays,
+}) {
+  const { project, projectAccess } = await getAuthorizedProjectAccess(
+    token,
+    projectId,
+    user,
+    'overview',
+  );
+  const allowedToolIds = PROJECT_OVERVIEW_TOOL_ORDER.filter(
+    (toolId) => projectAccess.allowedToolIds.has(toolId),
+  );
+  const cacheKey = buildProjectOverviewCacheKey({
+    projectId: project.projectId,
+    allowedToolIds,
+    scope,
+    trendDays,
+    user,
+  });
+  return getCachedValue(
+    projectOverviewCache,
+    cacheKey,
+    runtimeConfig.dashboard.cacheTtlMs,
+    async () => {
+      const toolResults = await mapWithConcurrency(allowedToolIds, 3, async (toolId) => {
+        const toolConfig = getWorkItemToolConfig(toolId);
+        try {
+          const items = await fetchExistingProjectOverviewItems(
+            token,
+            project,
+            user,
+            toolConfig,
+          );
+          return { toolId, items, unavailable: null };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : `读取${toolConfig.listLabel}失败`;
+          return {
+            toolId,
+            items: null,
+            unavailable: {
+              toolId,
+              label: toolConfig.listLabel,
+              reason: isMissingWorkItemListError(error, toolConfig) ? 'notConfigured' : 'unavailable',
+              message,
+            },
+          };
+        }
+      });
+      const toolItems = Object.fromEntries(
+        toolResults
+          .filter((item) => Array.isArray(item.items))
+          .map((item) => [item.toolId, item.items]),
+      );
+      let versions = null;
+      try {
+        versions = await versionManagementService.readOverview(token, project.projectId);
+      } catch (error) {
+        versions = {
+          initialized: false,
+          platforms: [],
+          recentFormalReleases: [],
+          warnings: [error instanceof Error ? error.message : '读取版本信息失败'],
+        };
+      }
+      const overview = buildProjectOverviewData({
+        toolItems,
+        currentUser: user,
+        scope,
+        trendDays,
+        config: runtimeConfig.dashboard,
+        unavailableTools: toolResults.map((item) => item.unavailable).filter(Boolean),
+      });
+      return {
+        ...overview,
+        versions,
+      };
+    },
+  );
 }
 
 async function fetchExistingProjectOverviewItems(token, project, currentUser, toolConfig) {
@@ -3010,51 +3481,136 @@ async function handleWorkItemCommentCreate(request, response, toolId) {
     }
 
     const token = await getTenantAccessToken();
-    const { project, projectAccess } = await getAuthorizedProjectAccess(token, projectId, session.user, toolId);
-    const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
-    const { appToken, tableId } = await fetchWorkItemTableContext(token, node, toolConfig);
-    const commentsFieldName = toolConfig.fieldNames.comments;
-    await ensureBitableTextField(token, appToken, tableId, commentsFieldName);
-
-    const record = await fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig);
-    const fields = record.fields || {};
-    const commentsDocument = parseCommentsDocument(fields[commentsFieldName], true);
-    const allowedMentionedUsers = filterMentionedUsersByCandidates(mentionedUsers, projectAccess.mentionableUsersByTool[toolId] || []);
-    const comment = buildRecordComment(session.user, content, allowedMentionedUsers);
-    const nextDocument = {
-      version: 1,
-      items: [...commentsDocument.items, comment],
-    };
-
-    await updateBitableRecordFields(token, appToken, tableId, recordId, {
-      [commentsFieldName]: JSON.stringify(nextDocument),
-    });
-    publishWorkItemUpdated({
-      projectId: project.projectId,
+    const result = await executeWorkItemCommentMutation({
+      token,
+      user: session.user,
+      projectId,
       toolId,
       recordId,
+      content,
+      mentionedUsers,
+      notifyMentioned,
+      request,
     });
-
-    const notificationResults = notifyMentioned
-      ? await notifyMentionedUsers(token, allowedMentionedUsers, {
-          project,
-          record,
-          comment,
-          request,
-          toolConfig,
-        })
-      : [];
-
-    response.json({
-      comment,
-      comments: normalizeCommentsForClient(nextDocument),
-      notificationResults,
-    });
+    response.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : '发送留言失败';
     const status = message.includes('缺少') ? 500 : message.includes('权限') ? 403 : message.includes('不存在') ? 404 : message.includes('JSON') ? 409 : 502;
     response.status(status).json({ message });
   }
+}
+
+async function executeWorkItemCommentMutation({
+  token,
+  user,
+  projectId,
+  toolId,
+  recordId,
+  content,
+  mentionedUsers = [],
+  requestedMentionedUserOpenIds = [],
+  notifyMentioned = false,
+  clientMutationId = '',
+  request = null,
+}) {
+  const toolConfig = getWorkItemToolConfig(toolId);
+  return workItemMutationQueue.run(
+    buildWorkItemMutationKey(projectId, toolId, recordId),
+    async () => {
+      const { project, projectAccess } = await getAuthorizedProjectAccess(
+        token,
+        projectId,
+        user,
+        toolId,
+      );
+      const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
+      const { appToken, tableId } = await fetchWorkItemTableContext(token, node, toolConfig);
+      const commentsFieldName = toolConfig.fieldNames.comments;
+      await ensureBitableTextField(token, appToken, tableId, commentsFieldName);
+
+      const record = await fetchWorkItemRecordById(
+        token,
+        appToken,
+        tableId,
+        recordId,
+        toolConfig,
+      );
+      const commentsDocument = parseCommentsDocument(
+        (record.fields || {})[commentsFieldName],
+        true,
+      );
+      const allowedMentionedUsers = filterMentionedUsersByCandidates(
+        mentionedUsers,
+        projectAccess.mentionableUsersByTool[toolId] || [],
+      );
+      const normalizedMutationId = String(clientMutationId || '').trim().slice(0, 100);
+      const mutationFingerprint = normalizedMutationId
+        ? createMutationFingerprint({
+            projectId,
+            toolId,
+            recordId,
+            content,
+            mentionedUserOpenIds: normalizeOpenIdList(requestedMentionedUserOpenIds).sort(),
+            notifyMentioned: Boolean(notifyMentioned),
+          })
+        : '';
+      const existingComment = findIdempotentMutation({
+        items: commentsDocument.items,
+        clientMutationId: normalizedMutationId,
+        mutationFingerprint,
+        belongsToActor: (comment) => isSameUser(comment, user),
+        conflictMessage: 'clientMutationId 已用于不同的工作项留言',
+      });
+      if (existingComment) {
+        return {
+          comment: normalizeCommentsForClient({ items: [existingComment] })[0],
+          comments: normalizeCommentsForClient(commentsDocument),
+          notificationResults: [],
+          acceptedMentionedUserOpenIds: existingComment.mentionedOpenIds,
+          ignoredMentionedUserOpenIds: [],
+          duplicate: true,
+        };
+      }
+
+      const comment = buildRecordComment(user, content, allowedMentionedUsers, {
+        clientMutationId: normalizedMutationId,
+        mutationFingerprint,
+        notifyMentioned,
+      });
+      const nextDocument = {
+        version: 1,
+        items: [...commentsDocument.items, comment],
+      };
+      await updateBitableRecordFields(token, appToken, tableId, recordId, {
+        [commentsFieldName]: JSON.stringify(nextDocument),
+      });
+      publishWorkItemUpdated({
+        projectId: project.projectId,
+        toolId,
+        recordId,
+      });
+
+      const notificationResults = notifyMentioned
+        ? await notifyMentionedUsers(token, allowedMentionedUsers, {
+            project,
+            record,
+            comment,
+            request,
+            toolConfig,
+          })
+        : [];
+      const acceptedOpenIds = allowedMentionedUsers.map((item) => item.openId).filter(Boolean);
+      return {
+        comment: normalizeCommentsForClient({ items: [comment] })[0],
+        comments: normalizeCommentsForClient(nextDocument),
+        notificationResults,
+        acceptedMentionedUserOpenIds: acceptedOpenIds,
+        ignoredMentionedUserOpenIds: normalizeOpenIdList(requestedMentionedUserOpenIds)
+          .filter((openId) => !acceptedOpenIds.includes(openId)),
+        duplicate: false,
+      };
+    },
+  );
 }
 
 async function handleWorkItemCommentDelete(request, response, toolId) {
@@ -3169,81 +3725,201 @@ async function handleWorkItemStatusUpdate(request, response, toolId) {
     }
 
     const token = await getTenantAccessToken();
-    const { project } = await getAuthorizedProjectAccess(token, projectId, session.user, toolId);
-    const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
-    const { appToken, tableId } = await fetchWorkItemTableContext(token, node, toolConfig);
-    const fieldNames = toolConfig.fieldNames;
-    await ensureBitableTextField(token, appToken, tableId, fieldNames.statusChangeLog);
-
-    const [statusSchema, record] = await Promise.all([
-      ensureWorkItemStatusOptions(token, { appToken, tableId }, toolConfig),
-      fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig),
-    ]);
-    const fields = statusSchema.fields;
-    const source = record.fields || {};
-    const currentStatus = normalizeTextValue(source[fieldNames.status]) || '未设置状态';
-    if (currentStatus === newStatus) {
-      response.status(400).json({ message: '处理状态没有变化' });
-      return;
-    }
-
-    const assignees = normalizeUserListValue(source[fieldNames.assignees]);
-    if (!assignees.some((assignee) => isSameUser(assignee, session.user))) {
-      response.status(403).json({ message: '只有处理人员可以更新处理状态' });
-      return;
-    }
-
-    const allowedStatuses = normalizeWorkItemStatusOptions(fields, toolConfig).map((item) => item.name);
-    if (allowedStatuses.length > 0 && !allowedStatuses.includes(newStatus)) {
-      response.status(400).json({ message: '处理状态不在可选范围内' });
-      return;
-    }
-
-    const statusChangeLogDocument = parseStatusChangeLogDocument(source[fieldNames.statusChangeLog], true);
-    const statusChange = buildStatusChangeLogItem(session.user, currentStatus, newStatus, message);
-    const nextStatusChangeLog = {
-      version: 1,
-      items: [...statusChangeLogDocument.items, statusChange],
-    };
-
-    await updateBitableRecordFields(token, appToken, tableId, recordId, {
-      [fieldNames.status]: newStatus,
-      [fieldNames.statusChangeLog]: JSON.stringify(nextStatusChangeLog),
-    });
-
-    const updatedRecord = await fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig);
-    const normalizedItem = normalizeWorkItemRecords([updatedRecord], session.user, toolConfig)[0] || null;
-    publishWorkItemUpdated({
-      projectId: project.projectId,
+    const result = await executeWorkItemStatusMutation({
+      token,
+      user: session.user,
+      projectId,
       toolId,
       recordId,
+      newStatus,
+      message,
+      notifyProposer,
+      confirmWithoutRequiredAttachment: true,
+      request,
     });
-    const proposers = fieldNames.proposer ? normalizeUserListValue(source[fieldNames.proposer]) : [];
-    const notificationResults = notifyProposer
-      ? await notifyWorkItemProposers(token, proposers, {
-          project,
-          record: updatedRecord,
-          oldStatus: currentStatus,
-          newStatus,
-          message,
-          operator: session.user,
-          request,
-          toolConfig,
-        })
-      : [];
-
     response.json({
-      requirement: normalizedItem,
-      item: normalizedItem,
-      statusChange,
-      statusChangeLog: normalizeStatusChangeLogForClient(nextStatusChangeLog),
-      notificationResults,
+      ...result,
+      requirement: result.item,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : '更新处理状态失败';
-    const status = message.includes('缺少') ? 500 : message.includes('权限') || message.includes('只有处理人员') ? 403 : message.includes('不存在') ? 404 : message.includes('JSON') ? 409 : 502;
+    const status = Number(error?.statusCode) || (
+      message.includes('缺少') ? 500 : message.includes('权限') || message.includes('只有处理人员') ? 403 : message.includes('不存在') ? 404 : message.includes('JSON') ? 409 : 502
+    );
     response.status(status).json({ message });
   }
+}
+
+async function executeWorkItemStatusMutation({
+  token,
+  user,
+  projectId,
+  toolId,
+  recordId,
+  expectedCurrentStatus = '',
+  newStatus,
+  message = '',
+  notifyProposer = false,
+  confirmWithoutRequiredAttachment = false,
+  clientMutationId = '',
+  request = null,
+}) {
+  const toolConfig = getWorkItemToolConfig(toolId);
+  return workItemMutationQueue.run(
+    buildWorkItemMutationKey(projectId, toolId, recordId),
+    async () => {
+      const { project } = await getAuthorizedProjectAccess(token, projectId, user, toolId);
+      const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
+      const { appToken, tableId } = await fetchWorkItemTableContext(token, node, toolConfig);
+      const fieldNames = toolConfig.fieldNames;
+      await ensureBitableTextField(token, appToken, tableId, fieldNames.statusChangeLog);
+
+      const [statusSchema, record] = await Promise.all([
+        ensureWorkItemStatusOptions(token, { appToken, tableId }, toolConfig),
+        fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig),
+      ]);
+      const source = record.fields || {};
+      const currentStatus = normalizeTextValue(source[fieldNames.status]) || '未设置状态';
+      const statusChangeLogDocument = parseStatusChangeLogDocument(
+        source[fieldNames.statusChangeLog],
+        true,
+      );
+      const normalizedMutationId = String(clientMutationId || '').trim().slice(0, 100);
+      const mutationFingerprint = normalizedMutationId
+        ? createMutationFingerprint({
+            projectId,
+            toolId,
+            recordId,
+            expectedCurrentStatus: String(expectedCurrentStatus || '').trim(),
+            newStatus,
+            message,
+            notifyProposer: Boolean(notifyProposer),
+            confirmWithoutRequiredAttachment: Boolean(confirmWithoutRequiredAttachment),
+          })
+        : '';
+      const existingChange = findIdempotentMutation({
+        items: statusChangeLogDocument.items,
+        clientMutationId: normalizedMutationId,
+        mutationFingerprint,
+        belongsToActor: (change) => isSameUser({
+          openId: change.operatorOpenId,
+          name: change.operatorName,
+        }, user),
+        conflictMessage: 'clientMutationId 已用于不同的状态更新',
+      });
+      if (existingChange) {
+        const item = normalizeWorkItemRecords([record], user, toolConfig)[0] || null;
+        return {
+          item,
+          statusChange: normalizeStatusChangeLogForClient({ items: [existingChange] })[0],
+          statusChangeLog: normalizeStatusChangeLogForClient(statusChangeLogDocument),
+          notificationResults: [],
+          duplicate: true,
+        };
+      }
+
+      const expectedStatus = String(expectedCurrentStatus || '').trim();
+      if (expectedStatus && expectedStatus !== currentStatus) {
+        const error = createHttpError(
+          `工作项状态已变化，当前状态为“${currentStatus}”`,
+          409,
+        );
+        error.publicDetails = { currentStatus };
+        throw error;
+      }
+      if (currentStatus === newStatus) {
+        throw createHttpError('处理状态没有变化', 400);
+      }
+
+      const assignees = normalizeUserListValue(source[fieldNames.assignees]);
+      if (!assignees.some((assignee) => isSameUser(assignee, user))) {
+        throw createHttpError('只有处理人员可以更新处理状态', 403);
+      }
+      if (
+        toolId === 'requirements'
+        && isRequirementSubmissionAttachmentRequired(
+          source[fieldNames.requiresSubmissionAttachment],
+        )
+        && normalizeBitableAttachmentListValue(
+          source[fieldNames.submittedAttachments],
+        ).length === 0
+        && !confirmWithoutRequiredAttachment
+      ) {
+        const error = createHttpError('当前需求要求提交附件，但还没有提交任何附件', 409);
+        error.mcpCode = 'confirmation_required';
+        error.publicDetails = {
+          confirmField: 'confirmWithoutRequiredAttachment',
+          currentStatus,
+          requestedStatus: newStatus,
+        };
+        throw error;
+      }
+
+      const allowedStatuses = normalizeWorkItemStatusOptions(
+        statusSchema.fields,
+        toolConfig,
+      ).map((item) => item.name);
+      if (allowedStatuses.length > 0 && !allowedStatuses.includes(newStatus)) {
+        throw createHttpError('处理状态不在可选范围内', 400);
+      }
+
+      const statusChange = buildStatusChangeLogItem(
+        user,
+        currentStatus,
+        newStatus,
+        message,
+        {
+          clientMutationId: normalizedMutationId,
+          mutationFingerprint,
+          notifyProposer,
+        },
+      );
+      const nextStatusChangeLog = {
+        version: 1,
+        items: [...statusChangeLogDocument.items, statusChange],
+      };
+      await updateBitableRecordFields(token, appToken, tableId, recordId, {
+        [fieldNames.status]: newStatus,
+        [fieldNames.statusChangeLog]: JSON.stringify(nextStatusChangeLog),
+      });
+
+      const updatedRecord = await fetchWorkItemRecordById(
+        token,
+        appToken,
+        tableId,
+        recordId,
+        toolConfig,
+      );
+      const item = normalizeWorkItemRecords([updatedRecord], user, toolConfig)[0] || null;
+      publishWorkItemUpdated({
+        projectId: project.projectId,
+        toolId,
+        recordId,
+      });
+      const proposers = fieldNames.proposer
+        ? normalizeUserListValue(source[fieldNames.proposer])
+        : [];
+      const notificationResults = notifyProposer
+        ? await notifyWorkItemProposers(token, proposers, {
+            project,
+            record: updatedRecord,
+            oldStatus: currentStatus,
+            newStatus,
+            message,
+            operator: user,
+            request,
+            toolConfig,
+          })
+        : [];
+      return {
+        item,
+        statusChange: normalizeStatusChangeLogForClient({ items: [statusChange] })[0],
+        statusChangeLog: normalizeStatusChangeLogForClient(nextStatusChangeLog),
+        notificationResults,
+        duplicate: false,
+      };
+    },
+  );
 }
 
 async function handleWorkItemAssigneeChange(request, response, toolId) {
@@ -5182,11 +5858,23 @@ function normalizeStoredComment(item) {
     content,
     mentionedOpenIds: normalizeOpenIdList(item.mentionedOpenIds || item.mentioned_open_ids || []),
     mentionedUsers: normalizeMentionedUsers(item.mentionedUsers || item.mentioned_users || []),
+    clientMutationId: String(item.clientMutationId || item.client_mutation_id || '').trim(),
+    mutationFingerprint: String(item.mutationFingerprint || item.mutation_fingerprint || '').trim(),
+    notifyMentioned: Boolean(item.notifyMentioned ?? item.notify_mentioned),
   };
 }
 
 function normalizeCommentsForClient(document) {
-  return (document?.items || []).map(normalizeStoredComment).filter(Boolean);
+  return (document?.items || []).map(normalizeStoredComment).filter(Boolean).map((comment) => ({
+    id: comment.id,
+    authorOpenId: comment.authorOpenId,
+    authorName: comment.authorName,
+    authorAvatarUrl: comment.authorAvatarUrl,
+    createdAt: comment.createdAt,
+    content: comment.content,
+    mentionedOpenIds: comment.mentionedOpenIds,
+    mentionedUsers: comment.mentionedUsers,
+  }));
 }
 
 function parseStatusChangeLogDocument(value, throwOnInvalid) {
@@ -5249,14 +5937,25 @@ function normalizeStoredStatusChange(item) {
     operatorOpenId: String(item.operatorOpenId || item.operator_open_id || '').trim(),
     operatorName,
     message: String(item.message || '').trim(),
+    clientMutationId: String(item.clientMutationId || item.client_mutation_id || '').trim(),
+    mutationFingerprint: String(item.mutationFingerprint || item.mutation_fingerprint || '').trim(),
+    notifyProposer: Boolean(item.notifyProposer ?? item.notify_proposer),
   };
 }
 
 function normalizeStatusChangeLogForClient(document) {
-  return (document?.items || []).map(normalizeStoredStatusChange).filter(Boolean);
+  return (document?.items || []).map(normalizeStoredStatusChange).filter(Boolean).map((change) => ({
+    id: change.id,
+    oldStatus: change.oldStatus,
+    newStatus: change.newStatus,
+    changedAt: change.changedAt,
+    operatorOpenId: change.operatorOpenId,
+    operatorName: change.operatorName,
+    message: change.message,
+  }));
 }
 
-function buildStatusChangeLogItem(user, oldStatus, newStatus, message) {
+function buildStatusChangeLogItem(user, oldStatus, newStatus, message, mutation = {}) {
   return {
     id: crypto.randomUUID(),
     oldStatus: String(oldStatus || '').trim(),
@@ -5265,10 +5964,13 @@ function buildStatusChangeLogItem(user, oldStatus, newStatus, message) {
     operatorOpenId: String(user.openId || '').trim(),
     operatorName: String(user.name || '').trim(),
     message: String(message || '').trim(),
+    clientMutationId: String(mutation.clientMutationId || '').trim(),
+    mutationFingerprint: String(mutation.mutationFingerprint || '').trim(),
+    notifyProposer: Boolean(mutation.notifyProposer),
   };
 }
 
-function buildRecordComment(user, content, mentionedUsers) {
+function buildRecordComment(user, content, mentionedUsers, mutation = {}) {
   return {
     id: crypto.randomUUID(),
     authorOpenId: String(user.openId || '').trim(),
@@ -5278,6 +5980,9 @@ function buildRecordComment(user, content, mentionedUsers) {
     content,
     mentionedOpenIds: mentionedUsers.map((item) => item.openId).filter(Boolean),
     mentionedUsers,
+    clientMutationId: String(mutation.clientMutationId || '').trim(),
+    mutationFingerprint: String(mutation.mutationFingerprint || '').trim(),
+    notifyMentioned: Boolean(mutation.notifyMentioned),
   };
 }
 

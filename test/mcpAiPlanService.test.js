@@ -60,6 +60,19 @@ function createService({
     listApprovedSubmissionsForProjects() {
       return submissions;
     },
+    listSubmissions({ projectId, allowedToolIds, toolId = '', status = '' }) {
+      return submissions.filter((submission) => (
+        submission.projectId === projectId
+        && allowedToolIds.includes(submission.toolId)
+        && (!toolId || submission.toolId === toolId)
+        && (!status || submission.status === status)
+      ));
+    },
+    listSubmissionRevisions(rootSubmissionId) {
+      return submissions.filter((submission) => (
+        (submission.rootSubmissionId || submission.id) === rootSubmissionId
+      )).sort((left, right) => right.revision - left.revision);
+    },
     getSubmission(submissionId) {
       return submissions.find((submission) => submission.id === submissionId) || null;
     },
@@ -262,6 +275,109 @@ test('MCP AI plan detail rechecks access, current assignment and source referenc
       token: 'tenant',
       user: CURRENT_USER,
       submissionId: 'plan-detail',
+    }),
+    McpAiPlanNotFoundError,
+  );
+});
+
+test('MCP pending review list allows current assignees and project administrators', async () => {
+  const submissions = [
+    createSubmission({
+      id: 'pending-assignee',
+      recordId: 'record-assignee',
+      status: AI_PLAN_STATUSES.PENDING_REVIEW,
+      submittedAt: '2026-07-29T10:00:00.000Z',
+    }),
+    createSubmission({
+      id: 'pending-other',
+      recordId: 'record-other',
+      status: AI_PLAN_STATUSES.PENDING_REVIEW,
+      submittedAt: '2026-07-29T09:00:00.000Z',
+    }),
+  ];
+  const service = createService({
+    submissions,
+    itemsByGroup: {
+      'P1/requirements': [
+        {
+          recordId: 'record-assignee',
+          assignees: [{ openId: CURRENT_USER.openId }],
+        },
+        {
+          recordId: 'record-other',
+          assignees: [{ openId: 'ou_other' }],
+        },
+      ],
+    },
+  });
+
+  const result = await service.listMyPendingReviews({
+    token: 'tenant',
+    user: CURRENT_USER,
+  });
+  assert.deepEqual(result.plans.map((plan) => plan.submissionId), ['pending-assignee']);
+
+  const adminService = createService({
+    submissions,
+    projects: [{
+      ...createProject('P1', ['requirements']),
+      isDevelopmentSuperAdmin: true,
+    }],
+    itemsByGroup: {
+      'P1/requirements': [],
+    },
+  });
+  const adminResult = await adminService.listMyPendingReviews({
+    token: 'tenant',
+    user: CURRENT_USER,
+  });
+  assert.deepEqual(
+    adminResult.plans.map((plan) => plan.submissionId),
+    ['pending-assignee', 'pending-other'],
+  );
+  assert.equal(adminResult.plans[0].workItemExists, false);
+});
+
+test('MCP pending review detail rechecks review permission and returns revisions', async () => {
+  const pending = createSubmission({
+    id: 'pending-detail',
+    status: AI_PLAN_STATUSES.PENDING_REVIEW,
+    rootSubmissionId: 'root-1',
+    markdown: '# 待审核方案',
+  });
+  const older = createSubmission({
+    id: 'older-detail',
+    status: AI_PLAN_STATUSES.REJECTED,
+    rootSubmissionId: 'root-1',
+    revision: 0,
+  });
+  let assignees = [{ openId: CURRENT_USER.openId }];
+  const service = createService({
+    submissions: [pending, older],
+    itemsByGroup: {
+      get 'P1/requirements'() {
+        return [{
+          recordId: 'record-1',
+          assignees,
+        }];
+      },
+    },
+  });
+
+  const detail = await service.getMyPendingReview({
+    token: 'tenant',
+    user: CURRENT_USER,
+    submissionId: pending.id,
+  });
+  assert.equal(detail.plan.markdown, '# 待审核方案');
+  assert.equal(detail.plan.revisions.length, 2);
+
+  assignees = [{ openId: 'ou_other' }];
+  await assert.rejects(
+    service.getMyPendingReview({
+      token: 'tenant',
+      user: CURRENT_USER,
+      submissionId: pending.id,
     }),
     McpAiPlanNotFoundError,
   );

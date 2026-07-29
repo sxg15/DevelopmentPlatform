@@ -157,6 +157,144 @@ export function createMcpAiPlanService({
     };
   }
 
+  async function listMyPendingReviews({
+    token,
+    user,
+    projectId = '',
+    toolId = '',
+    limit = DEFAULT_LIMIT,
+    offset = 0,
+  }) {
+    const normalizedLimit = normalizeInteger(limit, DEFAULT_LIMIT, 1, MAX_LIMIT);
+    const normalizedOffset = normalizeInteger(offset, 0, 0, MAX_OFFSET);
+    const projectContexts = await loadEligibleProjectContexts({
+      token,
+      user,
+      projectId,
+      toolId,
+    });
+    if (projectContexts.length === 0) {
+      return buildPendingReviewListResult([], [], normalizedLimit, normalizedOffset);
+    }
+
+    const submissions = projectContexts.flatMap((context) => repository.listSubmissions({
+      projectId: context.project.projectId,
+      allowedToolIds: [...context.toolIds],
+      toolId,
+      status: AI_PLAN_STATUSES.PENDING_REVIEW,
+    }));
+    const contextsByProjectId = new Map(
+      projectContexts.map((context) => [context.project.projectId, context]),
+    );
+    const groups = groupSubmissions(submissions);
+    const loadedGroups = await mapWithConcurrency(groups, maxConcurrency, async (group) => {
+      const context = contextsByProjectId.get(group.projectId);
+      try {
+        const items = await loadProjectWorkItems(
+          token,
+          context.project,
+          user,
+          group.toolId,
+        );
+        return {
+          ...group,
+          context,
+          itemsByRecordId: new Map(
+            (Array.isArray(items) ? items : [])
+              .map((item) => [String(item?.recordId || '').trim(), item])
+              .filter(([recordId]) => recordId),
+          ),
+          warning: '',
+        };
+      } catch {
+        return {
+          ...group,
+          context,
+          itemsByRecordId: new Map(),
+          warning: buildLoadWarning(context.project, group.toolId),
+        };
+      }
+    });
+
+    const warnings = loadedGroups.map((group) => group.warning).filter(Boolean);
+    const plans = loadedGroups.flatMap((group) => (
+      group.warning
+        ? []
+        : group.submissions.flatMap((submission) => {
+            const workItem = group.itemsByRecordId.get(submission.recordId) || null;
+            return canReviewSubmission(group.context.project, workItem, user)
+              ? [serializeMcpAiPlan(submission, group.context.project, workItem)]
+              : [];
+          })
+    )).sort(comparePendingReviews);
+
+    return buildPendingReviewListResult(
+      plans,
+      warnings,
+      normalizedLimit,
+      normalizedOffset,
+    );
+  }
+
+  async function getMyPendingReview({ token, user, submissionId }) {
+    const normalizedSubmissionId = String(submissionId || '').trim();
+    const submission = normalizedSubmissionId
+      ? repository.getSubmission(normalizedSubmissionId)
+      : null;
+    if (!submission || submission.status !== AI_PLAN_STATUSES.PENDING_REVIEW) {
+      throw new McpAiPlanNotFoundError();
+    }
+
+    const [context] = await loadEligibleProjectContexts({
+      token,
+      user,
+      projectId: submission.projectId,
+      toolId: submission.toolId,
+    });
+    if (!context) {
+      throw new McpAiPlanNotFoundError();
+    }
+
+    let items;
+    try {
+      items = await loadProjectWorkItems(
+        token,
+        context.project,
+        user,
+        submission.toolId,
+      );
+    } catch {
+      throw new McpAiPlanNotFoundError();
+    }
+    const workItem = (Array.isArray(items) ? items : []).find(
+      (item) => String(item?.recordId || '').trim() === submission.recordId,
+    ) || null;
+    if (!canReviewSubmission(context.project, workItem, user)) {
+      throw new McpAiPlanNotFoundError();
+    }
+
+    return {
+      operation: 'detail',
+      plan: {
+        ...serializeMcpAiPlan(submission, context.project, workItem),
+        markdown: String(submission.markdown || ''),
+        sourceReferences: normalizeAiPlanSourceReferences(submission.sourceReferences),
+        revisions: repository.listSubmissionRevisions(submission.rootSubmissionId)
+          .map((revision) => ({
+            submissionId: revision.id,
+            revision: revision.revision,
+            status: revision.status,
+            title: revision.title,
+            summary: revision.summary,
+            revisionAuthorName: revision.revisionAuthorName,
+            submittedAt: revision.submittedAt,
+            reviewedAt: revision.reviewedAt,
+            reviewReason: revision.reviewReason,
+          })),
+      },
+    };
+  }
+
   async function loadEligibleProjectContexts({ token, user, projectId, toolId }) {
     const normalizedProjectId = String(projectId || '').trim();
     const normalizedToolId = String(toolId || '').trim();
@@ -175,7 +313,9 @@ export function createMcpAiPlanService({
 
   return {
     getMyApprovedPlan,
+    getMyPendingReview,
     listMyApprovedPlans,
+    listMyPendingReviews,
   };
 }
 
@@ -235,6 +375,7 @@ function serializeMcpAiPlan(submission, project, workItem) {
     toolId: submission.toolId,
     toolName: tool.itemLabel,
     recordId: submission.recordId,
+    workItemExists: Boolean(workItem),
     workItemId: String(workItem?.itemId || submission.workItemId || ''),
     workItemTitle: String(workItem?.title || submission.workItemTitle || ''),
     workItemStatus: String(
@@ -254,6 +395,17 @@ function serializeMcpAiPlan(submission, project, workItem) {
   };
 }
 
+function canReviewSubmission(project, workItem, user) {
+  return Boolean(
+    project?.isSuperAdmin
+    || project?.isDevelopmentSuperAdmin
+    || (
+      workItem
+      && isAssignedToStableUser(workItem.assignees, user)
+    ),
+  );
+}
+
 function buildListResult(plans, warnings, limit, offset) {
   const page = plans.slice(offset, offset + limit);
   const nextOffset = offset + page.length;
@@ -269,8 +421,24 @@ function buildListResult(plans, warnings, limit, offset) {
   };
 }
 
+function buildPendingReviewListResult(plans, warnings, limit, offset) {
+  const result = buildListResult(plans, warnings, limit, offset);
+  return {
+    ...result,
+    plans: result.plans,
+  };
+}
+
 function compareMcpAiPlans(left, right) {
   const timeDifference = parseTimestamp(right.approvedAt) - parseTimestamp(left.approvedAt);
+  if (timeDifference !== 0) {
+    return timeDifference;
+  }
+  return String(left.submissionId).localeCompare(String(right.submissionId));
+}
+
+function comparePendingReviews(left, right) {
+  const timeDifference = parseTimestamp(right.submittedAt) - parseTimestamp(left.submittedAt);
   if (timeDifference !== 0) {
     return timeDifference;
   }

@@ -68,8 +68,11 @@ the current or rollback release.
 - Personal settings and reminder scheduling:
   `test/personalSettingsUtils.test.js`,
   `test/personalSettingsService.test.js`.
-- MCP authentication, transport, AI-plan filtering, and client configuration:
+- MCP authentication, eleven-tool transport/dispatch, mutation idempotency,
+  AI-plan filtering, and client configuration:
   `test/developmentPlatformMcpServer.test.js`,
+  `test/developmentPlatformMcpService.test.js`,
+  `test/idempotentMutation.test.js`,
   `test/mcpAiPlanService.test.js`, and
   `test/mcpConfigUtils.test.js`.
 - Version contracts and workflows: `test/versionManagementUtils.test.js`,
@@ -93,8 +96,9 @@ the current or rollback release.
   output schema, and no repeated prelude or attachment inputs. Also cover legacy shared-plan
   migration, immutable revision
   chains, pending/approved uniqueness, reviewer edits, rejection reasons,
-  full-chain deletion and notification cleanup, notification dedupe counts, and
-  idempotent post-submit conversation creation.
+  full-chain deletion and notification cleanup, notification dedupe counts,
+  idempotent post-submit conversation creation, and MCP external submission
+  revision/idempotency behavior without exposing internal mutation metadata.
 - Same-user settings mutation serialization is covered by
   `test/serverRuntime.test.js`; non-blocking frontend initialization is covered by
   `test/frontendModuleBindings.test.js`.

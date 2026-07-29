@@ -116,14 +116,19 @@ Shared modules must remain runtime-neutral and importable from Node tests.
   production, with one 10 MB rotated backup.
 - `server/runtime/keyedTaskQueue.js`: serializes mutations for the same stable key
   while allowing unrelated users to proceed concurrently.
+- `server/runtime/idempotentMutation.js` and `mutationFingerprint.js`: shared
+  write-operation retry matching and normalized payload fingerprints.
 - `server/services/updateService.js`: remote update manifest retrieval.
 - `server/services/personalSettingsService.js`: Wiki-backed personal settings
   schema validation, record lookup, creation, and updates.
 - `server/mcp/developmentPlatformMcpServer.js`: authenticated stateless
   Streamable HTTP MCP transport, LAN Host/Origin checks, and protocol tool
   registration.
+- `server/services/developmentPlatformMcpService.js`: MCP project/work-item
+  pagination, current-user filtering, and domain callback dispatch.
 - `server/services/mcpAiPlanService.js`: current-assignee filtering, pagination,
-  detail revalidation, and safe serialization for MCP AI plan reads.
+  reviewer filtering, detail revalidation, and safe serialization for MCP AI plan
+  reads.
 - `server/services/versionManagementService.js`: Wiki template provisioning,
   version Bitable schema validation, project-keyed mutations, active-slot
   replacement/rollback, references, associations, status history, and comments.
@@ -217,10 +222,34 @@ rollback release.
   authenticates with `Authorization: Bearer <开发平台令牌>` before dispatch; the
   token is never a tool argument. Token lookup reads current personal-settings
   records on every request so regeneration invalidates the old token immediately.
-- The initial MCP surface contains exactly `get_my_approved_ai_plans`. It returns
-  only approved requirement/Bug plans whose current work-item assignee matches the
-  authenticated user by Open ID, User ID, Union ID, or email. Never match by name,
-  and recheck project/tool access plus current assignment for detail reads.
+- The MCP surface contains exactly eleven tools:
+  `list_accessible_projects`, `list_my_work_items`, `get_work_item_detail`,
+  `get_project_overview`, `get_project_version_overview`,
+  `list_my_pending_ai_plan_reviews`, `get_my_approved_ai_plans`,
+  `add_work_item_comment`, `submit_ai_plan_for_review`,
+  `add_version_comment`, and `update_work_item_status`.
+- MCP "my work" and approved-plan reads match current assignees only by Open ID,
+  User ID, Union ID, or email. Never match by name. Detail reads repeat current
+  project/tool access and assignment or review checks.
+- MCP project and version overview reads are side-effect free. Work-item detail
+  responses omit raw Bitable fields, feedback contact data, attachment tokens,
+  temporary URLs, and download URLs.
+- Every MCP write requires a caller-generated `clientMutationId`. Reusing it for
+  the same normalized request returns the original mutation without repeating
+  notifications; reusing it for a different request returns a conflict. Stored
+  mutation IDs, fingerprints, and notification choices are internal metadata and
+  must not appear in browser or MCP read payloads.
+- MCP comment tools require an explicit notification choice and accept optional
+  `mentionedUserOpenIds`. Status updates require both
+  `expectedCurrentStatus` and an explicit proposer-notification choice. A required
+  requirement attachment that is still missing returns `confirmation_required`;
+  retry only after explicit confirmation with
+  `confirmWithoutRequiredAttachment=true`.
+- `submit_ai_plan_for_review` creates an MCP-sourced shared submission with
+  `conversation_id=''`, preserves immutable revision chains, filters source
+  references to configured project roots, and always queues the normal review
+  notifications for a newly created revision. An idempotent retry never queues
+  them again.
 - MCP Host and Origin checks allow only loopback, local IPv4 addresses, and the
   machine hostname. Missing, malformed, duplicate, or invalid tokens return the
   same 401 challenge; failed authentication is limited per client address.
@@ -253,6 +282,9 @@ rollback release.
 - Version association, previous-version, status-history, and comment text fields use
   versioned JSON. Surface malformed documents and never overwrite malformed status
   or comment history during a mutation.
+- Work-item and version comment/status JSON may retain hidden MCP idempotency
+  metadata. Browser payloads and shared-plan payloads must serialize that metadata
+  out explicitly.
 - Requirement and Bug AI planning is a private multi-turn workflow. Codex may
   produce the first complete plan directly when the work item, attachments, and
   source make the requested outcome sufficiently clear. When a material product

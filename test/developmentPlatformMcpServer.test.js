@@ -8,6 +8,7 @@ import {
 } from '@modelcontextprotocol/client';
 import {
   DEVELOPMENT_PLATFORM_MCP_TOOL_ID,
+  DEVELOPMENT_PLATFORM_MCP_TOOL_IDS,
   createFailedAuthRateLimiter,
   registerDevelopmentPlatformMcp,
 } from '../server/mcp/developmentPlatformMcpServer.js';
@@ -22,26 +23,35 @@ async function startTestServer(options = {}) {
         ? { token: 'tenant-token', user: { openId: 'ou_current' } }
         : null
     ),
-    executeAiPlanTool: async ({ arguments: args }) => (
-      args.operation === 'detail'
-        ? {
-            operation: 'detail',
-            plan: {
-              submissionId: args.submissionId,
-              markdown: '# Detail',
-            },
-          }
-        : {
-            operation: 'list',
-            total: 1,
-            offset: args.offset,
-            limit: args.limit,
-            hasMore: false,
-            nextOffset: null,
-            plans: [{ submissionId: 'plan-1' }],
-            warnings: [],
-          }
-    ),
+    executeTool: async ({ toolName, arguments: args }) => {
+      if (toolName === DEVELOPMENT_PLATFORM_MCP_TOOL_ID) {
+        return args.operation === 'detail'
+          ? {
+              operation: 'detail',
+              plan: {
+                submissionId: args.submissionId,
+                markdown: '# Detail',
+              },
+            }
+          : {
+              operation: 'list',
+              total: 1,
+              offset: args.offset,
+              limit: args.limit,
+              hasMore: false,
+              nextOffset: null,
+              plans: [{ submissionId: 'plan-1' }],
+              warnings: [],
+            };
+      }
+      if (toolName === DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.LIST_ACCESSIBLE_PROJECTS) {
+        return {
+          total: 1,
+          projects: [{ projectId: '50' }],
+        };
+      }
+      return { ok: true, toolName, arguments: args };
+    },
     ...options,
   });
   const server = app.listen(0, '127.0.0.1');
@@ -55,7 +65,7 @@ async function startTestServer(options = {}) {
   };
 }
 
-test('official MCP client initializes, lists one tool and calls list/detail operations', async () => {
+test('official MCP client initializes, lists eleven tools and calls read/write operations', async () => {
   const server = await startTestServer();
   const transport = new StreamableHTTPClientTransport(new URL(server.url), {
     requestInit: {
@@ -68,9 +78,20 @@ test('official MCP client initializes, lists one tool and calls list/detail oper
   try {
     await client.connect(transport);
     const tools = await client.listTools();
-    assert.equal(tools.tools.length, 1);
-    assert.equal(tools.tools[0].name, DEVELOPMENT_PLATFORM_MCP_TOOL_ID);
-    assert.equal(tools.tools[0].title, '获取与自己有关的AI计划');
+    assert.equal(tools.tools.length, 11);
+    assert.deepEqual(
+      new Set(tools.tools.map((tool) => tool.name)),
+      new Set(Object.values(DEVELOPMENT_PLATFORM_MCP_TOOL_IDS)),
+    );
+    const approvedTool = tools.tools.find(
+      (tool) => tool.name === DEVELOPMENT_PLATFORM_MCP_TOOL_ID,
+    );
+    assert.equal(approvedTool.title, '获取与自己有关的AI计划');
+    assert.equal(approvedTool.annotations.readOnlyHint, true);
+    const statusTool = tools.tools.find(
+      (tool) => tool.name === DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.UPDATE_WORK_ITEM_STATUS,
+    );
+    assert.equal(statusTool.annotations.readOnlyHint, false);
 
     const listResult = await client.callTool({
       name: DEVELOPMENT_PLATFORM_MCP_TOOL_ID,
@@ -92,6 +113,29 @@ test('official MCP client initializes, lists one tool and calls list/detail oper
       },
     });
     assert.equal(detailResult.structuredContent.plan.markdown, '# Detail');
+
+    const projectResult = await client.callTool({
+      name: DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.LIST_ACCESSIBLE_PROJECTS,
+      arguments: { limit: 10, offset: 0 },
+    });
+    assert.equal(projectResult.structuredContent.projects[0].projectId, '50');
+
+    const statusResult = await client.callTool({
+      name: DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.UPDATE_WORK_ITEM_STATUS,
+      arguments: {
+        projectId: '50',
+        toolId: 'bugs',
+        recordId: 'record-1',
+        expectedCurrentStatus: '未处理',
+        newStatus: '修复中',
+        notifyProposer: false,
+        clientMutationId: 'mutation-1',
+      },
+    });
+    assert.equal(
+      statusResult.structuredContent.toolName,
+      DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.UPDATE_WORK_ITEM_STATUS,
+    );
   } finally {
     await client.close().catch(() => {});
     await server.close();
@@ -189,6 +233,64 @@ test('MCP failed authentication is rate limited per client address', async () =>
     assert.equal((await request()).status, 401);
     assert.equal((await request()).status, 429);
   } finally {
+    await server.close();
+  }
+});
+
+test('MCP tool errors preserve expected codes and public confirmation details', async () => {
+  const server = await startTestServer({
+    executeTool: async ({ toolName }) => {
+      if (toolName === DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.UPDATE_WORK_ITEM_STATUS) {
+        const error = new Error('当前需求要求提交附件，但还没有提交任何附件');
+        error.mcpCode = 'confirmation_required';
+        error.publicDetails = {
+          confirmField: 'confirmWithoutRequiredAttachment',
+          currentStatus: '处理中',
+          requestedStatus: '已完成',
+        };
+        throw error;
+      }
+      return { ok: true };
+    },
+  });
+  const transport = new StreamableHTTPClientTransport(new URL(server.url), {
+    requestInit: {
+      headers: {
+        Authorization: 'Bearer valid-token',
+      },
+    },
+  });
+  const client = new Client({ name: 'igp-error-test', version: '1.0.0' });
+  try {
+    await client.connect(transport);
+    const result = await client.callTool({
+      name: DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.UPDATE_WORK_ITEM_STATUS,
+      arguments: {
+        projectId: '50',
+        toolId: 'requirements',
+        recordId: 'record-1',
+        expectedCurrentStatus: '处理中',
+        newStatus: '已完成',
+        notifyProposer: false,
+        clientMutationId: 'status-1',
+      },
+    });
+    assert.equal(result.isError, true);
+    assert.equal(result.structuredContent.error.code, 'confirmation_required');
+    assert.deepEqual(result.structuredContent.error.details, {
+      confirmField: 'confirmWithoutRequiredAttachment',
+      currentStatus: '处理中',
+      requestedStatus: '已完成',
+    });
+
+    const missingDetailId = await client.callTool({
+      name: DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.LIST_MY_PENDING_AI_PLAN_REVIEWS,
+      arguments: { operation: 'detail' },
+    });
+    assert.equal(missingDetailId.isError, true);
+    assert.equal(missingDetailId.structuredContent.error.code, 'invalid_argument');
+  } finally {
+    await client.close().catch(() => {});
     await server.close();
   }
 });

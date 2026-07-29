@@ -98,6 +98,59 @@ test('deletion is blocked while another version references the target', async ()
   assert.equal(harness.recordCount(), 2);
 });
 
+test('version comments are idempotent and never expose mutation metadata', async () => {
+  const harness = createHarness([
+    createRecord('ver-1', '1.0.0', 'IGP', '测试开发'),
+  ]);
+  const service = harness.createService();
+  const payload = {
+    content: '请补充发布说明',
+    mentionedUsers: [{ openId: 'ou-reviewer', name: 'Reviewer' }],
+    clientMutationId: 'version-comment-1',
+    mutationFingerprint: 'fingerprint-1',
+    notifyMentioned: true,
+  };
+
+  const first = await service.createComment(
+    'token',
+    { projectId: 'P1' },
+    createUser(),
+    'ver-1',
+    payload,
+  );
+  const duplicate = await service.createComment(
+    'token',
+    { projectId: 'P1' },
+    createUser(),
+    'ver-1',
+    payload,
+  );
+
+  assert.equal(first.duplicate, false);
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(first.comment.id, duplicate.comment.id);
+  assert.equal(harness.getStoredComments('ver-1').length, 1);
+  assert.equal('clientMutationId' in first.comment, false);
+  assert.equal('mutationFingerprint' in first.version.comments[0], false);
+  assert.equal('notifyMentioned' in duplicate.comment, false);
+
+  await assert.rejects(
+    service.createComment(
+      'token',
+      { projectId: 'P1' },
+      createUser(),
+      'ver-1',
+      { ...payload, mutationFingerprint: 'fingerprint-2' },
+    ),
+    (error) => {
+      assert.equal(error.statusCode, 409);
+      assert.match(error.message, /不同的版本留言/);
+      return true;
+    },
+  );
+  assert.equal(harness.getStoredComments('ver-1').length, 1);
+});
+
 function createHarness(initialRecords, {
   failCreate = false,
   projectNodeExists = true,
@@ -185,6 +238,10 @@ function createHarness(initialRecords, {
     },
     getRecord(recordId) {
       return records.find((item) => item.record_id === recordId);
+    },
+    getStoredComments(recordId) {
+      const value = records.find((item) => item.record_id === recordId)?.fields?.留言;
+      return JSON.parse(value || '{"items":[]}').items || [];
     },
     recordCount() {
       return records.length;

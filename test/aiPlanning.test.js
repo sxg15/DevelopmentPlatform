@@ -673,6 +673,143 @@ test('AI service accepts a first-turn plan without confirmation questions', asyn
   }
 });
 
+test('external AI plan submissions keep one MCP revision chain and enforce idempotency', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-external-submission-'));
+  const repository = new AiPlanningRepository(path.join(root, 'planning.sqlite'));
+  try {
+    const basePayload = {
+      ownerOpenId: 'owner-a',
+      ownerName: 'Owner A',
+      projectId: 'P1',
+      toolId: 'requirements',
+      recordId: 'r1',
+      workItemId: 'REQ-001',
+      workItemTitle: 'Requirement one',
+      projectName: 'Project one',
+      title: 'External plan',
+      summary: 'Summary',
+      markdown: '# Plan',
+      sourceReferences: [],
+      clientMutationId: 'external-1',
+      mutationFingerprint: 'fingerprint-1',
+    };
+    const first = repository.createExternalSubmission(basePayload);
+    const duplicate = repository.createExternalSubmission(basePayload);
+    assert.equal(first.duplicate, false);
+    assert.equal(duplicate.duplicate, true);
+    assert.equal(duplicate.submission.id, first.submission.id);
+    assert.equal(first.submission.conversationId, '');
+    assert.equal(first.submission.submissionSource, 'mcp');
+    assert.equal(first.submission.revision, 1);
+    assert.equal(
+      repository.database.prepare(
+        'SELECT COUNT(*) AS count FROM plan_submission_events',
+      ).get().count,
+      1,
+    );
+
+    assert.throws(() => repository.createExternalSubmission({
+      ...basePayload,
+      mutationFingerprint: 'fingerprint-2',
+    }), (error) => {
+      assert.equal(error.statusCode, 409);
+      assert.match(error.message, /不同的 AI 方案提交/);
+      return true;
+    });
+
+    const second = repository.createExternalSubmission({
+      ...basePayload,
+      title: 'External plan v2',
+      markdown: '# Plan v2',
+      clientMutationId: 'external-2',
+      mutationFingerprint: 'fingerprint-2',
+    });
+    assert.equal(second.submission.revision, 2);
+    assert.equal(second.submission.parentSubmissionId, first.submission.id);
+    assert.equal(second.submission.rootSubmissionId, first.submission.id);
+    assert.equal(
+      repository.getSubmission(first.submission.id).status,
+      AI_PLAN_STATUSES.SUPERSEDED,
+    );
+    assert.equal(
+      repository.database.prepare(
+        'SELECT COUNT(*) AS count FROM plan_submission_events',
+      ).get().count,
+      3,
+    );
+  } finally {
+    repository.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('external AI plan service redacts workspace paths and internal mutation metadata', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-external-service-'));
+  const projectRoot = path.join(root, 'project');
+  fs.mkdirSync(projectRoot);
+  const repository = new AiPlanningRepository(path.join(root, 'planning.sqlite'));
+  const service = createAiPlanningService({
+    config: {
+      enabled: true,
+      codex: { model: 'codex-test' },
+      projects: [{
+        projectId: 'P1',
+        enabled: true,
+        roots: [{ id: 'main', path: projectRoot, profile: 'auto' }],
+      }],
+    },
+    repository,
+    scheduler: createBoundedTaskScheduler(),
+    realtimeHub: createAiPlanningRealtimeHub(),
+    codexClient: null,
+    skillPath: '',
+  });
+  try {
+    const payload = {
+      user: { openId: 'owner-a', name: 'Owner A' },
+      projectId: 'P1',
+      toolId: 'requirements',
+      recordId: 'r1',
+      title: 'External plan',
+      summary: `Inspect ${projectRoot}`,
+      markdown: `# Plan\nUse ${path.join(projectRoot, 'src', 'app.js')}`,
+      sourceReferences: [{
+        rootId: 'main',
+        relativePath: 'src/app.js',
+        startLine: 1,
+        endLine: 3,
+        note: `Read ${path.join(projectRoot, 'src', 'app.js')}`,
+      }],
+      clientMutationId: 'external-service-1',
+      workItem: { itemId: 'REQ-001', title: 'Requirement one' },
+      project: { projectName: 'Project one' },
+    };
+    const first = service.createExternalSubmission(payload);
+    const duplicate = service.createExternalSubmission(payload);
+
+    assert.equal(first.duplicate, false);
+    assert.equal(duplicate.duplicate, true);
+    assert.equal(first.submission.id, duplicate.submission.id);
+    assert.equal(first.submission.conversationId, undefined);
+    assert.equal(first.submission.clientMutationId, undefined);
+    assert.equal(first.submission.mutationFingerprint, undefined);
+    assert.doesNotMatch(JSON.stringify(first), new RegExp(
+      projectRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+      'i',
+    ));
+    assert.match(first.submission.markdown, /\[root:main\]/);
+    assert.equal(
+      repository.database.prepare(
+        'SELECT COUNT(*) AS count FROM plan_submissions',
+      ).get().count,
+      1,
+    );
+  } finally {
+    repository.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('AI service retries one recoverable Codex stream disconnect in the same thread', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-transport-retry-'));
   const projectRoot = path.join(root, 'project');

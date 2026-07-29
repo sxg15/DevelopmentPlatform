@@ -7,6 +7,7 @@ import {
   canManageVersions,
   findActiveVersionConflict,
   normalizeVersionRecord,
+  serializeVersionRecordForClient,
   validatePreviousVersionReference,
   validateVersionIdentity,
 } from '../shared/versionManagementUtils.js';
@@ -116,6 +117,30 @@ test('overview derives active slots and prior formal releases from history', () 
     'ver-2',
   );
   assert.equal(overview.recentFormalReleases[0].recordId, 'ver-1');
+});
+
+test('version client serialization omits internal comment mutation metadata', () => {
+  const serialized = serializeVersionRecordForClient({
+    ...createVersion('ver-1', '1.0.0', 'IGP', '测试开发'),
+    comments: [{
+      id: 'comment-1',
+      authorOpenId: 'ou-owner',
+      authorName: 'Owner',
+      authorAvatarUrl: '',
+      createdAt: '2026-07-29T00:00:00.000Z',
+      content: 'Version note',
+      mentionedOpenIds: ['ou-reviewer'],
+      mentionedUsers: [{ openId: 'ou-reviewer', name: 'Reviewer' }],
+      clientMutationId: 'mutation-secret',
+      mutationFingerprint: 'fingerprint-secret',
+      notifyMentioned: true,
+    }],
+  });
+
+  assert.equal(serialized.comments[0].content, 'Version note');
+  assert.equal('clientMutationId' in serialized.comments[0], false);
+  assert.equal('mutationFingerprint' in serialized.comments[0], false);
+  assert.equal('notifyMentioned' in serialized.comments[0], false);
 });
 
 function createVersion(recordId, versionNumber, platform, status, previousVersion = null) {

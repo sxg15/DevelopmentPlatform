@@ -15,6 +15,8 @@ import {
   normalizeVersionRecord,
   parseVersionCommentsDocument,
   parseVersionStatusHistoryDocument,
+  serializeVersionCommentForClient,
+  serializeVersionRecordForClient,
   serializePreviousVersionDocument,
   serializeVersionItemsDocument,
   validatePreviousVersionReference,
@@ -40,6 +42,7 @@ import {
   wait,
 } from '../integrations/wikiClient.js';
 import { createKeyedTaskQueue } from '../runtime/keyedTaskQueue.js';
+import { findIdempotentMutation } from '../runtime/idempotentMutation.js';
 
 const COPY_RETRY_DELAYS_MS = [0, 1000, 2000, 3000, 5000, 8000];
 
@@ -108,7 +111,10 @@ export function createVersionManagementService({
     if (!version) {
       throw new Error('版本记录不存在');
     }
-    return { version, warnings: data.warnings };
+    return {
+      version: serializeVersionRecordForClient(version),
+      warnings: data.warnings,
+    };
   }
 
   async function createVersion(token, project, user, payload) {
@@ -157,9 +163,9 @@ export function createVersionManagementService({
         const version = refreshed.versions.find((item) => item.recordId === recordId)
           || normalizeVersionRecord(createdRecord, normalizedConfig.fieldNames);
         return {
-          version,
-          versions: refreshed.versions.filter((item) => !isEmptyVersionRecord(item)),
-          replacedVersion: rollback?.version || null,
+          version: serializeVersionRecordForClient(version),
+          versions: serializeVersionsForClient(refreshed.versions),
+          replacedVersion: serializeOptionalVersionForClient(rollback?.version),
           warnings: [...refreshed.warnings, ...candidateResult.warnings],
         };
       } catch (error) {
@@ -218,9 +224,11 @@ export function createVersionManagementService({
         targetApplied = true;
         const refreshed = await readContextData(token, context);
         return {
-          version: requireVersion(refreshed.versions, recordId),
-          versions: refreshed.versions.filter((item) => !isEmptyVersionRecord(item)),
-          replacedVersion: rollback?.version || null,
+          version: serializeVersionRecordForClient(
+            requireVersion(refreshed.versions, recordId),
+          ),
+          versions: serializeVersionsForClient(refreshed.versions),
+          replacedVersion: serializeOptionalVersionForClient(rollback?.version),
           warnings: [...refreshed.warnings, ...candidateResult.warnings],
         };
       } catch (error) {
@@ -289,10 +297,12 @@ export function createVersionManagementService({
         targetApplied = true;
         const refreshed = await readContextData(token, context);
         return {
-          version: requireVersion(refreshed.versions, recordId),
-          versions: refreshed.versions.filter((item) => !isEmptyVersionRecord(item)),
+          version: serializeVersionRecordForClient(
+            requireVersion(refreshed.versions, recordId),
+          ),
+          versions: serializeVersionsForClient(refreshed.versions),
           statusChange: change,
-          replacedVersion: rollback?.version || null,
+          replacedVersion: serializeOptionalVersionForClient(rollback?.version),
           warnings: refreshed.warnings,
         };
       } catch (error) {
@@ -317,7 +327,9 @@ export function createVersionManagementService({
       await bitable.deleteRecord(token, context.appToken, context.tableId, recordId);
       return {
         deletedRecordId: recordId,
-        versions: versions.filter((version) => version.recordId !== recordId),
+        versions: serializeVersionsForClient(
+          versions.filter((version) => version.recordId !== recordId),
+        ),
       };
     });
   }
@@ -335,12 +347,34 @@ export function createVersionManagementService({
         getRawField(data.records, recordId, normalizedConfig.fieldNames.comments),
         { throwOnInvalid: true },
       );
+      const clientMutationId = String(payload?.clientMutationId || '').trim().slice(0, 100);
+      const mutationFingerprint = String(payload?.mutationFingerprint || '').trim().slice(0, 100);
+      const existingComment = findIdempotentMutation({
+        items: comments.items,
+        clientMutationId,
+        mutationFingerprint,
+        belongsToActor: (comment) => isSameUser(comment, user),
+        conflictMessage: 'clientMutationId 已用于不同的版本留言',
+      });
+      if (existingComment) {
+        return {
+          comment: serializeVersionCommentForClient(existingComment),
+          version: serializeVersionRecordForClient(
+            requireVersion(data.versions, recordId),
+          ),
+          warnings: data.warnings,
+          duplicate: true,
+        };
+      }
       const comment = buildVersionComment({
         id: randomId(),
         author: user,
         content,
         mentionedUsers: payload?.mentionedUsers,
         createdAt: now(),
+        clientMutationId,
+        mutationFingerprint,
+        notifyMentioned: payload?.notifyMentioned,
       });
       await bitable.updateRecord(token, context.appToken, context.tableId, recordId, {
         [normalizedConfig.fieldNames.comments]: serializeVersionItemsDocument([
@@ -350,9 +384,12 @@ export function createVersionManagementService({
       });
       const refreshed = await readContextData(token, context);
       return {
-        comment,
-        version: requireVersion(refreshed.versions, recordId),
+        comment: serializeVersionCommentForClient(comment),
+        version: serializeVersionRecordForClient(
+          requireVersion(refreshed.versions, recordId),
+        ),
         warnings: refreshed.warnings,
+        duplicate: false,
       };
     });
   }
@@ -380,7 +417,9 @@ export function createVersionManagementService({
       });
       const refreshed = await readContextData(token, context);
       return {
-        version: requireVersion(refreshed.versions, recordId),
+        version: serializeVersionRecordForClient(
+          requireVersion(refreshed.versions, recordId),
+        ),
         warnings: refreshed.warnings,
       };
     });
@@ -616,12 +655,22 @@ function buildReadResult(data, candidateResult, status) {
     status,
     created: status === 'created',
     existed: status === 'exists',
-    versions: data.versions.filter((version) => !isEmptyVersionRecord(version)),
+    versions: serializeVersionsForClient(data.versions),
     statusOptions: VERSION_STATUSES,
     platformOptions: VERSION_PLATFORMS,
     completedWorkItems: candidateResult.candidates,
     warnings: [...data.warnings, ...candidateResult.warnings],
   };
+}
+
+function serializeVersionsForClient(versions) {
+  return (Array.isArray(versions) ? versions : [])
+    .filter((version) => !isEmptyVersionRecord(version))
+    .map(serializeVersionRecordForClient);
+}
+
+function serializeOptionalVersionForClient(version) {
+  return version ? serializeVersionRecordForClient(version) : null;
 }
 
 function createEmptyCandidateResult() {
