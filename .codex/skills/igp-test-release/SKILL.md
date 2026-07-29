@@ -86,7 +86,9 @@ the current or rollback release.
   answer round, a skipped question receives one same-thread corrective retry, and
   a second skip fails with `codex_protocol` without persisting the premature plan.
   Verify project `preludePrompt` input ordering and that same-thread continuations
-  do not resend it. Also cover legacy shared-plan migration, immutable revision
+  do not resend it. Cover one same-thread retry for recoverable Codex stream
+  disconnects without resending the prelude prompt. Also cover legacy shared-plan
+  migration, immutable revision
   chains, pending/approved uniqueness, reviewer edits, rejection reasons,
   full-chain deletion and notification cleanup, notification dedupe counts, and
   idempotent post-submit conversation creation.

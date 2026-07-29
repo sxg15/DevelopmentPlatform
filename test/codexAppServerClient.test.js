@@ -8,6 +8,7 @@ import {
   createCodexAppServerClient,
   extractFinalAgentMessage,
 } from '../server/integrations/codexAppServerClient.js';
+import { isRecoverableCodexTransportError } from '../server/integrations/codexErrorUtils.js';
 
 test('Codex app-server client uses JSONL and a key-free config', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-codex-client-'));
@@ -294,4 +295,20 @@ test('final Codex agent message prefers the final-answer phase', () => {
       { type: 'agentMessage', phase: 'final_answer', text: 'done' },
     ],
   }), 'done');
+});
+
+test('Codex transport errors only classify known temporary connection failures as recoverable', () => {
+  assert.equal(isRecoverableCodexTransportError(new Error(
+    'stream disconnected before completion: error sending request for url (https://example.test/responses)',
+  )), true);
+  assert.equal(isRecoverableCodexTransportError(new Error(
+    'connection reset while reading response body',
+  )), true);
+  assert.equal(isRecoverableCodexTransportError(Object.assign(
+    new Error('Codex 生成计划超时'),
+    { code: 'codex_timeout' },
+  )), false);
+  assert.equal(isRecoverableCodexTransportError(new Error(
+    'invalid_request_error: model is not available',
+  )), false);
 });

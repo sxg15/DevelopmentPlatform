@@ -1000,6 +1000,7 @@ function formatRunErrorType(errorCode) {
     codex_protocol: 'Codex 通信协议异常',
     codex_empty_output: 'Codex 未返回计划内容',
     codex_invalid_output: 'Codex 返回格式错误',
+    codex_transport: 'Codex 网络连接中断',
     codex_failed: 'Codex 调用失败',
   }[errorCode] || 'Codex 运行错误';
 }

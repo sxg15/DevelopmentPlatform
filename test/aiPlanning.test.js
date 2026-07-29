@@ -710,6 +710,105 @@ test('AI service rejects premature plans when Codex skips the required question 
   }
 });
 
+test('AI service retries one recoverable Codex stream disconnect in the same thread', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-transport-retry-'));
+  const projectRoot = path.join(root, 'project');
+  fs.mkdirSync(projectRoot);
+  const repository = new AiPlanningRepository(path.join(root, 'planning.sqlite'));
+  const runOptions = [];
+  const writes = [];
+  let turnCount = 0;
+  const service = createAiPlanningService({
+    config: {
+      enabled: true,
+      codex: { model: 'codex-test' },
+      projects: [{
+        projectId: 'P1',
+        enabled: true,
+        preludePrompt: 'Use the project service layer.',
+        roots: [{ id: 'main', path: projectRoot, profile: 'auto' }],
+      }],
+    },
+    repository,
+    scheduler: createBoundedTaskScheduler(),
+    realtimeHub: createAiPlanningRealtimeHub(),
+    codexClient: {
+      async runTurn(options) {
+        turnCount += 1;
+        runOptions.push({
+          threadId: options.threadId,
+          preludePrompt: options.preludePrompt,
+          prompt: options.prompt,
+        });
+        options.onThread('private-thread');
+        options.onTurn(`turn-${turnCount}`);
+        if (turnCount === 1) {
+          throw new Error(
+            'stream disconnected before completion: error sending request for url (https://example.test/responses)',
+          );
+        }
+        await options.onRequestUserInput([{
+          id: 'scope',
+          header: '范围',
+          question: '请选择本次实施范围',
+          isOther: true,
+          options: [
+            { label: '完整实现', description: '覆盖完整工作流' },
+            { label: '最小实现', description: '仅覆盖主流程' },
+          ],
+        }]);
+        return { awaitingUser: true };
+      },
+    },
+    skillPath: '',
+  });
+  try {
+    const user = { openId: 'owner-a', name: 'Owner A' };
+    const conversation = service.createConversation({
+      user,
+      projectId: 'P1',
+      toolId: 'requirements',
+      recordId: 'rec-1',
+      title: 'Plan',
+    });
+    const unsubscribe = service.subscribe({
+      response: { write: (value) => writes.push(value) },
+      user,
+      conversationId: conversation.id,
+    });
+    service.sendMessage({
+      user,
+      conversationId: conversation.id,
+      content: 'Generate a plan',
+      expectedVersion: conversation.version,
+      clientMutationId: 'transport-retry',
+      workItem: { itemId: 'REQ-001', title: 'Requirement' },
+      project: { projectId: 'P1', projectName: 'Project one' },
+    });
+
+    const awaiting = await waitForConversationStatus(
+      repository,
+      conversation.id,
+      user.openId,
+      'awaiting_user',
+    );
+    unsubscribe();
+    assert.equal(turnCount, 2);
+    assert.deepEqual(runOptions.map((item) => item.threadId), ['', 'private-thread']);
+    assert.deepEqual(runOptions.map((item) => item.preludePrompt), [
+      'Use the project service layer.',
+      '',
+    ]);
+    assert.equal(runOptions[0].prompt, runOptions[1].prompt);
+    assert.equal(awaiting.latestRun.status, 'awaiting_user');
+    assert.equal(awaiting.latestRun.errorCode, '');
+    assert.match(writes.join(''), /Codex 连接中断，正在自动重试/);
+  } finally {
+    repository.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('AI questions persist, remain owner-only, and resume the same private conversation', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-questions-'));
   const projectRoot = path.join(root, 'project');

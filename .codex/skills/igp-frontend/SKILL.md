@@ -122,6 +122,8 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - Render terminal AI failures as persistent details with the sanitized error
   message, human-readable error type, ending stage, timestamps, and duration.
   Do not duplicate the same terminal failure in the transient action-status row.
+- Label an exhausted recoverable transport retry as `Codex 网络连接中断` instead
+  of the generic Codex failure type.
 - When AI is globally enabled but the selected requirement/Bug project is not
   runnable, show a disabled `AI 计划未配置` action with the server-provided
   non-sensitive reason instead of silently removing the action.

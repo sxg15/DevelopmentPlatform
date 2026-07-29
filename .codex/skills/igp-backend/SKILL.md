@@ -136,6 +136,10 @@ Read `AGENTS.md`, then locate the owning layer.
   expose it through the portable configuration editor. For a new Codex thread,
   send it as the first text input before attachments and the generated work-item
   prompt. Do not resend it on same-thread continuations.
+- Retry one recoverable Codex transport failure in the same thread before
+  persisting failure or sending notifications. Stream disconnects, connection
+  resets, and incomplete responses are recoverable; protocol, model, timeout, and
+  runtime errors are not. Do not resend the project prelude prompt on the retry.
 - Require every AI planning conversation to persist at least one
   `question_answers` message before accepting a plan. On the initial run, require
   one bounded set of meaningful confirmation questions. If Codex returns without

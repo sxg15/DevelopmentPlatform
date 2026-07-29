@@ -257,6 +257,10 @@ rollback release.
   again, fail with `codex_protocol` and never persist the premature plan. After the
   required answer round, the same thread continues until it can automatically
   produce a complete plan draft; later questions are optional.
+- Recoverable Codex transport failures, including an incomplete response stream,
+  receive one automatic retry in the same thread. Do not resend the project
+  prelude prompt on that retry, and persist a terminal failure only if the retry
+  also fails.
 - Shared AI plan deletion removes the complete revision chain and its audit
   events. Only the original submitter, project `研发超级管理员`, or global
   `超级管理员` may delete it. Deleting an approved plan also removes it from MCP

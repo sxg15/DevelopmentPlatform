@@ -192,6 +192,7 @@ test('AI planning separates private conversations from shared submissions', () =
   assert.match(workspaceSource, /暂未收到新的 Codex 活动，任务仍在等待模型响应/);
   assert.match(workspaceSource, /function AiRunFailure/);
   assert.match(workspaceSource, /Codex 返回格式错误/);
+  assert.match(workspaceSource, /Codex 网络连接中断/);
   assert.match(platformWorkspaceSource, /directTarget\?\.type === 'ai-conversation'/);
   assert.match(platformWorkspaceSource, /directTarget\?\.type === 'ai-plan'/);
   assert.match(platformWorkspaceSource, /initialConversationId=\{aiDirectTarget\?\.conversationId/);

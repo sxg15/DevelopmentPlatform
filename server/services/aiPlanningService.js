@@ -6,6 +6,7 @@ import {
   isAiPlanningWorkItemTool,
   normalizeAiPlanSourceReferences,
 } from '../../shared/aiPlanningDefinitions.js';
+import { isRecoverableCodexTransportError } from '../integrations/codexErrorUtils.js';
 import { resolveAiProjectWorkspace } from '../security/projectWorkspaceResolver.js';
 
 const OUTPUT_SCHEMA = Object.freeze({
@@ -422,7 +423,30 @@ export function createAiPlanningService({
         },
       });
 
-      let result = await runCodexTurn({
+      const runCodexTurnWithRetry = async (options) => {
+        try {
+          return await runCodexTurn(options);
+        } catch (error) {
+          if (
+            taskState.cancelRequested
+            || !isRecoverableCodexTransportError(error)
+          ) {
+            throw error;
+          }
+          reportRunProgress(taskState, {
+            stage: AI_RUN_PROGRESS_STAGES.ANALYZING,
+            message: 'Codex 连接中断，正在自动重试',
+          });
+          const retryThreadId = taskState.threadId || options.threadId;
+          return runCodexTurn({
+            ...options,
+            threadId: retryThreadId,
+            preludePrompt: retryThreadId ? '' : options.preludePrompt,
+          });
+        }
+      };
+
+      let result = await runCodexTurnWithRetry({
         threadId: conversation.codexThreadId,
         turnPrompt: prompt,
         preludePrompt: conversation.codexThreadId
@@ -434,7 +458,7 @@ export function createAiPlanningService({
         throw createInterruptedError();
       }
       if (requiresQuestionRound && !result.awaitingUser) {
-        result = await runCodexTurn({
+        result = await runCodexTurnWithRetry({
           threadId: taskState.threadId,
           turnPrompt: buildRequiredQuestionRetryPrompt(),
         });
@@ -1148,6 +1172,9 @@ function sanitizeRunError(error, config) {
 
 function classifyRunError(error) {
   const code = String(error?.code || '').trim();
+  if (isRecoverableCodexTransportError(error)) {
+    return 'codex_transport';
+  }
   if ([
     'codex_timeout',
     'codex_process_exit',
