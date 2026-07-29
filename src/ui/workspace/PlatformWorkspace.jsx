@@ -1502,7 +1502,7 @@ function WorkItemSubmitDialog({ toolConfig, projectId, cacheUserKey, statusOptio
   }
 
   function addAttachments(files) {
-    const nextFiles = Array.from(files || []).filter((file) => isPasteSupportedAttachment(file));
+    const nextFiles = Array.from(files || []);
     if (nextFiles.length === 0) {
       return;
     }
@@ -1805,7 +1805,6 @@ function WorkItemSubmitDialog({ toolConfig, projectId, cacheUserKey, statusOptio
                 className="allow-text-select"
                 type="file"
                 multiple
-                accept="image/*,video/*"
                 disabled={status.type === 'loading'}
                 onChange={(event) => {
                   addAttachments(event.target.files || []);

@@ -165,6 +165,29 @@ test('project tool navigation renders icons and pending work item badges', () =>
   assert.match(source, /isProjectToolPendingCountTool\(normalizedToolId\)/);
 });
 
+test('new work item file selection accepts ordinary attachments while paste stays media-only', () => {
+  const source = fs.readFileSync('src/ui/workspace/PlatformWorkspace.jsx', 'utf8');
+  const submitDialogStart = source.indexOf('function WorkItemSubmitDialog');
+  const editDialogStart = source.indexOf('function WorkItemEditDialog');
+  const submitDialogSource = source.slice(submitDialogStart, editDialogStart);
+
+  assert.ok(submitDialogStart >= 0);
+  assert.ok(editDialogStart > submitDialogStart);
+  assert.match(
+    submitDialogSource,
+    /function addAttachments\(files\)\s*\{\s*const nextFiles = Array\.from\(files \|\| \[\]\);/,
+  );
+  assert.doesNotMatch(submitDialogSource, /accept="image\/\*,video\/\*"/);
+  assert.match(
+    submitDialogSource,
+    /function handleAttachmentPaste\(event\)[\s\S]*extractSupportedAttachmentsFromClipboard\(event\.clipboardData\)/,
+  );
+  assert.match(
+    source,
+    /function extractSupportedAttachmentsFromClipboard\(clipboardData\)\s*\{\s*return extractFilesFromClipboard\(clipboardData\)\.filter\(\(file\) => isPasteSupportedAttachment\(file\)\);/,
+  );
+});
+
 test('AI planning separates private conversations from shared submissions', () => {
   const workspaceSource = fs.readFileSync('src/ui/ai/AiPlanningWorkspace.jsx', 'utf8');
   const platformWorkspaceSource = fs.readFileSync(
