@@ -105,6 +105,9 @@ Shared modules must remain runtime-neutral and importable from Node tests.
 - `server/integrations/codexAppServerClient.js`: read-only Codex app-server
   lifecycle, progress, structured output, local images, user-input requests, and
   same-thread continuation.
+- `server/integrations/codexApiBridge.js`: token-authenticated loopback Responses
+  forwarding that keeps upstream credentials out of Codex and bypasses stale host
+  proxy settings.
 - `server/integrations/feishuMessageClient.js`: interactive Feishu message HTTP
   delivery.
 - `server/runtime/`: async cache, sessions, SSE hub, network helpers, and sanitized
@@ -292,6 +295,11 @@ rollback release.
 - AI planning defaults to enabled with Codex model `gpt-5.6-sol`; incomplete Codex
   credentials or project roots must not prevent the rest of the backend from
   starting, but AI endpoints still require complete validation.
+- Send Codex Responses traffic through the backend-owned loopback API bridge.
+  Bind only to `127.0.0.1`, authenticate with an ephemeral token, allow only the
+  Responses endpoints, replace the bridge token with the upstream key server-side,
+  stream responses without logging bodies, and prevent the Codex child from
+  inheriting HTTP proxy variables.
 - Every `aiPlanning.projects` entry includes an optional `preludePrompt`. Send that
   project-specific text as the first text input of a new Codex thread, before
   attachments and the generated work-item prompt; do not resend it when continuing

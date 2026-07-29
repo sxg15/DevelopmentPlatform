@@ -77,7 +77,9 @@ the current or rollback release.
   `test/versionManagementDisplayUtils.test.js`.
 - AI persistence, ownership, scheduling, structured output, and realtime:
   `test/aiPlanning.test.js`; Codex JSON-RPC and key isolation:
-  `test/codexAppServerClient.test.js`. Keep coverage for legacy run-schema
+  `test/codexAppServerClient.test.js`. Keep coverage for the authenticated
+  loopback Responses bridge, upstream key replacement, proxy isolation, and SSE
+  streaming, plus legacy run-schema
   migration, monotonic progress persistence, owner-only progress snapshots,
   safe item-event mapping, inactivity UI text, persistent failure details,
   durable question/answer continuation, restart preservation, attachment cleanup,

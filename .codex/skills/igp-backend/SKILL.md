@@ -29,6 +29,7 @@ Read `AGENTS.md`, then locate the owning layer.
 - Version management provisioning and mutations:
   `server/services/versionManagementService.js`.
 - Codex read-only planning: `server/integrations/codexAppServerClient.js`,
+  `server/integrations/codexApiBridge.js`,
   `server/services/aiPlanningService.js`,
   `server/repositories/aiPlanningRepository.js`, and
   `server/runtime/aiDataPaths.js`.
@@ -132,6 +133,12 @@ Read `AGENTS.md`, then locate the owning layer.
 - Run Codex with `read-only`, no approvals, and no tool network access. Keep the
   API key out of generated Codex config, browser payloads, logs, errors, and shell
   tool environments.
+- Route Codex Responses requests through `codexApiBridge.js`. The bridge must bind
+  only to loopback, require an ephemeral Bearer token, accept only Responses paths,
+  inject the real upstream key after authentication, stream without buffering or
+  logging bodies, and remain independent of Windows or environment proxy settings.
+  The Codex child must receive only the ephemeral bridge token and loopback
+  `NO_PROXY` values.
 - Normalize the optional `preludePrompt` on every `aiPlanning.projects` entry and
   expose it through the portable configuration editor. For a new Codex thread,
   send it as the first text input before attachments and the generated work-item

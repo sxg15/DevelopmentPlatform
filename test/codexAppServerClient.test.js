@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { createCodexApiBridge } from '../server/integrations/codexApiBridge.js';
 import {
   buildCodexProcessEnvironment,
   createCodexAppServerClient,
@@ -18,6 +20,9 @@ test('Codex app-server client uses JSONL and a key-free config', async () => {
   const apiKey = 'test-secret-key-value';
   fs.writeFileSync(fakeServerPath, `
     import readline from 'node:readline';
+    if (process.env.IGP_CODEX_API_KEY === ${JSON.stringify(apiKey)}) {
+      process.exit(17);
+    }
     const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
     const send = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
     input.on('line', (line) => {
@@ -177,7 +182,10 @@ test('Codex app-server client uses JSONL and a key-free config', async () => {
 
     const config = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8');
     assert.doesNotMatch(config, new RegExp(apiKey));
+    assert.doesNotMatch(config, /127\.0\.0\.1:9999/);
+    assert.match(config, /base_url = "http:\/\/127\.0\.0\.1:\d+\/v1"/);
     assert.match(config, /sandbox_mode = "read-only"/);
+    assert.match(config, /\[features\][\s\S]*respect_system_proxy = false/);
     assert.match(config, /IGP_CODEX_API_KEY/);
     assert.match(config, /exclude = .*IGP_CODEX_API_KEY/);
   } finally {
@@ -190,6 +198,8 @@ test('Codex child environment excludes unrelated application secrets', () => {
   const environment = buildCodexProcessEnvironment({
     source: {
       PATH: 'C:\\bin',
+      HTTP_PROXY: 'http://127.0.0.1:7892',
+      HTTPS_PROXY: 'http://127.0.0.1:7892',
       FEISHU_APP_SECRET: 'feishu-secret',
       OTHER_TOKEN: 'other-secret',
     },
@@ -200,7 +210,117 @@ test('Codex child environment excludes unrelated application secrets', () => {
   assert.equal(environment.PATH, 'C:\\bin');
   assert.equal(environment.FEISHU_APP_SECRET, undefined);
   assert.equal(environment.OTHER_TOKEN, undefined);
+  assert.equal(environment.HTTP_PROXY, undefined);
+  assert.equal(environment.HTTPS_PROXY, undefined);
+  assert.equal(environment.NO_PROXY, '127.0.0.1,localhost');
+  assert.equal(environment.no_proxy, '127.0.0.1,localhost');
   assert.equal(environment.IGP_CODEX_API_KEY, 'codex-key');
+});
+
+test('Codex API bridge authenticates loopback requests and streams through the upstream response', async () => {
+  const upstreamState = {
+    requests: 0,
+    authorization: '',
+    path: '',
+    body: '',
+  };
+  const upstreamServer = http.createServer((request, response) => {
+    upstreamState.requests += 1;
+    upstreamState.authorization = String(request.headers.authorization || '');
+    upstreamState.path = String(request.url || '');
+    const chunks = [];
+    request.on('data', (chunk) => chunks.push(chunk));
+    request.on('end', () => {
+      upstreamState.body = Buffer.concat(chunks).toString('utf8');
+      response.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+      });
+      response.flushHeaders();
+      response.write('data: first\n\n');
+      if (upstreamState.body === '{"disconnect":true}') {
+        setTimeout(() => response.destroy(), 20);
+        return;
+      }
+      setTimeout(() => response.end('data: second\n\n'), 20);
+    });
+  });
+  const upstreamPort = await listenOnLoopback(upstreamServer);
+  const bridge = createCodexApiBridge({
+    apiBaseUrl: `http://127.0.0.1:${upstreamPort}/v1`,
+    apiKey: 'upstream-secret',
+    bridgeToken: 'bridge-token',
+    requestTimeoutMs: 5_000,
+  });
+
+  try {
+    await bridge.start();
+    const unauthorized = await requestText(`${bridge.baseUrl}/responses`, {
+      method: 'POST',
+      body: '{"test":false}',
+    });
+    assert.equal(unauthorized.statusCode, 401);
+    assert.equal(upstreamState.requests, 0);
+
+    const invalidHost = await requestText(`${bridge.baseUrl}/responses`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer bridge-token',
+        Host: 'example.test',
+      },
+      body: '{"test":false}',
+    });
+    assert.equal(invalidHost.statusCode, 403);
+    assert.equal(upstreamState.requests, 0);
+
+    const response = await requestText(`${bridge.baseUrl}/responses`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer bridge-token',
+        'Content-Type': 'application/json',
+      },
+      body: '{"test":true}',
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.body, 'data: first\n\ndata: second\n\n');
+    assert.ok(response.chunkCount >= 2);
+    assert.equal(upstreamState.requests, 1);
+    assert.equal(upstreamState.authorization, 'Bearer upstream-secret');
+    assert.equal(upstreamState.path, '/v1/responses');
+    assert.equal(upstreamState.body, '{"test":true}');
+
+    const unknownPath = await requestText(`${bridge.baseUrl}/models`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer bridge-token',
+      },
+    });
+    assert.equal(unknownPath.statusCode, 404);
+    assert.equal(upstreamState.requests, 1);
+
+    await assert.rejects(requestText(`${bridge.baseUrl}/responses`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer bridge-token',
+        'Content-Type': 'application/json',
+      },
+      body: '{"disconnect":true}',
+    }));
+
+    const recovered = await requestText(`${bridge.baseUrl}/responses`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer bridge-token',
+        'Content-Type': 'application/json',
+      },
+      body: '{"recovered":true}',
+    });
+    assert.equal(recovered.statusCode, 200);
+    assert.equal(upstreamState.requests, 3);
+  } finally {
+    await bridge.stop();
+    await closeServer(upstreamServer);
+  }
 });
 
 test('Codex app-server user questions interrupt the turn and resolve as awaiting user', async () => {
@@ -321,3 +441,52 @@ test('Codex transport errors only classify known temporary connection failures a
     'invalid_request_error: model is not available',
   )), false);
 });
+
+function listenOnLoopback(server) {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve(Number(server.address()?.port || 0));
+    });
+  });
+}
+
+function closeServer(server) {
+  return new Promise((resolve) => server.close(() => resolve()));
+}
+
+function requestText(url, {
+  method = 'GET',
+  headers = {},
+  body = '',
+} = {}) {
+  return new Promise((resolve, reject) => {
+    const request = http.request(url, {
+      method,
+      headers,
+    }, (response) => {
+      const chunks = [];
+      let chunkCount = 0;
+      response.on('data', (chunk) => {
+        chunks.push(chunk);
+        chunkCount += 1;
+      });
+      response.on('end', () => {
+        resolve({
+          statusCode: response.statusCode,
+          headers: response.headers,
+          body: Buffer.concat(chunks).toString('utf8'),
+          chunkCount,
+        });
+      });
+      response.on('aborted', () => reject(new Error('Response aborted')));
+      response.on('error', reject);
+    });
+    request.on('error', reject);
+    if (body) {
+      request.write(body);
+    }
+    request.end();
+  });
+}

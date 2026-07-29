@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
+import { createCodexApiBridge } from './codexApiBridge.js';
 
 const MODEL_PROVIDER_ID = 'igp_codex';
 const CLIENT_VERSION = '1.0.0';
@@ -33,6 +34,7 @@ export class CodexAppServerClient {
     requestTimeoutMs = DEFAULT_TIMEOUT_MS,
     executablePath = process.execPath,
     codexScriptPath = '',
+    apiBridgeFactory = createCodexApiBridge,
   }) {
     this.rootDir = rootDir;
     this.codexHome = codexHome;
@@ -51,6 +53,8 @@ export class CodexAppServerClient {
       'bin',
       'codex.js',
     );
+    this.apiBridgeFactory = apiBridgeFactory;
+    this.apiBridge = null;
     this.process = null;
     this.startPromise = null;
     this.nextRequestId = 1;
@@ -173,36 +177,38 @@ export class CodexAppServerClient {
   }
 
   async stop() {
-    if (!this.process) {
-      return;
-    }
     const child = this.process;
     this.process = null;
-    await new Promise((resolve) => {
-      let completed = false;
-      const finish = () => {
-        if (completed) {
-          return;
-        }
-        completed = true;
-        clearTimeout(forceTimer);
-        resolve();
-      };
-      const forceTimer = setTimeout(() => {
+    if (child) {
+      await new Promise((resolve) => {
+        let completed = false;
+        const finish = () => {
+          if (completed) {
+            return;
+          }
+          completed = true;
+          clearTimeout(forceTimer);
+          resolve();
+        };
+        const forceTimer = setTimeout(() => {
+          try {
+            child.kill('SIGKILL');
+          } catch {
+            // The process already exited.
+          }
+          finish();
+        }, 1_000);
+        child.once('exit', finish);
         try {
-          child.kill('SIGKILL');
+          child.kill();
         } catch {
-          // The process already exited.
+          finish();
         }
-        finish();
-      }, 1_000);
-      child.once('exit', finish);
-      try {
-        child.kill();
-      } catch {
-        finish();
-      }
-    });
+      });
+    }
+    const apiBridge = this.apiBridge;
+    this.apiBridge = null;
+    await apiBridge?.stop();
   }
 
   async ensureStarted() {
@@ -220,7 +226,8 @@ export class CodexAppServerClient {
   }
 
   async startProcess() {
-    this.writeCodexConfig();
+    const apiBridge = await this.ensureApiBridgeStarted();
+    this.writeCodexConfig(apiBridge.baseUrl);
     if (!fs.existsSync(this.executablePath)) {
       throw createCodexError('找不到 Node 运行环境', 'codex_runtime_missing');
     }
@@ -239,7 +246,7 @@ export class CodexAppServerClient {
           source: process.env,
           codexHome: this.codexHome,
           tempDir: this.tempDir,
-          apiKey: this.apiKey,
+          apiKey: apiBridge.token,
         }),
       },
     );
@@ -256,6 +263,7 @@ export class CodexAppServerClient {
       this.stderrTail = sanitizeCodexErrorText(
         `${this.stderrTail}${String(chunk || '')}`,
         this.apiKey,
+        apiBridge.token,
       ).slice(-4000);
     });
     child.once('error', (error) => this.handleProcessExit(error));
@@ -280,7 +288,23 @@ export class CodexAppServerClient {
     this.notify('initialized', {});
   }
 
-  writeCodexConfig() {
+  async ensureApiBridgeStarted() {
+    if (!this.apiBridge) {
+      this.apiBridge = this.apiBridgeFactory({
+        apiBaseUrl: this.apiBaseUrl,
+        apiKey: this.apiKey,
+        requestTimeoutMs: this.requestTimeoutMs,
+      });
+    }
+    try {
+      return await this.apiBridge.start();
+    } catch {
+      this.apiBridge = null;
+      throw createCodexError('Codex 本地 API 桥接启动失败', 'codex_transport');
+    }
+  }
+
+  writeCodexConfig(apiBaseUrl) {
     fs.mkdirSync(this.codexHome, { recursive: true });
     fs.mkdirSync(this.tempDir, { recursive: true });
     const config = [
@@ -292,9 +316,12 @@ export class CodexAppServerClient {
       'web_search = "disabled"',
       'check_for_update_on_startup = false',
       '',
+      '[features]',
+      'respect_system_proxy = false',
+      '',
       `[model_providers.${MODEL_PROVIDER_ID}]`,
       'name = "IGP Codex"',
-      `base_url = ${toTomlString(this.apiBaseUrl)}`,
+      `base_url = ${toTomlString(apiBaseUrl)}`,
       'env_key = "IGP_CODEX_API_KEY"',
       'wire_api = "responses"',
       'requires_openai_auth = false',
@@ -389,6 +416,7 @@ export class CodexAppServerClient {
           sanitizeCodexErrorText(
             message.error?.message || `Codex 请求失败：${pending.method}`,
             this.apiKey,
+            this.apiBridge?.token,
           ),
         ));
       } else {
@@ -464,6 +492,7 @@ export class CodexAppServerClient {
             message: sanitizeCodexErrorText(
               error?.message || 'Invalid user input request.',
               this.apiKey,
+              this.apiBridge?.token,
             ),
           },
         });
@@ -543,7 +572,11 @@ export class CodexAppServerClient {
 
     const message = params.turn?.error?.message
       || (params.turn?.status === 'interrupted' ? 'Codex 任务已取消' : 'Codex 生成计划失败');
-    const error = new Error(sanitizeCodexErrorText(message, this.apiKey));
+    const error = new Error(sanitizeCodexErrorText(
+      message,
+      this.apiKey,
+      this.apiBridge?.token,
+    ));
     error.code = params.turn?.status === 'interrupted' ? 'interrupted' : 'codex_failed';
     this.finishActiveTurn(activeTurn, error);
   }
@@ -575,7 +608,11 @@ export class CodexAppServerClient {
 
   handleProcessExit(error) {
     const safeError = createCodexError(
-      sanitizeCodexErrorText(error?.message || 'Codex 进程异常退出', this.apiKey),
+      sanitizeCodexErrorText(
+        error?.message || 'Codex 进程异常退出',
+        this.apiKey,
+        this.apiBridge?.token,
+      ),
       error?.code || 'codex_process_exit',
     );
     if (this.process) {
@@ -613,9 +650,6 @@ export function buildCodexProcessEnvironment({
     'PROGRAMDATA',
     'PROGRAMFILES',
     'PROGRAMFILES(X86)',
-    'HTTP_PROXY',
-    'HTTPS_PROXY',
-    'NO_PROXY',
     'LANG',
     'LC_ALL',
   ];
@@ -628,6 +662,8 @@ export function buildCodexProcessEnvironment({
   environment.CODEX_HOME = codexHome;
   environment.TEMP = tempDir;
   environment.TMP = tempDir;
+  environment.NO_PROXY = '127.0.0.1,localhost';
+  environment.no_proxy = '127.0.0.1,localhost';
   environment.IGP_CODEX_API_KEY = apiKey;
   environment.CODEX_DISABLE_UPDATE_CHECK = '1';
   return environment;
@@ -734,10 +770,12 @@ function createCodexError(message, code) {
   return error;
 }
 
-function sanitizeCodexErrorText(value, apiKey) {
+function sanitizeCodexErrorText(value, ...secrets) {
   let text = String(value || '').replaceAll('\r', ' ').replaceAll('\n', ' ').trim();
-  if (apiKey) {
-    text = text.replaceAll(apiKey, '[REDACTED]');
+  for (const secret of secrets) {
+    if (secret) {
+      text = text.replaceAll(secret, '[REDACTED]');
+    }
   }
   return text.slice(0, 1000);
 }
