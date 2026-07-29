@@ -253,16 +253,13 @@ rollback release.
 - Version association, previous-version, status-history, and comment text fields use
   versioned JSON. Surface malformed documents and never overwrite malformed status
   or comment history during a mutation.
-- Requirement and Bug AI planning is a private multi-turn workflow. Before the
-  first plan draft, Codex must ask one bounded set of one to three meaningful
-  confirmation questions and the owner must answer through the detail page. If
-  Codex skips that first question set, retry once in the same thread; if it skips
-  again, fail with `codex_protocol` and never persist the premature plan. After the
-  required answer round, the same thread continues until it can automatically
-  produce a complete plan draft; later questions are optional. The mandatory
-  question turn uses at most medium reasoning and no final-plan output schema;
-  after the user answers, plan generation returns to the configured reasoning
-  effort.
+- Requirement and Bug AI planning is a private multi-turn workflow. Codex may
+  produce the first complete plan directly when the work item, attachments, and
+  source make the requested outcome sufficiently clear. When a material product
+  or implementation decision remains unresolved, it may ask one bounded set of
+  one to three questions through the detail page, then continue the same thread
+  after the owner answers. Never require a ceremonial first-round confirmation or
+  fail a valid plan merely because Codex did not ask a question.
 - Recoverable Codex transport failures, including an incomplete response stream,
   receive one automatic retry in the same thread with reduced reasoning effort
   and a concise continuation prompt. Do not resend the project prelude prompt,

@@ -71,12 +71,11 @@ Treat shared definitions as the canonical frontend/backend contract.
   Conversation history is owner-only; submitted Markdown revisions are project
   shared and remain filtered by the viewer's underlying requirement/Bug access.
 - Codex first inspects the work item, its regular attachments, requirement
-  submission attachments, and configured project roots. Before any first draft it
-  must persist one bounded set of one to three meaningful confirmation questions,
-  and the owner must answer them. A skipped question round gets one same-thread
-  corrective retry; a second skip fails without saving the premature plan. After
-  the required answer, the same private thread continues and automatically
-  generates the draft; additional questions are optional.
+  submission attachments, and configured project roots. It may generate the first
+  complete draft directly when the requested outcome is sufficiently clear. When
+  a material decision remains unresolved, it may persist one bounded set of one to
+  three questions; after the owner answers, the same private thread continues and
+  automatically generates the draft.
 - A configured project `preludePrompt` is sent once at the start of each new Codex
   thread before attachment inputs and the generated work-item planning prompt.
   Same-thread question answers and later refinements must not resend it.

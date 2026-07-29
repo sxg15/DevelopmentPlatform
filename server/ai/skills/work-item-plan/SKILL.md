@@ -30,15 +30,14 @@ description: Read one or more configured project roots and produce an implementa
 
 ## Decisions
 
-- When the caller states that the initial user-confirmation round is required, always ask one bounded question set after discovery and before producing any plan.
-- For that required first round, confirm the most consequential interpretation, desired outcome, acceptance criterion, scope boundary, priority, or tradeoff, even when the implementation appears clear.
-- After the required round has been answered, ask again only when a material product or implementation decision cannot be resolved from the work item, attachments, or source.
+- Ask only when a material product or implementation decision cannot be resolved from the work item, attachments, or source.
+- When the requested outcome is sufficiently clear, produce the complete plan directly without asking for confirmation.
 - Batch at most three questions in one `request_user_input` call.
 - Prefer two or three mutually exclusive options when the decision has clear alternatives. Put the recommended option first and explain its impact briefly.
 - Allow the user to provide a custom answer. Use a free-text question only when fixed options would be misleading.
 - Do not ask for passwords, API keys, tokens, personal data, approvals, or other secrets.
 - Do not ask ceremonial questions, repeat information already supplied, or defer ordinary engineering judgment to the user.
-- When questions are required, issue `request_user_input` and stop the current turn. Do not produce a partial plan in that turn.
+- When a question is needed, issue `request_user_input` and stop the current turn. Do not produce a partial plan in that turn.
 - After the user answers, continue discovery in the same thread. Ask another bounded question set only if a new material uncertainty is discovered.
 - Once material uncertainty is resolved, automatically produce the complete plan without asking whether to proceed.
 

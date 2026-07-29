@@ -18,13 +18,10 @@ import { createAiRunContextService } from '../server/services/aiRunContextServic
 import { createAiPlanningNotificationService } from '../server/services/aiPlanningNotificationService.js';
 import {
   buildPlanningPrompt,
-  buildRequiredQuestionRetryPrompt,
   buildTransportRetryPrompt,
   createAiPlanningService,
   getAllowedAiPlanToolIds,
-  hasCompletedQuestionRound,
   parsePlanningOutput,
-  resolveQuestionTurnReasoningEffort,
   resolveTransportRetryReasoningEffort,
   serializeAiConversation,
 } from '../server/services/aiPlanningService.js';
@@ -59,15 +56,7 @@ test('AI plan definitions keep source paths relative and permission-derived', ()
   ]);
 });
 
-test('AI planning requires one completed question round before plan generation', () => {
-  assert.equal(hasCompletedQuestionRound({ messages: [] }), false);
-  assert.equal(hasCompletedQuestionRound({
-    messages: [{ kind: 'question_set' }],
-  }), false);
-  assert.equal(hasCompletedQuestionRound({
-    messages: [{ kind: 'question_answers' }],
-  }), true);
-
+test('AI planning asks only when material decisions remain unresolved', () => {
   const prompt = buildPlanningPrompt({
     conversation: {
       projectId: 'P1',
@@ -78,23 +67,19 @@ test('AI planning requires one completed question round before plan generation',
     workItem: { title: 'Requirement' },
     project: { projectName: 'Project one' },
     workspace: { roots: [] },
-    requiresQuestionRound: true,
   });
-  assert.match(prompt, /MUST call request_user_input once/);
-  assert.match(prompt, /without returning a plan/);
-  assert.match(buildRequiredQuestionRetryPrompt(), /previous turn returned without/);
+  assert.match(prompt, /If material implementation decisions remain unresolved/);
+  assert.match(prompt, /return the complete plan directly without asking for confirmation/);
+  assert.doesNotMatch(prompt, /MUST call request_user_input/);
 });
 
-test('AI planning lowers reasoning latency for required questions and transport recovery', () => {
-  assert.equal(resolveQuestionTurnReasoningEffort('high'), 'medium');
-  assert.equal(resolveQuestionTurnReasoningEffort('xhigh'), 'medium');
-  assert.equal(resolveQuestionTurnReasoningEffort('low'), 'low');
+test('AI planning lowers reasoning latency for transport recovery', () => {
   assert.equal(resolveTransportRetryReasoningEffort('high'), 'medium');
   assert.equal(resolveTransportRetryReasoningEffort('medium'), 'low');
   assert.equal(resolveTransportRetryReasoningEffort('low'), 'low');
   assert.match(
-    buildTransportRetryPrompt({ requiresQuestionRound: true }),
-    /still requires request_user_input/,
+    buildTransportRetryPrompt(),
+    /If a material implementation decision is still unresolved/,
   );
 });
 
@@ -533,7 +518,6 @@ test('AI service persists and publishes safe Codex progress snapshots', async ()
           onThread,
           onTurn,
           onProgress,
-          onRequestUserInput,
         } = options;
         onThread('private-thread');
         onTurn(`private-turn-${turnCount}`);
@@ -546,24 +530,11 @@ test('AI service persists and publishes safe Codex progress snapshots', async ()
           stage: 'composing',
           message: '正在整理最终实施计划',
         });
-        if (turnCount === 2) {
-          await onRequestUserInput([{
-            id: 'acceptance',
-            header: '验收重点',
-            question: '本次方案最需要优先保证什么？',
-            isOther: true,
-            options: [
-              { label: '兼容性', description: '优先保持现有行为兼容' },
-              { label: '交付速度', description: '优先缩小本次改动范围' },
-            ],
-          }]);
-          return { awaitingUser: true };
-        }
         return {
           threadId: 'private-thread',
           turnId: `private-turn-${turnCount}`,
           content: JSON.stringify({
-            message: turnCount === 1 ? '过早生成的方案' : '计划已生成',
+            message: '计划已生成',
             plan: null,
           }),
         };
@@ -594,28 +565,6 @@ test('AI service persists and publishes safe Codex progress snapshots', async ()
       workItem: { itemId: 'REQ-001', title: 'Requirement' },
       project: { projectName: 'Project one' },
     });
-    const awaiting = await waitForConversationStatus(
-      repository,
-      conversation.id,
-      user.openId,
-      'awaiting_user',
-    );
-    assert.equal(awaiting.pendingQuestionSet.questions.length, 1);
-    service.answerQuestions({
-      user,
-      conversationId: conversation.id,
-      questionSetId: awaiting.pendingQuestionSet.id,
-      expectedVersion: awaiting.version,
-      clientMutationId: 'progress-answer',
-      answers: [{
-        questionId: 'acceptance',
-        optionLabel: '兼容性',
-        customText: '',
-      }],
-      additionalContext: '',
-      workItem: { itemId: 'REQ-001', title: 'Requirement' },
-      project: { projectId: 'P1', projectName: 'Project one' },
-    });
     const completed = await waitForConversationStatus(
       repository,
       conversation.id,
@@ -625,23 +574,12 @@ test('AI service persists and publishes safe Codex progress snapshots', async ()
     unsubscribe();
     assert.equal(completed.latestRun.status, 'completed');
     assert.equal(completed.latestRun.progressStage, 'completed');
-    assert.equal(turnCount, 3);
-    assert.deepEqual(turnOptions.map((item) => item.threadId), [
-      '',
-      'private-thread',
-      'private-thread',
-    ]);
-    assert.match(turnOptions[0].prompt, /MUST call request_user_input once/);
-    assert.match(turnOptions[1].prompt, /previous turn returned without/);
-    assert.doesNotMatch(turnOptions[2].prompt, /MUST call request_user_input once/);
-    assert.deepEqual(turnOptions.map((item) => item.reasoningEffort), [
-      'medium',
-      'medium',
-      'high',
-    ]);
-    assert.equal(turnOptions[0].outputSchema, undefined);
-    assert.equal(turnOptions[1].outputSchema, undefined);
-    assert.ok(turnOptions[2].outputSchema);
+    assert.equal(turnCount, 1);
+    assert.deepEqual(turnOptions.map((item) => item.threadId), ['']);
+    assert.doesNotMatch(turnOptions[0].prompt, /MUST call request_user_input/);
+    assert.match(turnOptions[0].prompt, /return the complete plan directly/);
+    assert.deepEqual(turnOptions.map((item) => item.reasoningEffort), ['high']);
+    assert.ok(turnOptions[0].outputSchema);
     const events = writes.join('');
     assert.match(events, /"stage":"starting"/);
     assert.match(events, /"stage":"analyzing"/);
@@ -654,8 +592,8 @@ test('AI service persists and publishes safe Codex progress snapshots', async ()
   }
 });
 
-test('AI service rejects premature plans when Codex skips the required question round twice', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-required-question-'));
+test('AI service accepts a first-turn plan without confirmation questions', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-direct-plan-'));
   const projectRoot = path.join(root, 'project');
   fs.mkdirSync(projectRoot);
   const repository = new AiPlanningRepository(path.join(root, 'planning.sqlite'));
@@ -682,11 +620,11 @@ test('AI service rejects premature plans when Codex skips the required question 
         options.onTurn(`turn-${turnCount}`);
         return {
           content: JSON.stringify({
-            message: `Premature plan ${turnCount}`,
+            message: `Direct plan ${turnCount}`,
             plan: {
-              title: 'Must not persist',
-              summary: 'Codex skipped the required user confirmation',
-              markdown: '# Must not persist',
+              title: 'Direct plan',
+              summary: 'The work item is sufficiently clear',
+              markdown: '# Direct plan',
               sourceReferences: [],
             },
           }),
@@ -709,26 +647,25 @@ test('AI service rejects premature plans when Codex skips the required question 
       conversationId: conversation.id,
       content: 'Generate a plan',
       expectedVersion: conversation.version,
-      clientMutationId: 'required-question-failure',
+      clientMutationId: 'direct-plan',
       workItem: { itemId: 'REQ-001', title: 'Requirement' },
       project: { projectId: 'P1', projectName: 'Project one' },
     });
 
-    const failed = await waitForConversationStatus(
+    const completed = await waitForConversationStatus(
       repository,
       conversation.id,
       user.openId,
-      'failed',
+      'ready',
     );
-    assert.equal(turnCount, 2);
-    assert.match(prompts[0], /MUST call request_user_input once/);
-    assert.match(prompts[1], /previous turn returned without/);
-    assert.equal(failed.latestRun.status, 'failed');
-    assert.equal(failed.latestRun.errorCode, 'codex_protocol');
-    assert.equal(failed.draft, null);
+    assert.equal(turnCount, 1);
+    assert.doesNotMatch(prompts[0], /MUST call request_user_input/);
+    assert.equal(completed.latestRun.status, 'completed');
+    assert.equal(completed.latestRun.errorCode, '');
+    assert.equal(completed.draft.markdown, '# Direct plan');
     assert.equal(
-      failed.messages.some((message) => message.role === 'assistant'),
-      false,
+      completed.messages.some((message) => message.role === 'assistant'),
+      true,
     );
   } finally {
     repository.close();
@@ -828,15 +765,16 @@ test('AI service retries one recoverable Codex stream disconnect in the same thr
       'Use the project service layer.',
       '',
     ]);
-    assert.match(runOptions[0].prompt, /MUST call request_user_input once/);
+    assert.doesNotMatch(runOptions[0].prompt, /MUST call request_user_input/);
+    assert.match(runOptions[0].prompt, /return the complete plan directly/);
     assert.match(runOptions[1].prompt, /previous turn was interrupted/i);
-    assert.match(runOptions[1].prompt, /still requires request_user_input/);
+    assert.match(runOptions[1].prompt, /material implementation decision/);
     assert.deepEqual(runOptions.map((item) => item.reasoningEffort), [
+      'high',
       'medium',
-      'low',
     ]);
-    assert.equal(runOptions[0].outputSchema, undefined);
-    assert.equal(runOptions[1].outputSchema, undefined);
+    assert.ok(runOptions[0].outputSchema);
+    assert.ok(runOptions[1].outputSchema);
     assert.deepEqual(runOptions[1].inputItems, []);
     assert.equal(awaiting.latestRun.status, 'awaiting_user');
     assert.equal(awaiting.latestRun.errorCode, '');

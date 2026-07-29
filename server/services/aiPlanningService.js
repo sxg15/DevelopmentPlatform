@@ -355,7 +355,6 @@ export function createAiPlanningService({
         repository.setRunAttachmentSummary(taskState.runId, runContext.attachmentSummary);
         publishSnapshot(conversation.id, taskState.ownerOpenId);
       }
-      const requiresQuestionRound = !hasCompletedQuestionRound(conversation);
       const prompt = buildPlanningPrompt({
         conversation,
         userMessage,
@@ -363,7 +362,6 @@ export function createAiPlanningService({
         project,
         workspace: runContext.workspace || workspace,
         attachmentContext: runContext.attachmentContext,
-        requiresQuestionRound,
       });
       const configuredReasoningEffort = normalizeReasoningEffort(
         config.codex?.reasoningEffort,
@@ -450,9 +448,7 @@ export function createAiPlanningService({
             threadId: retryThreadId,
             preludePrompt: continueInterruptedTurn ? '' : options.preludePrompt,
             turnPrompt: continueInterruptedTurn
-              ? buildTransportRetryPrompt({
-                  requiresQuestionRound: options.requiresQuestionRound,
-                })
+              ? buildTransportRetryPrompt()
               : options.turnPrompt,
             inputItems: continueInterruptedTurn ? [] : options.inputItems,
             reasoningEffort: resolveTransportRetryReasoningEffort(
@@ -462,42 +458,21 @@ export function createAiPlanningService({
         }
       };
 
-      const questionReasoningEffort = resolveQuestionTurnReasoningEffort(
-        configuredReasoningEffort,
-      );
-      let result = await runCodexTurnWithRetry({
+      const result = await runCodexTurnWithRetry({
         threadId: conversation.codexThreadId,
         turnPrompt: prompt,
         preludePrompt: conversation.codexThreadId
           ? ''
           : workspace.preludePrompt,
         inputItems: runContext.inputItems,
-        outputSchema: requiresQuestionRound ? undefined : OUTPUT_SCHEMA,
-        reasoningEffort: requiresQuestionRound
-          ? questionReasoningEffort
-          : configuredReasoningEffort,
-        requiresQuestionRound,
+        outputSchema: OUTPUT_SCHEMA,
+        reasoningEffort: configuredReasoningEffort,
       });
-      if (taskState.cancelRequested) {
-        throw createInterruptedError();
-      }
-      if (requiresQuestionRound && !result.awaitingUser) {
-        result = await runCodexTurnWithRetry({
-          threadId: taskState.threadId,
-          turnPrompt: buildRequiredQuestionRetryPrompt(),
-          outputSchema: undefined,
-          reasoningEffort: questionReasoningEffort,
-          requiresQuestionRound: true,
-        });
-      }
       if (taskState.cancelRequested) {
         throw createInterruptedError();
       }
       if (result.awaitingUser) {
         return;
-      }
-      if (requiresQuestionRound) {
-        throw createCodexProtocolError('Codex 未按要求发起首轮确认问题');
       }
       const outputWorkspace = {
         ...workspace,
@@ -991,7 +966,6 @@ export function buildPlanningPrompt({
   project,
   workspace,
   attachmentContext = '',
-  requiresQuestionRound = false,
 }) {
   const roots = workspace.roots.map((root) => ({
     rootId: root.id,
@@ -1014,50 +988,20 @@ export function buildPlanningPrompt({
     '',
     'Inspect source only as needed. Do not modify anything or run builds/tests/installers.',
     'Use root-relative references and the configured rootId values. Never include absolute paths in the plan.',
-    ...(requiresQuestionRound ? [
-      'This conversation has not completed its required user-confirmation round.',
-      'Before creating any plan, you MUST call request_user_input once with 1 to 3 high-value clarification or confirmation questions, then stop this turn without returning a plan.',
-      'Even if the implementation appears clear, ask the user to confirm the most consequential interpretation, desired outcome, acceptance criterion, scope boundary, priority, or tradeoff.',
-    ] : [
-      'If material implementation decisions remain unresolved, use request_user_input with 1 to 3 batched questions and stop this turn.',
-    ]),
+    'If material implementation decisions remain unresolved, use request_user_input with 1 to 3 batched questions and stop this turn.',
+    'When the work item, attachments, and source already make the requested outcome sufficiently clear, return the complete plan directly without asking for confirmation.',
     'Put the recommended option first, allow a custom answer, never ask for secrets, and do not ask questions whose answer is available in source.',
     'Once uncertainty is resolved, automatically return a complete implementation plan.',
   ].join('\n');
 }
 
-export function hasCompletedQuestionRound(conversation) {
-  return (Array.isArray(conversation?.messages) ? conversation.messages : [])
-    .some((message) => message?.kind === AI_MESSAGE_KINDS.QUESTION_ANSWERS);
-}
-
-export function buildRequiredQuestionRetryPrompt() {
-  return [
-    'The previous turn returned without completing the required initial user-confirmation round.',
-    'Do not produce, repeat, or refine a plan in this turn.',
-    'Use request_user_input now with 1 to 3 high-value questions that help confirm the user intent before planning.',
-    'Base the questions on the work item and repository evidence already inspected.',
-    'Even if the implementation seems clear, confirm the most consequential desired outcome, acceptance criterion, scope boundary, priority, or tradeoff.',
-    'Do not ask for information already available in source and do not ask for secrets.',
-  ].join('\n');
-}
-
-export function buildTransportRetryPrompt({ requiresQuestionRound = false } = {}) {
+export function buildTransportRetryPrompt() {
   return [
     'The previous turn was interrupted by a transport disconnect.',
     'Continue the same request using the work-item and repository context already present in this thread.',
     'Do not repeat completed analysis or request the same attachments again.',
-    requiresQuestionRound
-      ? 'This conversation still requires request_user_input with 1 to 3 meaningful confirmation questions before any plan can be produced.'
-      : 'Complete the requested implementation plan and return the required structured result.',
+    'If a material implementation decision is still unresolved, use request_user_input; otherwise complete the requested implementation plan and return the required structured result.',
   ].join('\n');
-}
-
-export function resolveQuestionTurnReasoningEffort(value) {
-  const effort = normalizeReasoningEffort(value);
-  return ['high', 'xhigh', 'max', 'ultra'].includes(effort)
-    ? 'medium'
-    : effort;
 }
 
 export function resolveTransportRetryReasoningEffort(value) {
@@ -1265,12 +1209,6 @@ function createServiceError(message, statusCode, details = null) {
   const error = new Error(message);
   error.statusCode = statusCode;
   error.publicDetails = details;
-  return error;
-}
-
-function createCodexProtocolError(message) {
-  const error = createServiceError(message, 502);
-  error.code = 'codex_protocol';
   return error;
 }
 

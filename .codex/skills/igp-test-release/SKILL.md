@@ -84,15 +84,13 @@ the current or rollback release.
   safe item-event mapping, inactivity UI text, persistent failure details,
   durable question/answer continuation, restart preservation, attachment cleanup,
   notification outbox idempotency, and the required response/interruption ordering
-  for `item/tool/requestUserInput`. Verify that the first draft requires a persisted
-  answer round, a skipped question receives one same-thread corrective retry, and
-  a second skip fails with `codex_protocol` without persisting the premature plan.
+  for `item/tool/requestUserInput`. Verify that a valid first-turn plan is accepted
+  without a confirmation question, while material unresolved decisions can still
+  persist a bounded question set and continue in the same thread after answers.
   Verify project `preludePrompt` input ordering and that same-thread continuations
   do not resend it. Cover one same-thread retry for recoverable Codex stream
-  disconnects using a concise continuation, reduced reasoning effort, and no
-  repeated prelude or attachment inputs. Verify mandatory first-question turns omit
-  the final-plan schema, cap reasoning at medium, and restore configured effort
-  after the user answers. Also cover legacy shared-plan
+  disconnects using a concise continuation, reduced reasoning effort, the plan
+  output schema, and no repeated prelude or attachment inputs. Also cover legacy shared-plan
   migration, immutable revision
   chains, pending/approved uniqueness, reviewer edits, rejection reasons,
   full-chain deletion and notification cleanup, notification dedupe counts, and

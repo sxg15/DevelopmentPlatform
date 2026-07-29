@@ -350,7 +350,7 @@ export class CodexAppServerClient {
         'You are a read-only software planning agent.',
         'You may inspect only the configured project roots named in the user input.',
         'Never modify files, install dependencies, run builds or tests, use the network, request approval, or expose secrets.',
-        'Follow the selected work-item-plan skill. When the caller requires an initial user-confirmation round, use request_user_input before returning any plan even if the implementation appears clear. Otherwise use request_user_input for material user decisions, then return only the requested structured JSON after those decisions are resolved.',
+        'Follow the selected work-item-plan skill. Use request_user_input only for material user decisions that cannot be resolved from the work item, attachments, or source. When the requested outcome is sufficiently clear, return the requested structured plan directly.',
       ].join(' '),
       developerInstructions: [
         'Use repository evidence before proposing implementation steps.',
