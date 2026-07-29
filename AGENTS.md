@@ -278,6 +278,9 @@ rollback release.
 - `config/config.json` and `Publish/config.json` contain runtime secrets. Never print,
   inspect in responses, commit, or copy their values into tests/docs.
 - Use `config/config.example.json` for documented configuration changes.
+- Keep the portable example's enabled AI project `50` mapped to
+  `D:\DevelopmentPlatformProject` with root ID `main` and profile `auto`; the build
+  copies this preset to `Publish/config.example.json`.
 - AI planning defaults to enabled with Codex model `gpt-5.6-sol`; incomplete Codex
   credentials or project roots must not prevent the rest of the backend from
   starting, but AI endpoints still require complete validation.

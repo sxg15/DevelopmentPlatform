@@ -113,6 +113,8 @@ Production packages must also contain `ConfigureWebBackend.bat`,
 config editor start/stop helpers and folder picker under `server/config/`. The
 config editor must start before dependencies are installed and must not create
 `node_modules`.
+The packaged `config.example.json` must retain the enabled AI project `50` preset
+with root ID `main`, path `D:\DevelopmentPlatformProject`, and profile `auto`.
 Use `scripts/smoke-portable.ps1` to copy `Publish` to a temporary relocated path,
 verify that dependencies are initially absent, exercise the token-protected config
 editor without exposing an existing secret or installing dependencies, then

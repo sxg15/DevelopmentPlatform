@@ -65,6 +65,9 @@ Read `AGENTS.md`, then locate the owning layer.
   production dependencies on first launch through `EnsureDependencies.ps1`.
   Keep first-launch npm progress and network fetch status visible in the startup
   console.
+- Keep `config/config.example.json` preconfigured with enabled AI project `50`,
+  root ID `main`, path `D:\DevelopmentPlatformProject`, and profile `auto`; package
+  it unchanged as `Publish/config.example.json`.
 - Keep `ConfigureWebBackend.bat` independent from application `node_modules`.
   The editor must bind only to `127.0.0.1`, require its random session token,
   validate write origins, redact existing `feishu.appSecret` and Codex API keys,

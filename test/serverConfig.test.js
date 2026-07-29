@@ -7,6 +7,22 @@ import test from 'node:test';
 import { normalizeConfig } from '../server/config/normalizeConfig.js';
 import { DEFAULT_DEVELOPMENT_SUPER_ADMIN_FIELD } from '../shared/workItemAssignmentUtils.js';
 
+test('packaged example config includes the development platform AI project preset', () => {
+  const exampleConfig = JSON.parse(
+    fs.readFileSync(new URL('../config/config.example.json', import.meta.url), 'utf8'),
+  );
+  const project = exampleConfig.aiPlanning.projects.find((entry) => entry.projectId === '50');
+
+  assert.ok(project);
+  assert.equal(project.enabled, true);
+  assert.equal(project.preludePrompt, '');
+  assert.deepEqual(project.roots, [{
+    id: 'main',
+    path: 'D:\\DevelopmentPlatformProject',
+    profile: 'auto',
+  }]);
+});
+
 test('server config normalization preserves workflow field defaults', () => {
   const config = normalizeConfig({});
 

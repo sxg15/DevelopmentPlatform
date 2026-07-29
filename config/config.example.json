@@ -38,13 +38,13 @@
     },
     "projects": [
       {
-        "projectId": "",
+        "projectId": "50",
         "enabled": true,
         "preludePrompt": "",
         "roots": [
           {
             "id": "main",
-            "path": "",
+            "path": "D:\\DevelopmentPlatformProject",
             "profile": "auto"
           }
         ]
