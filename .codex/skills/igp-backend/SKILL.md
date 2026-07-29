@@ -139,12 +139,16 @@ Read `AGENTS.md`, then locate the owning layer.
 - Retry one recoverable Codex transport failure in the same thread before
   persisting failure or sending notifications. Stream disconnects, connection
   resets, and incomplete responses are recoverable; protocol, model, timeout, and
-  runtime errors are not. Do not resend the project prelude prompt on the retry.
+  runtime errors are not. When the interrupted turn already exists, retry with a
+  concise continuation prompt, no repeated attachments or prelude prompt, and one
+  lower-latency reasoning level.
 - Require every AI planning conversation to persist at least one
   `question_answers` message before accepting a plan. On the initial run, require
   one bounded set of meaningful confirmation questions. If Codex returns without
   asking, retry once in the same thread with a corrective prompt; if it skips
-  again, fail with `codex_protocol` and never persist the premature output.
+  again, fail with `codex_protocol` and never persist the premature output. Use at
+  most medium reasoning and no final-plan output schema for this mandatory
+  question turn; restore the configured reasoning effort after the owner answers.
 - Handle `item/tool/requestUserInput` as a bounded one-to-three-question decision
   request. Persist it before returning a protocol response, interrupt the current
   turn, release scheduler capacity, and continue the same thread after the owner

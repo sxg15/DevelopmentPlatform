@@ -256,11 +256,15 @@ rollback release.
   Codex skips that first question set, retry once in the same thread; if it skips
   again, fail with `codex_protocol` and never persist the premature plan. After the
   required answer round, the same thread continues until it can automatically
-  produce a complete plan draft; later questions are optional.
+  produce a complete plan draft; later questions are optional. The mandatory
+  question turn uses at most medium reasoning and no final-plan output schema;
+  after the user answers, plan generation returns to the configured reasoning
+  effort.
 - Recoverable Codex transport failures, including an incomplete response stream,
-  receive one automatic retry in the same thread. Do not resend the project
-  prelude prompt on that retry, and persist a terminal failure only if the retry
-  also fails.
+  receive one automatic retry in the same thread with reduced reasoning effort
+  and a concise continuation prompt. Do not resend the project prelude prompt,
+  attachments, or full work-item prompt when the interrupted turn was already
+  created, and persist a terminal failure only if the retry also fails.
 - Shared AI plan deletion removes the complete revision chain and its audit
   events. Only the original submitter, project `研发超级管理员`, or global
   `超级管理员` may delete it. Deleting an approved plan also removes it from MCP

@@ -19,10 +19,13 @@ import { createAiPlanningNotificationService } from '../server/services/aiPlanni
 import {
   buildPlanningPrompt,
   buildRequiredQuestionRetryPrompt,
+  buildTransportRetryPrompt,
   createAiPlanningService,
   getAllowedAiPlanToolIds,
   hasCompletedQuestionRound,
   parsePlanningOutput,
+  resolveQuestionTurnReasoningEffort,
+  resolveTransportRetryReasoningEffort,
   serializeAiConversation,
 } from '../server/services/aiPlanningService.js';
 
@@ -80,6 +83,19 @@ test('AI planning requires one completed question round before plan generation',
   assert.match(prompt, /MUST call request_user_input once/);
   assert.match(prompt, /without returning a plan/);
   assert.match(buildRequiredQuestionRetryPrompt(), /previous turn returned without/);
+});
+
+test('AI planning lowers reasoning latency for required questions and transport recovery', () => {
+  assert.equal(resolveQuestionTurnReasoningEffort('high'), 'medium');
+  assert.equal(resolveQuestionTurnReasoningEffort('xhigh'), 'medium');
+  assert.equal(resolveQuestionTurnReasoningEffort('low'), 'low');
+  assert.equal(resolveTransportRetryReasoningEffort('high'), 'medium');
+  assert.equal(resolveTransportRetryReasoningEffort('medium'), 'low');
+  assert.equal(resolveTransportRetryReasoningEffort('low'), 'low');
+  assert.match(
+    buildTransportRetryPrompt({ requiresQuestionRound: true }),
+    /still requires request_user_input/,
+  );
 });
 
 test('AI data directories are created with a writable probe', () => {
@@ -510,6 +526,8 @@ test('AI service persists and publishes safe Codex progress snapshots', async ()
         turnOptions.push({
           threadId: options.threadId,
           prompt: options.prompt,
+          outputSchema: options.outputSchema,
+          reasoningEffort: options.reasoningEffort,
         });
         const {
           onThread,
@@ -616,6 +634,14 @@ test('AI service persists and publishes safe Codex progress snapshots', async ()
     assert.match(turnOptions[0].prompt, /MUST call request_user_input once/);
     assert.match(turnOptions[1].prompt, /previous turn returned without/);
     assert.doesNotMatch(turnOptions[2].prompt, /MUST call request_user_input once/);
+    assert.deepEqual(turnOptions.map((item) => item.reasoningEffort), [
+      'medium',
+      'medium',
+      'high',
+    ]);
+    assert.equal(turnOptions[0].outputSchema, undefined);
+    assert.equal(turnOptions[1].outputSchema, undefined);
+    assert.ok(turnOptions[2].outputSchema);
     const events = writes.join('');
     assert.match(events, /"stage":"starting"/);
     assert.match(events, /"stage":"analyzing"/);
@@ -721,7 +747,7 @@ test('AI service retries one recoverable Codex stream disconnect in the same thr
   const service = createAiPlanningService({
     config: {
       enabled: true,
-      codex: { model: 'codex-test' },
+      codex: { model: 'codex-test', reasoningEffort: 'high' },
       projects: [{
         projectId: 'P1',
         enabled: true,
@@ -739,6 +765,9 @@ test('AI service retries one recoverable Codex stream disconnect in the same thr
           threadId: options.threadId,
           preludePrompt: options.preludePrompt,
           prompt: options.prompt,
+          inputItems: options.inputItems,
+          outputSchema: options.outputSchema,
+          reasoningEffort: options.reasoningEffort,
         });
         options.onThread('private-thread');
         options.onTurn(`turn-${turnCount}`);
@@ -799,10 +828,19 @@ test('AI service retries one recoverable Codex stream disconnect in the same thr
       'Use the project service layer.',
       '',
     ]);
-    assert.equal(runOptions[0].prompt, runOptions[1].prompt);
+    assert.match(runOptions[0].prompt, /MUST call request_user_input once/);
+    assert.match(runOptions[1].prompt, /previous turn was interrupted/i);
+    assert.match(runOptions[1].prompt, /still requires request_user_input/);
+    assert.deepEqual(runOptions.map((item) => item.reasoningEffort), [
+      'medium',
+      'low',
+    ]);
+    assert.equal(runOptions[0].outputSchema, undefined);
+    assert.equal(runOptions[1].outputSchema, undefined);
+    assert.deepEqual(runOptions[1].inputItems, []);
     assert.equal(awaiting.latestRun.status, 'awaiting_user');
     assert.equal(awaiting.latestRun.errorCode, '');
-    assert.match(writes.join(''), /Codex 连接中断，正在自动重试/);
+    assert.match(writes.join(''), /Codex 连接中断，正在降低推理延迟后重试/);
   } finally {
     repository.close();
     fs.rmSync(root, { recursive: true, force: true });

@@ -67,6 +67,7 @@ export class CodexAppServerClient {
     prompt,
     inputItems = [],
     outputSchema,
+    reasoningEffort = this.reasoningEffort,
     onThread,
     onTurn,
     onDelta,
@@ -119,7 +120,7 @@ export class CodexAppServerClient {
           threadId: resolvedThreadId,
           cwd,
           model: this.model,
-          effort: this.reasoningEffort,
+          effort: reasoningEffort,
           approvalPolicy: 'never',
           sandboxPolicy: {
             type: 'readOnly',

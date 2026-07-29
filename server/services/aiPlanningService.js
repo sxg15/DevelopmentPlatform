@@ -365,12 +365,17 @@ export function createAiPlanningService({
         attachmentContext: runContext.attachmentContext,
         requiresQuestionRound,
       });
+      const configuredReasoningEffort = normalizeReasoningEffort(
+        config.codex?.reasoningEffort,
+      );
 
       const runCodexTurn = ({
         threadId,
         turnPrompt,
         preludePrompt = '',
         inputItems = [],
+        outputSchema,
+        reasoningEffort = configuredReasoningEffort,
       }) => codexClient.runTurn({
         threadId,
         cwd: runContext.cwd,
@@ -378,7 +383,8 @@ export function createAiPlanningService({
         preludePrompt,
         prompt: turnPrompt,
         inputItems,
-        outputSchema: OUTPUT_SCHEMA,
+        outputSchema,
+        reasoningEffort,
         onThread(threadIdValue) {
           taskState.threadId = threadIdValue;
           repository.setConversationThread(
@@ -435,17 +441,30 @@ export function createAiPlanningService({
           }
           reportRunProgress(taskState, {
             stage: AI_RUN_PROGRESS_STAGES.ANALYZING,
-            message: 'Codex 连接中断，正在自动重试',
+            message: 'Codex 连接中断，正在降低推理延迟后重试',
           });
           const retryThreadId = taskState.threadId || options.threadId;
+          const continueInterruptedTurn = Boolean(retryThreadId && taskState.turnId);
           return runCodexTurn({
             ...options,
             threadId: retryThreadId,
-            preludePrompt: retryThreadId ? '' : options.preludePrompt,
+            preludePrompt: continueInterruptedTurn ? '' : options.preludePrompt,
+            turnPrompt: continueInterruptedTurn
+              ? buildTransportRetryPrompt({
+                  requiresQuestionRound: options.requiresQuestionRound,
+                })
+              : options.turnPrompt,
+            inputItems: continueInterruptedTurn ? [] : options.inputItems,
+            reasoningEffort: resolveTransportRetryReasoningEffort(
+              options.reasoningEffort,
+            ),
           });
         }
       };
 
+      const questionReasoningEffort = resolveQuestionTurnReasoningEffort(
+        configuredReasoningEffort,
+      );
       let result = await runCodexTurnWithRetry({
         threadId: conversation.codexThreadId,
         turnPrompt: prompt,
@@ -453,6 +472,11 @@ export function createAiPlanningService({
           ? ''
           : workspace.preludePrompt,
         inputItems: runContext.inputItems,
+        outputSchema: requiresQuestionRound ? undefined : OUTPUT_SCHEMA,
+        reasoningEffort: requiresQuestionRound
+          ? questionReasoningEffort
+          : configuredReasoningEffort,
+        requiresQuestionRound,
       });
       if (taskState.cancelRequested) {
         throw createInterruptedError();
@@ -461,6 +485,9 @@ export function createAiPlanningService({
         result = await runCodexTurnWithRetry({
           threadId: taskState.threadId,
           turnPrompt: buildRequiredQuestionRetryPrompt(),
+          outputSchema: undefined,
+          reasoningEffort: questionReasoningEffort,
+          requiresQuestionRound: true,
         });
       }
       if (taskState.cancelRequested) {
@@ -1015,6 +1042,32 @@ export function buildRequiredQuestionRetryPrompt() {
   ].join('\n');
 }
 
+export function buildTransportRetryPrompt({ requiresQuestionRound = false } = {}) {
+  return [
+    'The previous turn was interrupted by a transport disconnect.',
+    'Continue the same request using the work-item and repository context already present in this thread.',
+    'Do not repeat completed analysis or request the same attachments again.',
+    requiresQuestionRound
+      ? 'This conversation still requires request_user_input with 1 to 3 meaningful confirmation questions before any plan can be produced.'
+      : 'Complete the requested implementation plan and return the required structured result.',
+  ].join('\n');
+}
+
+export function resolveQuestionTurnReasoningEffort(value) {
+  const effort = normalizeReasoningEffort(value);
+  return ['high', 'xhigh', 'max', 'ultra'].includes(effort)
+    ? 'medium'
+    : effort;
+}
+
+export function resolveTransportRetryReasoningEffort(value) {
+  const effort = normalizeReasoningEffort(value);
+  if (['high', 'xhigh', 'max', 'ultra'].includes(effort)) {
+    return 'medium';
+  }
+  return effort === 'medium' ? 'low' : effort;
+}
+
 export function getAllowedAiPlanToolIds(allowedToolIds) {
   const allowed = allowedToolIds instanceof Set
     ? allowedToolIds
@@ -1047,6 +1100,10 @@ export function redactWorkspacePaths(value, workspace) {
     text = text.replace(new RegExp(escapeRegExp(source), 'gi'), replacement);
   }
   return text;
+}
+
+function normalizeReasoningEffort(value) {
+  return String(value || 'high').trim().toLowerCase() || 'high';
 }
 
 export function serializeAiConversation(conversation) {

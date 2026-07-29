@@ -38,6 +38,7 @@ test('Codex app-server client uses JSONL and a key-free config', async () => {
           textItems.length !== 2
           || textItems[0].text !== 'Project-specific instructions'
           || textItems[1].text !== 'Plan this'
+          || message.params.effort !== 'medium'
         ) {
           send({ id: message.id, error: { message: 'prompt order is incorrect' } });
           return;
@@ -158,6 +159,7 @@ test('Codex app-server client uses JSONL and a key-free config', async () => {
       preludePrompt: 'Project-specific instructions',
       prompt: 'Plan this',
       outputSchema: { type: 'object' },
+      reasoningEffort: 'medium',
       onDelta: (delta) => deltas.push(delta),
       onProgress: (progress) => progressEvents.push(progress),
     });
@@ -216,6 +218,13 @@ test('Codex app-server user questions interrupt the turn and resolve as awaiting
       } else if (message.method === 'thread/start') {
         send({ id: message.id, result: { thread: { id: 'thread-question' } } });
       } else if (message.method === 'turn/start') {
+        if (
+          Object.prototype.hasOwnProperty.call(message.params, 'outputSchema')
+          || message.params.effort !== 'medium'
+        ) {
+          send({ id: message.id, error: { message: 'question turn options are incorrect' } });
+          return;
+        }
         send({ id: message.id, result: { turn: { id: 'turn-question' } } });
         setTimeout(() => send({
           id: 91,
@@ -274,7 +283,7 @@ test('Codex app-server user questions interrupt the turn and resolve as awaiting
       cwd: root,
       skillPath: path.join(root, 'SKILL.md'),
       prompt: 'Plan this',
-      outputSchema: { type: 'object' },
+      reasoningEffort: 'medium',
       async onRequestUserInput(value) {
         questions.push(...value);
       },
