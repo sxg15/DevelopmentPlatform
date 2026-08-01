@@ -6,6 +6,8 @@ export const AI_DATABASE_PATH = path.join(AI_DATA_ROOT, 'ai-planning.sqlite');
 export const AI_CODEX_HOME = path.join(AI_DATA_ROOT, 'codex-home');
 export const AI_TEMP_DIR = path.join(AI_DATA_ROOT, 'tmp');
 export const AI_LOG_DIR = path.join(AI_DATA_ROOT, 'logs');
+export const FEISHU_ASSISTANT_DATABASE_PATH = path.join(AI_DATA_ROOT, 'feishu-assistant.sqlite');
+export const FEISHU_ASSISTANT_WORKSPACE_DIR = path.join(AI_DATA_ROOT, 'feishu-assistant-workspace');
 
 export function ensureAiDataDirectories(rootPath = AI_DATA_ROOT) {
   const paths = {
@@ -14,9 +16,17 @@ export function ensureAiDataDirectories(rootPath = AI_DATA_ROOT) {
     codexHome: path.join(rootPath, 'codex-home'),
     temp: path.join(rootPath, 'tmp'),
     logs: path.join(rootPath, 'logs'),
+    assistantDatabase: path.join(rootPath, 'feishu-assistant.sqlite'),
+    assistantWorkspace: path.join(rootPath, 'feishu-assistant-workspace'),
   };
 
-  for (const directory of [paths.root, paths.codexHome, paths.temp, paths.logs]) {
+  for (const directory of [
+    paths.root,
+    paths.codexHome,
+    paths.temp,
+    paths.logs,
+    paths.assistantWorkspace,
+  ]) {
     fs.mkdirSync(directory, { recursive: true });
   }
 

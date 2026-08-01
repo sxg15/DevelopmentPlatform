@@ -25,12 +25,14 @@ export class CodexApiBridge {
     apiKey,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
     bridgeToken = crypto.randomBytes(32).toString('base64url'),
+    onDiagnostic = () => {},
   }) {
     this.upstreamBaseUrl = new URL(apiBaseUrl);
     this.apiKey = String(apiKey || '');
     this.requestTimeoutMs = requestTimeoutMs;
     this.token = bridgeToken;
     this.tokenDigest = digestToken(bridgeToken);
+    this.onDiagnostic = typeof onDiagnostic === 'function' ? onDiagnostic : () => {};
     this.server = null;
     this.startPromise = null;
     this.baseUrl = '';
@@ -152,6 +154,12 @@ export class CodexApiBridge {
       method: request.method,
       headers: buildUpstreamHeaders(request.headers, upstreamUrl, this.apiKey),
     }, (upstreamResponse) => {
+      if (Number(upstreamResponse.statusCode || 502) >= 400) {
+        this.emitDiagnostic(createUpstreamDiagnostic({
+          statusCode: upstreamResponse.statusCode,
+          headers: upstreamResponse.headers,
+        }));
+      }
       const closeDownstream = () => {
         if (!response.destroyed) {
           response.destroy();
@@ -170,7 +178,8 @@ export class CodexApiBridge {
     upstreamRequest.setTimeout(this.requestTimeoutMs, () => {
       upstreamRequest.destroy(new Error('Codex API bridge upstream request timed out'));
     });
-    upstreamRequest.on('error', () => {
+    upstreamRequest.on('error', (error) => {
+      this.emitDiagnostic(createTransportDiagnostic(error));
       if (response.headersSent) {
         response.destroy();
         return;
@@ -193,6 +202,14 @@ export class CodexApiBridge {
       return false;
     }
     return crypto.timingSafeEqual(digestToken(match[1]), this.tokenDigest);
+  }
+
+  emitDiagnostic(diagnostic) {
+    try {
+      this.onDiagnostic(diagnostic);
+    } catch {
+      // Diagnostics must never interrupt a proxied request.
+    }
   }
 }
 
@@ -236,6 +253,86 @@ function filterResponseHeaders(source) {
 
 function digestToken(value) {
   return crypto.createHash('sha256').update(String(value || '')).digest();
+}
+
+function createUpstreamDiagnostic({ statusCode, headers }) {
+  const normalizedStatusCode = Number(statusCode) || 502;
+  const upstreamCode = extractUpstreamErrorCode(headers);
+  return {
+    type: 'upstream_response',
+    statusCode: normalizedStatusCode,
+    category: getUpstreamResponseCategory(normalizedStatusCode, upstreamCode),
+    upstreamCode,
+    requestIdFingerprint: fingerprintRequestId(headers),
+  };
+}
+
+function createTransportDiagnostic(error) {
+  const code = String(error?.code || '').trim().toLowerCase().slice(0, 80);
+  return {
+    type: 'upstream_transport',
+    statusCode: 0,
+    category: code === 'etimedout' ? 'upstream_timeout' : 'upstream_connection_failure',
+    upstreamCode: code,
+    requestIdFingerprint: '',
+  };
+}
+
+function extractUpstreamErrorCode(headers) {
+  return normalizeDiagnosticToken(getHeaderValue(headers, [
+    'x-error-code',
+    'openai-error-code',
+  ]));
+}
+
+function getUpstreamResponseCategory(statusCode, upstreamCode) {
+  if (/model.*(not.*(found|available)|unavailable|unsupported)|unsupported.*model/.test(upstreamCode)) {
+    return 'upstream_model_unavailable';
+  }
+  if (statusCode === 401 || statusCode === 403) {
+    return 'upstream_authentication_failure';
+  }
+  if (statusCode === 429) {
+    return 'upstream_rate_limited';
+  }
+  if (statusCode >= 500) {
+    return 'upstream_gateway_failure';
+  }
+  if (statusCode >= 400) {
+    return 'upstream_request_rejected';
+  }
+  return 'upstream_unexpected_response';
+}
+
+function normalizeDiagnosticToken(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, '_')
+    .slice(0, 120);
+}
+
+function fingerprintRequestId(headers) {
+  const requestId = getHeaderValue(headers, [
+    'x-request-id',
+    'request-id',
+    'openai-request-id',
+    'x-amzn-requestid',
+  ]);
+  return requestId
+    ? crypto.createHash('sha256').update(requestId).digest('hex').slice(0, 12)
+    : '';
+}
+
+function getHeaderValue(headers, names) {
+  for (const name of names) {
+    const value = headers?.[name];
+    const text = Array.isArray(value) ? value[0] : value;
+    if (text) {
+      return String(text);
+    }
+  }
+  return '';
 }
 
 function sendBridgeResponse(response, statusCode, message, headers = {}) {

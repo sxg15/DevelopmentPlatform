@@ -84,6 +84,24 @@ export function createAiPlanningService({
     }).map(serializeAiConversation);
   }
 
+  function getProjectActivity({ user, projectId, allowedToolIds }) {
+    const normalizedToolIds = getAllowedAiPlanToolIds(allowedToolIds);
+    const conversations = repository.listProjectConversationActivity({
+      ownerOpenId: getUserOpenId(user),
+      projectId,
+      allowedToolIds: normalizedToolIds,
+    });
+    const submissions = repository.listProjectSubmissionActivity({
+      projectId,
+      allowedToolIds: normalizedToolIds,
+    });
+    return buildAiProjectActivity({
+      conversations,
+      submissions,
+      allowedToolIds: normalizedToolIds,
+    });
+  }
+
   function createConversation({
     user,
     projectId,
@@ -812,6 +830,53 @@ export function createAiPlanningService({
     return approveSubmission(options);
   }
 
+  function setSubmissionApplied({
+    user,
+    submissionId,
+    projectId,
+    allowedToolIds,
+    applied,
+    clientMutationId,
+  }) {
+    if (typeof applied !== 'boolean') {
+      throw createServiceError('已应用状态必须是布尔值', 400);
+    }
+    const normalizedMutationId = String(clientMutationId || '').trim();
+    if (!normalizedMutationId) {
+      throw createServiceError('缺少 clientMutationId', 400);
+    }
+    if (normalizedMutationId.length > 100) {
+      throw createServiceError('clientMutationId 不能超过 100 字符', 400);
+    }
+    const current = repository.getSubmission(submissionId);
+    const allowed = new Set(allowedToolIds || []);
+    if (
+      !current
+      || current.projectId !== projectId
+      || !allowed.has(current.toolId)
+    ) {
+      return null;
+    }
+    const result = repository.setSubmissionApplied({
+      submissionId,
+      actorOpenId: getUserOpenId(user),
+      actorName: getUserName(user),
+      applied,
+      clientMutationId: normalizedMutationId,
+      mutationFingerprint: createMutationFingerprint({
+        submissionId: current.id,
+        applied,
+      }),
+    });
+    return result
+      ? {
+          submission: serializeSubmission(result.submission, user, { includeMarkdown: true }),
+          duplicate: result.duplicate,
+          changed: result.changed,
+        }
+      : null;
+  }
+
   function rejectSubmission({
     user,
     submissionId,
@@ -953,6 +1018,7 @@ export function createAiPlanningService({
     createSubmission,
     deleteSubmission,
     getConversation,
+    getProjectActivity,
     getSubmission,
     getSubmissionEvents,
     getSubmissionRevisions,
@@ -966,8 +1032,79 @@ export function createAiPlanningService({
       .countPendingSubmissionsForWorkItem(options),
     rejectSubmission,
     sendMessage,
+    setSubmissionApplied,
     subscribe,
     withdrawSubmission,
+  };
+}
+
+export function buildAiProjectActivity({
+  conversations = [],
+  submissions = [],
+  allowedToolIds = [],
+} = {}) {
+  const allowedTools = new Set(getAllowedAiPlanToolIds(allowedToolIds));
+  const itemMap = new Map();
+  const tasks = [];
+
+  function getItem(toolId, recordId) {
+    const key = `${toolId}:${recordId}`;
+    if (!itemMap.has(key)) {
+      itemMap.set(key, {
+        toolId,
+        recordId,
+        state: '',
+        conversationId: '',
+        hasSharedPlan: false,
+        hasPrivateDraft: false,
+        pendingReviewCount: 0,
+        updatedAt: '',
+      });
+    }
+    return itemMap.get(key);
+  }
+
+  for (const submission of submissions) {
+    const toolId = String(submission?.toolId || '').trim();
+    const recordId = String(submission?.recordId || '').trim();
+    if (!allowedTools.has(toolId) || !recordId) {
+      continue;
+    }
+    const item = getItem(toolId, recordId);
+    item.hasSharedPlan = true;
+    item.pendingReviewCount += Math.max(0, Number(submission?.pendingReviewCount || 0));
+    applyAiWorkItemState(item, 'generated', '', '');
+  }
+
+  for (const conversation of conversations) {
+    const toolId = String(conversation?.toolId || '').trim();
+    const recordId = String(conversation?.recordId || '').trim();
+    if (!allowedTools.has(toolId) || !recordId) {
+      continue;
+    }
+    const item = getItem(toolId, recordId);
+    const status = String(conversation?.status || '').trim();
+    const updatedAt = String(conversation?.updatedAt || '').trim();
+    if (conversation?.hasDraft) {
+      item.hasPrivateDraft = true;
+      applyAiWorkItemState(item, 'generated', conversation.id, updatedAt);
+    }
+    if ([AI_CONVERSATION_STATUSES.QUEUED, AI_CONVERSATION_STATUSES.RUNNING].includes(status)) {
+      applyAiWorkItemState(item, 'generating', conversation.id, updatedAt);
+      tasks.push(serializeAiProjectTask(conversation));
+    } else if (status === AI_CONVERSATION_STATUSES.AWAITING_USER) {
+      applyAiWorkItemState(item, 'awaiting_user', conversation.id, updatedAt);
+      tasks.push(serializeAiProjectTask(conversation));
+    }
+  }
+
+  return {
+    tasks,
+    items: [...itemMap.values()].filter((item) => item.state),
+    pendingReviewCount: [...itemMap.values()]
+      .reduce((total, item) => total + item.pendingReviewCount, 0),
+    activeTaskCount: tasks.length,
+    allowedToolIds: [...allowedTools],
   };
 }
 
@@ -1104,6 +1241,46 @@ export function redactWorkspacePaths(value, workspace) {
 
 function normalizeReasoningEffort(value) {
   return String(value || 'high').trim().toLowerCase() || 'high';
+}
+
+function applyAiWorkItemState(item, state, conversationId, updatedAt) {
+  const statePriority = {
+    generated: 1,
+    awaiting_user: 2,
+    generating: 3,
+  };
+  const currentPriority = statePriority[item.state] || 0;
+  const nextPriority = statePriority[state] || 0;
+  if (
+    nextPriority < currentPriority
+    || (
+      nextPriority === currentPriority
+      && item.updatedAt
+      && Date.parse(updatedAt || '') <= Date.parse(item.updatedAt)
+    )
+  ) {
+    return;
+  }
+  item.state = state;
+  item.conversationId = String(conversationId || '');
+  item.updatedAt = String(updatedAt || '');
+}
+
+function serializeAiProjectTask(conversation) {
+  return {
+    conversationId: conversation.id,
+    toolId: conversation.toolId,
+    recordId: conversation.recordId,
+    title: conversation.title,
+    status: conversation.status,
+    startedAt: conversation.latestRun?.startedAt || '',
+    updatedAt: conversation.updatedAt,
+    progress: {
+      stage: conversation.latestRun?.progressStage || '',
+      message: conversation.latestRun?.progressMessage || '',
+      updatedAt: conversation.latestRun?.progressUpdatedAt || '',
+    },
+  };
 }
 
 export function serializeAiConversation(conversation) {
@@ -1377,6 +1554,7 @@ function serializeSubmission(submission, user, { includeMarkdown }) {
     authorOpenId: undefined,
     revisionAuthorOpenId: undefined,
     reviewedByOpenId: undefined,
+    appliedByOpenId: undefined,
     conversationId: undefined,
     clientMutationId: undefined,
     mutationFingerprint: undefined,

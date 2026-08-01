@@ -27,8 +27,17 @@ if (-not (Test-Path -LiteralPath $exampleConfigFile -PathType Leaf)) {
     throw '缺少 config/config.example.json'
 }
 
-if (Test-Path -LiteralPath (Join-Path $publishDir 'StopWebBackend.bat')) {
-    cmd /c (Join-Path $publishDir 'StopWebBackend.bat') | Out-Null
+$publishedController = Join-Path $publishDir 'server\runtime\backendProcessController.js'
+$publishedNode = Join-Path $publishDir 'runtime\node.exe'
+if ((Test-Path -LiteralPath $publishedController -PathType Leaf) -and (Test-Path -LiteralPath $publishedNode -PathType Leaf)) {
+    & $publishedNode $publishedController stop `
+        --root $publishDir `
+        --state-root (Join-Path $publishDir 'runtime') `
+        --node-exe $publishedNode `
+        --server-entry (Join-Path $publishDir 'server\index.js') | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw '无法安全停止现有便携 Web 后端，已取消重新构建'
+    }
     Start-Sleep -Seconds 1
 }
 if (Test-Path -LiteralPath (Join-Path $publishDir 'StopConfigureWebBackend.bat')) {
@@ -103,6 +112,7 @@ foreach ($requiredFile in @(
     (Join-Path $publishRuntimeDir 'dependency-version.txt'),
     (Join-Path $publishDir 'EnsureDependencies.ps1'),
     (Join-Path $publishServerDir 'ai\skills\work-item-plan\SKILL.md'),
+    (Join-Path $publishServerDir 'runtime\backendProcessController.js'),
     (Join-Path $publishServerDir 'config\configEditorServer.js'),
     (Join-Path $publishServerDir 'config\stopConfigEditor.js'),
     (Join-Path $publishServerDir 'config\selectFolder.ps1'),
@@ -147,9 +157,25 @@ if errorlevel 1 (
 )
 echo.
 echo Starting IGP Web Backend...
-set NODE_ENV=production
-start "IGP Web Backend" /min cmd /c "runtime\node.exe --disable-warning=ExperimentalWarning server\index.js > server.log 2> server.err.log"
-echo Web backend service started.
+set "STATE_ROOT=%CD%\runtime"
+set "NODE_EXE=%CD%\runtime\node.exe"
+set "CONFIG_PATH=%CD%\config.json"
+if exist "..\..\state\deployment.json" (
+  for %%I in ("..\..\state") do set "STATE_ROOT=%%~fI"
+  for %%I in ("..\..\runtime\node.exe") do set "NODE_EXE=%%~fI"
+  for %%I in ("..\..\state\config.json") do set "CONFIG_PATH=%%~fI"
+)
+if not exist "%CD%\server\runtime\backendProcessController.js" (
+  echo Backend process controller is missing.
+  pause
+  exit /b 1
+)
+"%NODE_EXE%" "%CD%\server\runtime\backendProcessController.js" start --root "%CD%" --state-root "%STATE_ROOT%" --node-exe "%NODE_EXE%" --server-entry "%CD%\server\index.js" --config-path "%CONFIG_PATH%"
+if errorlevel 1 (
+  echo Web backend service failed to start.
+  pause
+  exit /b 1
+)
 echo Please open http://172.16.20.205:3000/
 endlocal
 '@
@@ -157,11 +183,29 @@ endlocal
 $stopBat = @'
 @echo off
 setlocal
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3000" ^| findstr "LISTENING"') do (
-  echo Stopping process %%a...
-  taskkill /PID %%a /F >nul 2>nul
+cd /d "%~dp0"
+set "STATE_ROOT=%CD%\runtime"
+set "NODE_EXE=%CD%\runtime\node.exe"
+if exist "..\..\state\deployment.json" (
+  for %%I in ("..\..\state") do set "STATE_ROOT=%%~fI"
+  for %%I in ("..\..\runtime\node.exe") do set "NODE_EXE=%%~fI"
 )
-echo Web backend service stopped.
+if not exist "%NODE_EXE%" (
+  echo Bundled Node runtime is missing.
+  pause
+  exit /b 1
+)
+if not exist "%CD%\server\runtime\backendProcessController.js" (
+  echo Backend process controller is missing.
+  pause
+  exit /b 1
+)
+"%NODE_EXE%" "%CD%\server\runtime\backendProcessController.js" stop --root "%CD%" --state-root "%STATE_ROOT%" --node-exe "%NODE_EXE%" --server-entry "%CD%\server\index.js"
+if errorlevel 1 (
+  echo Web backend service failed to stop.
+  pause
+  exit /b 1
+)
 endlocal
 '@
 

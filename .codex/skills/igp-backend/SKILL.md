@@ -18,6 +18,10 @@ Read `AGENTS.md`, then locate the owning layer.
   `server/config/configEditorUtils.js`.
 - Feishu auth and generic requests: `server/integrations/feishuClient.js`.
 - Bitable CRUD and caches: `server/integrations/bitableClient.js`.
+- Bitable realtime cache and Feishu event coordination:
+  `server/services/bitableTableDataService.js`,
+  `server/services/feishuBitableEventService.js`, and
+  `server/runtime/tableSnapshotCache.js`.
 - Wiki nodes and copy tasks: `server/integrations/wikiClient.js`.
 - Sessions, SSE, cache primitives, and client error logging: `server/runtime/`.
 - Update manifest fetch: `server/services/updateService.js`.
@@ -39,6 +43,10 @@ Read `AGENTS.md`, then locate the owning layer.
 - AI Feishu delivery and durable retries:
   `server/integrations/feishuMessageClient.js` and
   `server/services/aiPlanningNotificationService.js`.
+- Feishu private-chat assistant:
+  `server/services/feishuAssistantService.js`,
+  `server/repositories/feishuAssistantRepository.js`, and
+  `shared/feishuAssistantDefinitions.js`.
 - Daily reminder timing: `server/services/todoNotificationScheduler.js`;
   reminder orchestration and cards remain in `server/index.js`.
 
@@ -49,6 +57,27 @@ Read `AGENTS.md`, then locate the owning layer.
   the contract.
 - Keep HTTP details and integration-specific caches under `server/integrations/`.
 - Keep process-local infrastructure state under `server/runtime/`.
+- Keep long-connection lifecycle in `server/integrations/`, cache state in
+  `server/runtime/`, and event-to-domain reconciliation in `server/services/`.
+- Preserve `projectId`, `toolId`, and `recordId` in work-item SSE. Optional
+  `changeType` remains `updated` or `deleted`; do not expose raw Feishu events.
+- Register private-chat handlers only for `im.message.receive_v1` and
+  `card.action.trigger`. Accept only `p2p` text messages, dedupe inbound events
+  and nonempty Feishu message IDs before processing, and validate callback actor,
+  card nonce, draft version, and expiry before any action.
+- The assistant may use Codex only for structured intent/draft extraction. It must
+  run in an empty read-only workspace, never expose a general Feishu/Bitable tool
+  surface, and never write before an explicit confirmation action.
+- Keep assistant model settings separate from `aiPlanning.codex`: default to
+  `gpt-5.6-luna` with `none` reasoning and a 15-second ceiling. Retry only
+  recognized unavailable-model errors once with `gpt-5.6-terra` and `low`
+  reasoning; do not retry timeouts or output/protocol errors with the fallback.
+- Never return Codex transport, upstream, bridge, URL, or request-ID errors to a
+  Feishu user. Finish a failed inbound message once and rely on the durable
+  outbound queue only for message-delivery retries.
+- Reuse work-item permission, schema, notification, and unassigned-routing rules
+  for assistant mutations. Preserve hidden source mutation metadata in comments
+  JSON and serialize it out of browser/API payloads.
 - Keep config normalization pure and test it without reading runtime secrets.
 - Apply project/tool permission checks before accessing work-item data.
 - Do not expose `appSecret`, tenant/user tokens, or runtime config values.
@@ -109,11 +138,11 @@ Read `AGENTS.md`, then locate the owning layer.
   Hash both sides to fixed-length digests before timing-safe comparison, reject
   malformed or duplicate matches with the same generic 401 response, and never log
   or return the token from MCP routes.
-- Keep the MCP surface at the registered eleven tools for project discovery,
+- Keep the MCP surface at the registered twelve tools for project discovery,
   assigned work items, safe work-item detail, project/version overviews, pending
-  AI-plan reviews, approved AI plans, comments, external AI-plan submission, and
-  status updates. Update protocol and dispatcher tests together when this contract
-  changes.
+  AI-plan reviews, approved AI plans, approved-plan application-state changes,
+  comments, external AI-plan submission, and status updates. Update protocol and
+  dispatcher tests together when this contract changes.
 - Query approved submissions only across projects where the user currently has
   requirement/Bug and AI-plan access. Require a current assignee match by Open ID,
   User ID, Union ID, or email, and repeat access plus assignment checks for detail
@@ -152,6 +181,11 @@ Read `AGENTS.md`, then locate the owning layer.
 - Persist question sets, answers, attachment summaries, and notification outbox
   entries. Preserve pending questions across restart while interrupting only
   queued/running work.
+- Allow different conversations owned by the same user to run concurrently.
+  Configure total, per-user, and per-project AI limits through
+  `maxConcurrentRuns`, `maxConcurrentRunsPerUser`, and
+  `maxConcurrentRunsPerProject`; a per-user value of `0` means unlimited.
+  Keep one active run per conversation.
 - Run Codex with `read-only`, no approvals, and no tool network access. Keep the
   API key out of generated Codex config, browser payloads, logs, errors, and shell
   tool environments.
@@ -200,6 +234,10 @@ Read `AGENTS.md`, then locate the owning layer.
 - Publish owner-only conversation snapshots after progress changes. Browser
   payloads may include the safe stage, message, update time, and activity count,
   while terminal failures retain a sanitized error code/message and timestamps.
+- Serve one project-level AI activity summary for the authenticated owner. It may
+  include active conversation IDs, safe progress text, private-draft existence,
+  shared pending/approved existence, and pending-review counts, but never messages,
+  owner IDs, Codex thread/turn/run IDs, prompts, or attachment data.
 - Default AI planning to enabled with model `gpt-5.6-sol`. Missing Codex credentials or
   project roots must not block general backend startup; validate them before
   creating or running AI conversations and shared-plan operations.
@@ -229,6 +267,12 @@ Read `AGENTS.md`, then locate the owning layer.
   project/tool/record. Reviewer edits create a new immutable pending revision,
   rejection requires a reason, and approving a replacement supersedes the
   previously approved plan without deleting its history.
+- Store `已应用` separately from AI plan review status. Permit setting or removing
+  it only while the plan remains approved and the work item exists. Browser
+  mutations allow current assignees and project/global administrators; MCP
+  mutations require current assignment. Persist actor/time, audit both changes,
+  dedupe by actor plus `clientMutationId`, and clear the marker when the plan is
+  superseded.
 - Notify current assignees when a plan is submitted, or development super-admins
   when the work item is unassigned. Newly added assignees receive one pending-plan
   card or one aggregate card, and approval/rejection/edit/replacement outcomes

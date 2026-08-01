@@ -15,6 +15,14 @@ export function replaceWorkItemByRecordId(items, updatedItem) {
   return items.map((item) => (getWorkItemRecordId(item) === recordId ? updatedItem : item));
 }
 
+export function removeWorkItemByRecordId(items, recordId) {
+  const normalizedRecordId = String(recordId || '').trim();
+  if (!normalizedRecordId || !Array.isArray(items)) {
+    return Array.isArray(items) ? items : [];
+  }
+  return items.filter((item) => getWorkItemRecordId(item) !== normalizedRecordId);
+}
+
 export function countWaitingAssignedWorkItems(toolId, items, user) {
   const userKeys = getWorkItemUserKeys(user);
   const waitingStatus = getWaitingWorkItemStatus(toolId);

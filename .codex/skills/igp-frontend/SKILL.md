@@ -96,6 +96,8 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
   Comments remain available to all project members.
 - Support `version-detail` and `version-comment` direct targets plus realtime
   refresh events with `toolId: 'versions'`.
+- Handle realtime work-item `changeType: 'deleted'` by removing the item from the
+  loaded state and local snapshot, then recomputing pending counts.
 - Normalize cached overview version data before rendering. An absent version table
   is a quiet uninitialized state, not an error and not a provisioning trigger.
 - Version Management uses a user/project-isolated IndexedDB snapshot for its
@@ -135,6 +137,16 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
   original-work-item navigation, revision history, audit events, and
   Markdown download. Render approve/reject/edit controls from server permissions,
   require a rejection reason, and create a new revision for reviewer edits.
+- Show the independent `已应用` marker in AI plan list and detail views. Only
+  render its toggle when `permissions.canSetApplied` is true, keep it separate
+  from review status, and show the persisted actor and time when applied.
+- Poll the project-level AI activity summary instead of issuing per-work-item
+  requests. Requirement/Bug rows show animated generation, pending-question, or
+  existing-plan badges; the AI Plan navigation uses an `x待审核` badge; and the AI
+  Plan page shows owner-private active tasks that open the exact conversation.
+- Keep AI visuals vivid but operational: use cyan/teal with magenta and amber
+  accents, reserve animation for active generation, and disable it under
+  `prefers-reduced-motion`.
 - Show shared-plan deletion only when the detail payload grants `canDelete`.
   Confirm that deletion removes the complete revision history and clear the
   selected detail before refreshing the list.

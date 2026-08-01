@@ -1340,6 +1340,7 @@
 }
 
 .requirement-id {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   color: rgba(66, 86, 80, 0.5);
@@ -1348,6 +1349,67 @@
   line-height: 17px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.requirement-id-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+}
+
+.requirement-ai-status {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 20px;
+  flex: 0 0 auto;
+  gap: 4px;
+  padding: 1px 7px;
+  color: #064e5b;
+  background: linear-gradient(105deg, #cffafe 0%, #fce7f3 52%, #fef3c7 100%);
+  border: 1px solid #67d9e7;
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(8, 145, 178, 0.14);
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.requirement-ai-status svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  stroke-width: 2.5;
+}
+
+.requirement-ai-status.is-generating {
+  color: #ffffff;
+  background: linear-gradient(110deg, #0891b2 0%, #0d9488 38%, #db2777 72%, #f59e0b 100%);
+  background-size: 220% 100%;
+  border-color: #0e7490;
+  box-shadow:
+    0 0 0 1px rgba(219, 39, 119, 0.15),
+    0 3px 12px rgba(8, 145, 178, 0.28);
+  animation:
+    ai-color-flow 2.4s linear infinite,
+    ai-status-pulse 1.8s ease-in-out infinite;
+}
+
+.requirement-ai-status.is-generating svg {
+  animation: ai-icon-spin 1s linear infinite;
+}
+
+.requirement-ai-status.is-awaiting_user {
+  color: #713f12;
+  background: linear-gradient(105deg, #fef3c7 0%, #fed7aa 48%, #fbcfe8 100%);
+  border-color: #f59e0b;
+}
+
+.requirement-ai-status.is-generated {
+  color: #0c4a6e;
+  border-color: #22d3ee;
 }
 
 .requirement-description {

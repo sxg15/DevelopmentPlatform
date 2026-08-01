@@ -66,6 +66,7 @@ test('artifact utility validates portable output and creates stable release iden
     for (const relativePath of [
       'client/index.html',
       'server/index.js',
+      'server/runtime/backendProcessController.js',
       'runtime/node.exe',
       'runtime/npm/bin/npm-cli.js',
       'runtime/dependency-version.txt',

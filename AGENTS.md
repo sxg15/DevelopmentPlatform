@@ -15,6 +15,8 @@ Read this file before changing code. Also load the matching project skill under
 - `igp-test-release` for verification, versioning, packaging, and release logs.
 - `igp-lan-deploy` for the Electron LAN deployment tool, remote service control,
   logs, Inspector tunneling, and required post-change target verification.
+- `igp-feishu-realtime-cache` for Bitable snapshot caches, Feishu long-connection
+  events, realtime reconciliation, and portable backend process control.
 
 Update the relevant skill whenever module ownership, workflow rules, configuration,
 or validation commands change.
@@ -39,6 +41,8 @@ or validation commands change.
   and diagnostic identifiers.
 - `shared/aiPlanningDefinitions.js`: AI conversation, run-progress, question,
   message, and submitted-plan contracts.
+- `shared/feishuAssistantDefinitions.js`: Feishu private-chat intents, draft
+  normalization, confirmation actions, missing-field checks, and task ranking.
 - `shared/updateManifest.js`: update manifest and semantic version handling.
 
 Shared modules must remain runtime-neutral and importable from Node tests.
@@ -110,10 +114,24 @@ Shared modules must remain runtime-neutral and importable from Node tests.
   proxy settings.
 - `server/integrations/feishuMessageClient.js`: interactive Feishu message HTTP
   delivery.
+- `server/repositories/feishuAssistantRepository.js`: durable private-chat
+  conversations, inbox dedupe, cards, executions, and outbound retries.
+- `server/services/feishuAssistantService.js`: private-chat state machine,
+  Codex intent extraction, confirmation cards, task replies, and safe mutations.
 - `server/runtime/`: async cache, sessions, SSE hub, network helpers, and sanitized
   client-error log entries. Browser runtime errors append to
   `logs/client-errors.log` in development and `Publish/logs/client-errors.log` in
   production, with one 10 MB rotated backup.
+- `server/runtime/tableSnapshotCache.js`: memory-only Bitable table snapshots,
+  stale-while-revalidate, record indexes, and cache statistics.
+- `server/runtime/backendProcessController.js`: portable/managed launcher lock,
+  PID command-line verification, graceful stop, and verified process-tree fallback.
+- `server/services/bitableTableDataService.js`: cache-aware Bitable record gateway.
+- `server/services/feishuBitableEventService.js`: event normalization, dedupe,
+  record debounce, cache reconciliation, and existing SSE publication.
+- `server/integrations/feishuLongConnectionClient.js` and
+  `server/integrations/feishuDocumentEventSubscriptionClient.js`: Feishu SDK
+  long connection and per-Bitable document event subscription boundaries.
 - `server/runtime/keyedTaskQueue.js`: serializes mutations for the same stable key
   while allowing unrelated users to proceed concurrently.
 - `server/runtime/idempotentMutation.js` and `mutationFingerprint.js`: shared
@@ -222,11 +240,11 @@ rollback release.
   authenticates with `Authorization: Bearer <开发平台令牌>` before dispatch; the
   token is never a tool argument. Token lookup reads current personal-settings
   records on every request so regeneration invalidates the old token immediately.
-- The MCP surface contains exactly eleven tools:
+- The MCP surface contains exactly twelve tools:
   `list_accessible_projects`, `list_my_work_items`, `get_work_item_detail`,
   `get_project_overview`, `get_project_version_overview`,
   `list_my_pending_ai_plan_reviews`, `get_my_approved_ai_plans`,
-  `add_work_item_comment`, `submit_ai_plan_for_review`,
+  `set_ai_plan_applied`, `add_work_item_comment`, `submit_ai_plan_for_review`,
   `add_version_comment`, and `update_work_item_status`.
 - MCP "my work" and approved-plan reads match current assignees only by Open ID,
   User ID, Union ID, or email. Never match by name. Detail reads repeat current
@@ -301,6 +319,12 @@ rollback release.
   events. Only the original submitter, project `研发超级管理员`, or global
   `超级管理员` may delete it. Deleting an approved plan also removes it from MCP
   reads.
+- AI plan `已应用` is an independent, reversible marker, not a review status.
+  Only approved plans with an existing work item may change it. Browser changes
+  permit current assignees plus project/global administrators; MCP changes require
+  the authenticated user to remain a current assignee. Persist actor/time and
+  audit events, require idempotent mutation IDs, and clear the marker when an
+  approved plan is superseded.
 - Pending AI questions, answers, attachment summaries, and notification outbox
   entries must survive backend restarts. Restart recovery interrupts only queued or
   running work; it must preserve conversations waiting for user input.
@@ -308,10 +332,23 @@ rollback release.
   attachments within configured limits. Attachment content and download tokens are
   ephemeral and must never be persisted in conversations, browser payloads, logs,
   notifications, or submitted plans.
+- Project AI activity summaries expose only the authenticated owner's active
+  conversation IDs, safe progress labels, per-work-item generated/waiting/running
+  state, and shared pending-review counts. Never expose messages, owner IDs, Codex
+  thread/turn/run IDs, prompts, attachment data, or another user's private tasks.
+- Requirement and Bug lists show vivid AI state badges for active generation,
+  pending questions, and existing private/shared plans. The AI Plan navigation
+  badge uses the visible shared-plan pending-review count, while the AI Plan page
+  shows the owner's active tasks and opens the exact private conversation.
 - Send AI planning Feishu cards only to the private conversation owner when
   questions require input, a plan is ready, or a run fails. Card links must target
   the exact conversation and focused UI section; notification failures never
   change the AI run result.
+- The Feishu private-chat assistant accepts only `p2p` text messages and supports
+  requirement/Bug drafts, assigned pending-task reads, and task prioritization.
+  It must never create a work item before an owner-confirmed one-time card action.
+  Project selection and assignee permissions are server-validated; explicit
+  unassigned routing reuses the requirement/Bug development-super-admin flow.
 
 ## Configuration And Secrets
 
@@ -324,6 +361,12 @@ rollback release.
 - AI planning defaults to enabled with Codex model `gpt-5.6-sol`; incomplete Codex
   credentials or project roots must not prevent the rest of the backend from
   starting, but AI endpoints still require complete validation.
+- `aiPlanning.assistant` is enabled by default. It uses `gpt-5.6-luna` with
+  `none` reasoning and a 15-second response ceiling, then retries only a
+  recognized unavailable-model error with `gpt-5.6-terra` and `low` reasoning.
+  It shares the Codex connection but uses a separate database and empty read-only
+  workspace; never persist tokens, attachment content, or Codex reasoning in
+  private-chat records.
 - Send Codex Responses traffic through the backend-owned loopback API bridge.
   Bind only to `127.0.0.1`, authenticate with an ephemeral token, allow only the
   Responses endpoints, replace the bridge token with the upstream key server-side,

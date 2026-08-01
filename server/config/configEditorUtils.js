@@ -81,6 +81,7 @@ export function validateConfigDocument(config, options = {}) {
   validatePositiveInteger(errors, config?.dashboard?.cacheTtlMs, 'dashboard.cacheTtlMs', '概览缓存时间');
   validatePositiveInteger(errors, config?.dashboard?.staleDays, 'dashboard.staleDays', '无进展天数');
   validatePositiveInteger(errors, config?.dashboard?.dueSoonDays, 'dashboard.dueSoonDays', '即将到期天数');
+  validateBitableCache(errors, config?.bitable?.cache);
 
   const aiPlanning = config?.aiPlanning || {};
   const codex = aiPlanning.codex || {};
@@ -94,8 +95,22 @@ export function validateConfigDocument(config, options = {}) {
     errors,
     codex.maxConcurrentRuns,
     'aiPlanning.codex.maxConcurrentRuns',
-    'Codex 最大并发数',
+    'Codex 最大总并发数',
   );
+  validateNonNegativeInteger(
+    errors,
+    codex.maxConcurrentRunsPerUser,
+    'aiPlanning.codex.maxConcurrentRunsPerUser',
+    'Codex 单用户并发上限',
+  );
+  validatePositiveInteger(
+    errors,
+    codex.maxConcurrentRunsPerProject,
+    'aiPlanning.codex.maxConcurrentRunsPerProject',
+    'Codex 单项目并发上限',
+  );
+  validateAiConcurrencyRelationships(errors, codex);
+  validateAiAssistant(errors, aiPlanning.assistant);
   const attachments = aiPlanning.attachments;
   if (attachments && typeof attachments === 'object') {
     for (const [field, label] of [
@@ -206,6 +221,59 @@ export function mergeConfigObjects(target, source) {
   return result;
 }
 
+function validateBitableCache(errors, cache) {
+  if (!cache || typeof cache !== 'object') {
+    return;
+  }
+  for (const [field, label] of [
+    ['freshTtlMs', '多维表格缓存新鲜时间'],
+    ['staleWhileRevalidateMs', '多维表格后台刷新时间'],
+    ['maxSnapshots', '多维表格缓存表数量'],
+    ['eventDebounceMs', '飞书事件合并时间'],
+    ['eventDedupeTtlMs', '飞书事件去重时间'],
+    ['maxEventIds', '飞书事件去重数量'],
+  ]) {
+    validatePositiveInteger(errors, cache[field], `bitable.cache.${field}`, label);
+  }
+}
+
+function validateAiConcurrencyRelationships(errors, codex) {
+  const maxConcurrentRuns = Number(codex?.maxConcurrentRuns);
+  const maxPerUser = Number(codex?.maxConcurrentRunsPerUser);
+  const maxPerProject = Number(codex?.maxConcurrentRunsPerProject);
+  if (!Number.isInteger(maxConcurrentRuns) || maxConcurrentRuns <= 0) {
+    return;
+  }
+  if (Number.isInteger(maxPerUser) && maxPerUser > maxConcurrentRuns) {
+    errors.push({
+      path: 'aiPlanning.codex.maxConcurrentRunsPerUser',
+      message: 'Codex 单用户并发上限不能超过最大总并发数',
+    });
+  }
+  if (Number.isInteger(maxPerProject) && maxPerProject > maxConcurrentRuns) {
+    errors.push({
+      path: 'aiPlanning.codex.maxConcurrentRunsPerProject',
+      message: 'Codex 单项目并发上限不能超过最大总并发数',
+    });
+  }
+}
+
+function validateAiAssistant(errors, assistant) {
+  if (!assistant || typeof assistant !== 'object') {
+    return;
+  }
+  requireText(errors, assistant.model, 'aiPlanning.assistant.model', '机器人主模型');
+  requireText(errors, assistant.fallbackModel, 'aiPlanning.assistant.fallbackModel', '机器人降级模型');
+  for (const [field, label] of [
+    ['requestTimeoutMs', '机器人 Codex 请求超时'],
+    ['pollIntervalMs', '机器人轮询间隔'],
+    ['draftTtlHours', '机器人草稿有效小时数'],
+    ['retentionDays', '机器人会话保留天数'],
+  ]) {
+    validatePositiveInteger(errors, assistant[field], `aiPlanning.assistant.${field}`, label);
+  }
+}
+
 function validateAiProjects(errors, projects, options, requireRunnableProjects) {
   if (!requireRunnableProjects) {
     return;
@@ -301,6 +369,13 @@ function validatePositiveInteger(errors, value, fieldPath, label) {
   const number = Number(value);
   if (!Number.isInteger(number) || number <= 0) {
     errors.push({ path: fieldPath, message: `${label}必须是正整数` });
+  }
+}
+
+function validateNonNegativeInteger(errors, value, fieldPath, label) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0) {
+    errors.push({ path: fieldPath, message: `${label}必须是非负整数` });
   }
 }
 

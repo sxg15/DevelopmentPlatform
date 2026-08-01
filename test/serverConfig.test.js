@@ -16,6 +16,9 @@ test('packaged example config includes the development platform AI project prese
   assert.ok(project);
   assert.equal(project.enabled, true);
   assert.equal(project.preludePrompt, '');
+  assert.equal(exampleConfig.aiPlanning.codex.maxConcurrentRuns, 6);
+  assert.equal(exampleConfig.aiPlanning.codex.maxConcurrentRunsPerUser, 0);
+  assert.equal(exampleConfig.aiPlanning.codex.maxConcurrentRunsPerProject, 4);
   assert.deepEqual(project.roots, [{
     id: 'main',
     path: 'D:\\DevelopmentPlatformProject',
@@ -57,11 +60,26 @@ test('server config normalization preserves workflow field defaults', () => {
   assert.equal(config.aiPlanning.codex.apiBaseUrl, 'https://api.openai.com/v1');
   assert.equal(config.aiPlanning.codex.reasoningEffort, 'high');
   assert.equal(config.aiPlanning.codex.requestTimeoutMs, 600000);
+  assert.equal(config.aiPlanning.codex.maxConcurrentRuns, 6);
+  assert.equal(config.aiPlanning.codex.maxConcurrentRunsPerUser, 0);
+  assert.equal(config.aiPlanning.codex.maxConcurrentRunsPerProject, 4);
   assert.equal(config.aiPlanning.attachments.enabled, true);
   assert.equal(config.aiPlanning.attachments.maxFiles, 10);
   assert.equal(config.aiPlanning.attachments.maxFileBytes, 20 * 1024 * 1024);
   assert.equal(config.aiPlanning.attachments.maxTotalBytes, 50 * 1024 * 1024);
   assert.equal(config.aiPlanning.notifications.enabled, true);
+  assert.equal(config.aiPlanning.assistant.enabled, true);
+  assert.equal(config.aiPlanning.assistant.model, 'gpt-5.6-luna');
+  assert.equal(config.aiPlanning.assistant.reasoningEffort, 'none');
+  assert.equal(config.aiPlanning.assistant.fallbackModel, 'gpt-5.6-terra');
+  assert.equal(config.aiPlanning.assistant.fallbackReasoningEffort, 'low');
+  assert.equal(config.aiPlanning.assistant.requestTimeoutMs, 15_000);
+  assert.equal(config.aiPlanning.assistant.draftTtlHours, 24);
+  assert.equal(config.feishu.events.enabled, true);
+  assert.equal(config.bitable.cache.enabled, true);
+  assert.equal(config.bitable.cache.freshTtlMs, 30_000);
+  assert.equal(config.bitable.cache.staleWhileRevalidateMs, 300_000);
+  assert.equal(config.bitable.cache.maxSnapshots, 128);
 });
 
 test('server config normalization accepts custom work item and permission fields', () => {
@@ -74,6 +92,10 @@ test('server config normalization accepts custom work item and permission fields
       },
     },
     bitable: {
+      cache: {
+        freshTtlMs: 15_000,
+        maxSnapshots: 16,
+      },
       projectPermission: {
         fieldNames: {
           developmentSuperAdmins: '研发负责人',
@@ -101,12 +123,24 @@ test('server config normalization accepts custom work item and permission fields
         apiBaseUrl: 'https://example.test/v1/',
         apiKey: 'not-a-real-key',
         maxConcurrentRuns: 5,
+        maxConcurrentRunsPerUser: 2,
+        maxConcurrentRunsPerProject: 3,
+      },
+      assistant: {
+        model: 'assistant-custom',
+        reasoningEffort: 'low',
+        fallbackModel: 'assistant-fallback',
+        fallbackReasoningEffort: 'medium',
+        requestTimeoutMs: 8_000,
       },
       projects: [{
         projectId: 'P1',
         preludePrompt: '  Follow the project architecture.\nPrefer existing services.  ',
         roots: [{ id: 'main', path: 'D:\\Projects\\P1', profile: 'unity' }],
       }],
+    },
+    feishu: {
+      events: { enabled: false },
     },
   });
 
@@ -130,11 +164,58 @@ test('server config normalization accepts custom work item and permission fields
   assert.equal(config.aiPlanning.codex.model, 'codex-custom');
   assert.equal(config.aiPlanning.codex.apiBaseUrl, 'https://example.test/v1');
   assert.equal(config.aiPlanning.codex.maxConcurrentRuns, 5);
+  assert.equal(config.aiPlanning.codex.maxConcurrentRunsPerUser, 2);
+  assert.equal(config.aiPlanning.codex.maxConcurrentRunsPerProject, 3);
+  assert.equal(config.aiPlanning.assistant.model, 'assistant-custom');
+  assert.equal(config.aiPlanning.assistant.reasoningEffort, 'low');
+  assert.equal(config.aiPlanning.assistant.fallbackModel, 'assistant-fallback');
+  assert.equal(config.aiPlanning.assistant.fallbackReasoningEffort, 'medium');
+  assert.equal(config.aiPlanning.assistant.requestTimeoutMs, 8_000);
   assert.equal(
     config.aiPlanning.projects[0].preludePrompt,
     'Follow the project architecture.\nPrefer existing services.',
   );
   assert.equal(config.aiPlanning.projects[0].roots[0].profile, 'unity');
+  assert.equal(config.feishu.events.enabled, false);
+  assert.equal(config.aiPlanning.assistant.retentionDays, 30);
+  assert.equal(config.bitable.cache.freshTtlMs, 15_000);
+  assert.equal(config.bitable.cache.maxSnapshots, 16);
+});
+
+test('server config allows explicitly disabling the Feishu assistant', () => {
+  const config = normalizeConfig({
+    aiPlanning: {
+      assistant: {
+        enabled: false,
+      },
+    },
+  });
+
+  assert.equal(config.aiPlanning.assistant.enabled, false);
+});
+
+test('server config migrates legacy AI concurrency defaults without overriding custom totals', () => {
+  const legacy = normalizeConfig({
+    aiPlanning: {
+      codex: {
+        maxConcurrentRuns: 3,
+      },
+    },
+  });
+  assert.equal(legacy.aiPlanning.codex.maxConcurrentRuns, 6);
+  assert.equal(legacy.aiPlanning.codex.maxConcurrentRunsPerUser, 0);
+  assert.equal(legacy.aiPlanning.codex.maxConcurrentRunsPerProject, 4);
+
+  const custom = normalizeConfig({
+    aiPlanning: {
+      codex: {
+        maxConcurrentRuns: 2,
+      },
+    },
+  });
+  assert.equal(custom.aiPlanning.codex.maxConcurrentRuns, 2);
+  assert.equal(custom.aiPlanning.codex.maxConcurrentRunsPerUser, 0);
+  assert.equal(custom.aiPlanning.codex.maxConcurrentRunsPerProject, 2);
 });
 
 test('runtime config and client error logs honor managed deployment paths', () => {

@@ -96,6 +96,9 @@ function createService(overrides = {}) {
     async submitAiPlanForReview(args) {
       return { submission: args.clientMutationId };
     },
+    async setAiPlanApplied(args) {
+      return { applied: args.applied, mutation: args.clientMutationId };
+    },
     async addVersionComment(args) {
       return { versionComment: args.clientMutationId };
     },
@@ -186,4 +189,16 @@ test('MCP dispatcher routes read and write tools to their owning callbacks', asy
     },
   });
   assert.equal(mutation.mutation, 'mutation-1');
+
+  const application = await service.execute({
+    toolName: DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.SET_AI_PLAN_APPLIED,
+    authContext,
+    arguments: {
+      submissionId: 'plan-1',
+      applied: true,
+      clientMutationId: 'mutation-2',
+    },
+  });
+  assert.equal(application.applied, true);
+  assert.equal(application.mutation, 'mutation-2');
 });

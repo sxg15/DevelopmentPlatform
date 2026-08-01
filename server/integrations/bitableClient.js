@@ -52,6 +52,22 @@ export async function fetchBitableRecords(token, tableConfig) {
   return records;
 }
 
+export async function fetchBitableRecord(token, appToken, tableId, recordId) {
+  const url = `https://open.feishu.cn/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records/${encodeURIComponent(recordId)}`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const payload = await readJson(response);
+
+  if (!response.ok || payload.code !== 0) {
+    throw new Error(formatFeishuApiError(payload.msg || '读取多维表格记录失败'));
+  }
+
+  return payload.data?.record || payload.data || null;
+}
+
 export async function fetchCachedBitableRecords(token, tableConfig, cacheKeyPrefix, ttlMs) {
   const cacheKey = [
     'records',

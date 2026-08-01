@@ -24,6 +24,7 @@ export function createWorkItemRealtimeHub({ onPublish = () => {} } = {}) {
       projectId: String(event?.projectId || '').trim(),
       toolId: String(event?.toolId || '').trim(),
       recordId: String(event?.recordId || '').trim(),
+      changeType: event?.changeType === 'deleted' ? 'deleted' : 'updated',
       occurredAt: Date.now(),
     };
 

@@ -133,6 +133,10 @@
     grid-template-columns: minmax(0, 1fr) repeat(2, minmax(120px, 0.42fr));
   }
 
+  .ai-generation-task-panel {
+    grid-template-columns: 190px minmax(0, 1fr);
+  }
+
   .ai-plan-library-layout {
     grid-template-columns: 300px minmax(0, 1fr);
   }
@@ -781,6 +785,29 @@
     padding: 12px 14px;
   }
 
+  .ai-generation-task-panel {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .ai-generation-task-heading {
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+  }
+
+  .ai-generation-task-heading-icon {
+    width: 32px;
+    height: 32px;
+  }
+
+  .ai-generation-task-count {
+    grid-column: auto;
+  }
+
+  .ai-generation-task {
+    min-width: min(280px, calc(100vw - 48px));
+  }
+
   .ai-plan-filters {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     padding: 10px;
@@ -820,10 +847,16 @@
 
   .ai-plan-document,
   .ai-source-references,
+  .ai-plan-application-row,
   .ai-plan-review-note,
   .ai-plan-revisions,
   .ai-plan-audit {
     width: calc(100% - 28px);
+  }
+
+  .ai-plan-application-row {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .ai-review-dialog {
@@ -908,6 +941,10 @@
   .loading-ring,
   .loading-core,
   .ai-loading svg,
+  .ai-generation-task,
+  .ai-generation-task-state svg,
+  .requirement-ai-status,
+  .requirement-ai-status svg,
   .project-button,
   .project-tool-button,
   .project-overview .is-spinning {
@@ -916,7 +953,9 @@
   }
 
   .personal-settings-switch span,
-  .personal-settings-switch span::after {
+  .personal-settings-switch span::after,
+  .ai-plan-application-switch > span,
+  .ai-plan-application-switch > span::after {
     transition: none;
   }
 }

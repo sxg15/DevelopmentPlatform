@@ -49,6 +49,7 @@ export function AiPlanningWorkspace({
   initialConversationId = '',
   initialFocus = '',
   autoCreateRequest = null,
+  onActivityChange,
   onClose,
 }) {
   const [state, setState] = useState({
@@ -311,6 +312,7 @@ export function AiPlanningWorkspace({
       setSelectedId(remaining[0]?.id || '');
       setConversation(null);
       setActionStatus({ type: 'idle', message: '' });
+      onActivityChange?.();
     } catch (error) {
       setActionStatus({ type: 'error', message: formatAiError(error) });
     }
@@ -333,6 +335,7 @@ export function AiPlanningWorkspace({
       setComposer('');
       setConversation(payload.conversation || selectedConversation);
       setActionStatus({ type: 'idle', message: '' });
+      onActivityChange?.();
     } catch (error) {
       if (error?.payload?.conversation) {
         setConversation(error.payload.conversation);
@@ -370,6 +373,7 @@ export function AiPlanningWorkspace({
       );
       setConversation(payload.conversation || selectedConversation);
       setActionStatus({ type: 'idle', message: '' });
+      onActivityChange?.();
     } catch (error) {
       if (error?.payload?.conversation) {
         setConversation(error.payload.conversation);
@@ -388,6 +392,7 @@ export function AiPlanningWorkspace({
       setConversation(payload.conversation || selectedConversation);
       setStreamText('');
       setActionStatus({ type: 'warning', message: '任务已取消' });
+      onActivityChange?.();
     } catch (error) {
       setActionStatus({ type: 'error', message: formatAiError(error) });
     }
@@ -600,6 +605,7 @@ export function AiPlanningWorkspace({
             onClose={() => setSubmitOpen(false)}
             onSubmitted={(payload) => {
               setSubmitOpen(false);
+              onActivityChange?.();
               const queuedCount = Number(payload?.notificationQueuedCount || 0);
               const recipientCount = Number(payload?.reviewRecipientCount || 0);
               const notificationsEnabled = payload?.notificationDeliveryEnabled !== false;

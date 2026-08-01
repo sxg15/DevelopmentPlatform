@@ -145,6 +145,10 @@ export class AiPlanningRepository {
         review_reason TEXT NOT NULL DEFAULT '',
         superseded_by_submission_id TEXT NOT NULL DEFAULT '',
         superseded_at TEXT,
+        applied INTEGER NOT NULL DEFAULT 0,
+        applied_by_open_id TEXT NOT NULL DEFAULT '',
+        applied_by_name TEXT NOT NULL DEFAULT '',
+        applied_at TEXT,
         submission_source TEXT NOT NULL DEFAULT 'web',
         client_mutation_id TEXT NOT NULL DEFAULT '',
         mutation_fingerprint TEXT NOT NULL DEFAULT ''
@@ -167,6 +171,18 @@ export class AiPlanningRepository {
 
       CREATE INDEX IF NOT EXISTS idx_plan_submission_events_submission
       ON plan_submission_events(submission_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS ai_plan_application_mutations (
+        id TEXT PRIMARY KEY,
+        submission_id TEXT NOT NULL,
+        actor_open_id TEXT NOT NULL,
+        client_mutation_id TEXT NOT NULL,
+        mutation_fingerprint TEXT NOT NULL,
+        applied INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(submission_id) REFERENCES plan_submissions(id) ON DELETE CASCADE,
+        UNIQUE(actor_open_id, client_mutation_id)
+      );
 
       CREATE TABLE IF NOT EXISTS notification_outbox (
         id TEXT PRIMARY KEY,
@@ -200,6 +216,10 @@ export class AiPlanningRepository {
     ensureColumn(this.database, 'plan_submissions', 'review_reason', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.database, 'plan_submissions', 'superseded_by_submission_id', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.database, 'plan_submissions', 'superseded_at', 'TEXT');
+    ensureColumn(this.database, 'plan_submissions', 'applied', 'INTEGER NOT NULL DEFAULT 0');
+    ensureColumn(this.database, 'plan_submissions', 'applied_by_open_id', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'plan_submissions', 'applied_by_name', "TEXT NOT NULL DEFAULT ''");
+    ensureColumn(this.database, 'plan_submissions', 'applied_at', 'TEXT');
     ensureColumn(this.database, 'plan_submissions', 'submission_source', "TEXT NOT NULL DEFAULT 'web'");
     ensureColumn(this.database, 'plan_submissions', 'client_mutation_id', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.database, 'plan_submissions', 'mutation_fingerprint', "TEXT NOT NULL DEFAULT ''");
@@ -281,6 +301,60 @@ export class AiPlanningRepository {
       recordId,
       AI_CONVERSATION_STATUSES.ARCHIVED,
     ).map(normalizeConversationRow);
+  }
+
+  listProjectConversationActivity({ ownerOpenId, projectId, allowedToolIds }) {
+    const tools = [...new Set(allowedToolIds || [])]
+      .map((toolId) => String(toolId || '').trim())
+      .filter(Boolean);
+    if (!ownerOpenId || !projectId || tools.length === 0) {
+      return [];
+    }
+
+    return this.database.prepare(`
+      SELECT
+        conversations.id,
+        conversations.project_id,
+        conversations.tool_id,
+        conversations.record_id,
+        conversations.title,
+        conversations.status,
+        conversations.updated_at,
+        drafts.conversation_id AS draft_conversation_id,
+        latest_run.status AS run_status,
+        latest_run.progress_stage,
+        latest_run.progress_message,
+        latest_run.progress_updated_at,
+        latest_run.started_at
+      FROM conversations
+      LEFT JOIN plan_drafts AS drafts
+        ON drafts.conversation_id = conversations.id
+      LEFT JOIN runs AS latest_run
+        ON latest_run.id = (
+          SELECT runs.id
+          FROM runs
+          WHERE runs.conversation_id = conversations.id
+          ORDER BY runs.started_at DESC
+          LIMIT 1
+        )
+      WHERE conversations.owner_open_id = ?
+        AND conversations.project_id = ?
+        AND conversations.tool_id IN (${tools.map(() => '?').join(', ')})
+        AND conversations.status <> ?
+        AND (
+          conversations.status IN (?, ?, ?)
+          OR drafts.conversation_id IS NOT NULL
+        )
+      ORDER BY conversations.updated_at DESC
+    `).all(
+      ownerOpenId,
+      projectId,
+      ...tools,
+      AI_CONVERSATION_STATUSES.ARCHIVED,
+      AI_CONVERSATION_STATUSES.QUEUED,
+      AI_CONVERSATION_STATUSES.RUNNING,
+      AI_CONVERSATION_STATUSES.AWAITING_USER,
+    ).map(normalizeProjectConversationActivityRow);
   }
 
   getConversation(conversationId, ownerOpenId, { includeMessages = true } = {}) {
@@ -1017,6 +1091,38 @@ export class AiPlanningRepository {
     `).all(...params).map(normalizeSubmissionRow);
   }
 
+  listProjectSubmissionActivity({ projectId, allowedToolIds }) {
+    const tools = [...new Set(allowedToolIds || [])]
+      .map((toolId) => String(toolId || '').trim())
+      .filter(Boolean);
+    if (!projectId || tools.length === 0) {
+      return [];
+    }
+
+    return this.database.prepare(`
+      SELECT
+        tool_id,
+        record_id,
+        SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS pending_review_count
+      FROM plan_submissions
+      WHERE project_id = ?
+        AND tool_id IN (${tools.map(() => '?').join(', ')})
+        AND status IN (?, ?)
+      GROUP BY tool_id, record_id
+      ORDER BY MAX(submitted_at) DESC
+    `).all(
+      AI_PLAN_STATUSES.PENDING_REVIEW,
+      projectId,
+      ...tools,
+      AI_PLAN_STATUSES.PENDING_REVIEW,
+      AI_PLAN_STATUSES.APPROVED,
+    ).map((row) => ({
+      toolId: String(row.tool_id || ''),
+      recordId: String(row.record_id || ''),
+      pendingReviewCount: Math.max(0, Number(row.pending_review_count || 0)),
+    }));
+  }
+
   listApprovedSubmissionsForProjects({ projectIds, toolIds = [] }) {
     const projects = [...new Set(projectIds || [])]
       .map((item) => String(item || '').trim())
@@ -1252,6 +1358,91 @@ export class AiPlanningRepository {
     return this.approveSubmission(submissionId, reviewer);
   }
 
+  setSubmissionApplied({
+    submissionId,
+    actorOpenId,
+    actorName = '',
+    applied,
+    clientMutationId,
+    mutationFingerprint,
+  }) {
+    return this.withTransaction(() => {
+      const normalizedActorOpenId = String(actorOpenId || '').trim().slice(0, 200);
+      const normalizedMutationId = String(clientMutationId || '').trim().slice(0, 100);
+      const normalizedFingerprint = String(mutationFingerprint || '').trim().slice(0, 100);
+      const existingMutation = this.database.prepare(`
+        SELECT * FROM ai_plan_application_mutations
+        WHERE actor_open_id = ? AND client_mutation_id = ?
+      `).get(normalizedActorOpenId, normalizedMutationId);
+      if (existingMutation) {
+        if (existingMutation.mutation_fingerprint !== normalizedFingerprint) {
+          const error = new Error('clientMutationId 已用于不同的 AI 方案应用状态修改');
+          error.statusCode = 409;
+          throw error;
+        }
+        return {
+          submission: this.getSubmission(existingMutation.submission_id),
+          duplicate: true,
+          changed: false,
+        };
+      }
+
+      const submission = this.getSubmission(submissionId);
+      if (!submission) {
+        return null;
+      }
+      if (submission.status !== AI_PLAN_STATUSES.APPROVED) {
+        const error = new Error('只有已通过的 AI 方案可以设置已应用状态');
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const targetApplied = applied === true;
+      const changed = submission.applied !== targetApplied;
+      const now = new Date().toISOString();
+      if (changed) {
+        this.database.prepare(`
+          UPDATE plan_submissions
+          SET applied = ?, applied_by_open_id = ?, applied_by_name = ?, applied_at = ?
+          WHERE id = ? AND status = ?
+        `).run(
+          targetApplied ? 1 : 0,
+          targetApplied ? normalizedActorOpenId : '',
+          targetApplied ? String(actorName || '').slice(0, 200) : '',
+          targetApplied ? now : null,
+          submissionId,
+          AI_PLAN_STATUSES.APPROVED,
+        );
+        this.insertSubmissionEvent({
+          submissionId,
+          eventType: targetApplied ? 'applied' : 'application_removed',
+          actorOpenId: normalizedActorOpenId,
+          actorName,
+          createdAt: now,
+        });
+      }
+      this.database.prepare(`
+        INSERT INTO ai_plan_application_mutations (
+          id, submission_id, actor_open_id, client_mutation_id,
+          mutation_fingerprint, applied, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        crypto.randomUUID(),
+        submissionId,
+        normalizedActorOpenId,
+        normalizedMutationId,
+        normalizedFingerprint,
+        targetApplied ? 1 : 0,
+        now,
+      );
+      return {
+        submission: this.getSubmission(submissionId),
+        duplicate: false,
+        changed,
+      };
+    });
+  }
+
   withdrawSubmission(submissionId, ownerOpenId, ownerName = '') {
     const now = new Date().toISOString();
     const result = this.database.prepare(`
@@ -1333,9 +1524,11 @@ export class AiPlanningRepository {
   }
 
   markSubmissionSuperseded(submissionId, relatedSubmissionId, createdAt = new Date().toISOString()) {
+    const current = this.getSubmission(submissionId);
     const result = this.database.prepare(`
       UPDATE plan_submissions
-      SET status = ?, superseded_by_submission_id = ?, superseded_at = ?
+      SET status = ?, superseded_by_submission_id = ?, superseded_at = ?,
+          applied = 0, applied_by_open_id = '', applied_by_name = '', applied_at = NULL
       WHERE id = ? AND status <> ?
     `).run(
       AI_PLAN_STATUSES.SUPERSEDED,
@@ -1346,6 +1539,14 @@ export class AiPlanningRepository {
     );
     if (result.changes === 0) {
       return false;
+    }
+    if (current?.applied) {
+      this.insertSubmissionEvent({
+        submissionId,
+        eventType: 'application_removed',
+        reason: '方案已被替代',
+        createdAt,
+      });
     }
     this.insertSubmissionEvent({
       submissionId,
@@ -1702,6 +1903,28 @@ function normalizeConversationRow(row) {
   };
 }
 
+function normalizeProjectConversationActivityRow(row) {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    toolId: row.tool_id,
+    recordId: row.record_id,
+    title: row.title,
+    status: row.status,
+    updatedAt: row.updated_at,
+    hasDraft: Boolean(row.draft_conversation_id),
+    latestRun: row.run_status
+      ? {
+          status: row.run_status,
+          progressStage: normalizeProgressStage(row.progress_stage),
+          progressMessage: String(row.progress_message || ''),
+          progressUpdatedAt: String(row.progress_updated_at || ''),
+          startedAt: String(row.started_at || ''),
+        }
+      : null,
+  };
+}
+
 function normalizeMessageRow(row) {
   return {
     id: row.id,
@@ -1798,6 +2021,10 @@ function normalizeSubmissionRow(row) {
     reviewReason: row.review_reason || '',
     supersededBySubmissionId: row.superseded_by_submission_id || '',
     supersededAt: row.superseded_at || '',
+    applied: Boolean(row.applied),
+    appliedByOpenId: row.applied_by_open_id || '',
+    appliedByName: row.applied_by_name || '',
+    appliedAt: row.applied_at || '',
     submissionSource: row.submission_source || 'web',
     clientMutationId: row.client_mutation_id || '',
     mutationFingerprint: row.mutation_fingerprint || '',

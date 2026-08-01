@@ -7,8 +7,12 @@ export function normalizeConfig(config) {
   const dashboardConfig = config?.dashboard || {};
   const aiPlanningConfig = config?.aiPlanning || {};
   const codexConfig = aiPlanningConfig.codex || {};
+  const aiAssistantConfig = aiPlanningConfig.assistant || {};
+  const aiConcurrencyConfig = normalizeAiConcurrencyConfig(codexConfig);
   const aiAttachmentConfig = aiPlanningConfig.attachments || {};
   const aiNotificationConfig = aiPlanningConfig.notifications || {};
+  const feishuEventsConfig = config?.feishu?.events || {};
+  const bitableCacheConfig = config?.bitable?.cache || {};
   const requirementsFieldNames = config?.knowledgeBase?.requirementsFieldNames || {};
   const bugsFieldNames = config?.knowledgeBase?.bugsFieldNames || {};
   const feedbackFieldNames = config?.knowledgeBase?.feedbackFieldNames || {};
@@ -27,6 +31,9 @@ export function normalizeConfig(config) {
     feishu: {
       appId: String(config?.feishu?.appId || ''),
       appSecret: String(config?.feishu?.appSecret || ''),
+      events: {
+        enabled: feishuEventsConfig.enabled !== false,
+      },
     },
     webApp: {
       publicBaseUrl: String(config?.webApp?.publicBaseUrl || `http://127.0.0.1:${Number.isFinite(parsedPort) ? parsedPort : 3000}/`),
@@ -43,7 +50,7 @@ export function normalizeConfig(config) {
         apiKey: String(codexConfig.apiKey || '').trim(),
         reasoningEffort: String(codexConfig.reasoningEffort || 'high').trim() || 'high',
         requestTimeoutMs: normalizePositiveInteger(codexConfig.requestTimeoutMs, 600000),
-        maxConcurrentRuns: normalizePositiveInteger(codexConfig.maxConcurrentRuns, 3),
+        ...aiConcurrencyConfig,
       },
       attachments: {
         enabled: aiAttachmentConfig.enabled !== false,
@@ -62,6 +69,20 @@ export function normalizeConfig(config) {
       },
       notifications: {
         enabled: aiNotificationConfig.enabled !== false,
+      },
+      assistant: {
+        enabled: aiAssistantConfig.enabled !== false,
+        model: String(aiAssistantConfig.model || 'gpt-5.6-luna').trim() || 'gpt-5.6-luna',
+        reasoningEffort: String(aiAssistantConfig.reasoningEffort || 'none').trim() || 'none',
+        fallbackModel: String(aiAssistantConfig.fallbackModel || 'gpt-5.6-terra').trim()
+          || 'gpt-5.6-terra',
+        fallbackReasoningEffort: String(
+          aiAssistantConfig.fallbackReasoningEffort || 'low',
+        ).trim() || 'low',
+        requestTimeoutMs: normalizePositiveInteger(aiAssistantConfig.requestTimeoutMs, 15_000),
+        pollIntervalMs: normalizePositiveInteger(aiAssistantConfig.pollIntervalMs, 2_000),
+        draftTtlHours: normalizePositiveInteger(aiAssistantConfig.draftTtlHours, 24),
+        retentionDays: normalizePositiveInteger(aiAssistantConfig.retentionDays, 30),
       },
       projects: normalizeAiPlanningProjects(aiPlanningConfig.projects),
     },
@@ -137,6 +158,21 @@ export function normalizeConfig(config) {
       openId: String(config?.debug?.openId || ''),
     },
     bitable: {
+      cache: {
+        enabled: bitableCacheConfig.enabled !== false,
+        freshTtlMs: normalizePositiveInteger(bitableCacheConfig.freshTtlMs, 30_000),
+        staleWhileRevalidateMs: normalizePositiveInteger(
+          bitableCacheConfig.staleWhileRevalidateMs,
+          300_000,
+        ),
+        maxSnapshots: normalizePositiveInteger(bitableCacheConfig.maxSnapshots, 128),
+        eventDebounceMs: normalizePositiveInteger(bitableCacheConfig.eventDebounceMs, 500),
+        eventDedupeTtlMs: normalizePositiveInteger(
+          bitableCacheConfig.eventDedupeTtlMs,
+          24 * 60 * 60 * 1000,
+        ),
+        maxEventIds: normalizePositiveInteger(bitableCacheConfig.maxEventIds, 10_000),
+      },
       projectBase: {
         appToken: String(config?.bitable?.projectBase?.appToken || ''),
         tableId: String(config?.bitable?.projectBase?.tableId || ''),
@@ -217,6 +253,47 @@ export function normalizeConfig(config) {
 function normalizePositiveInteger(value, fallback) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : fallback;
+}
+
+function normalizeNonNegativeInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 ? number : fallback;
+}
+
+function normalizeAiConcurrencyConfig(codexConfig) {
+  const hasPerUserLimit = Object.prototype.hasOwnProperty.call(
+    codexConfig,
+    'maxConcurrentRunsPerUser',
+  );
+  const hasPerProjectLimit = Object.prototype.hasOwnProperty.call(
+    codexConfig,
+    'maxConcurrentRunsPerProject',
+  );
+  const rawMaxConcurrentRuns = codexConfig.maxConcurrentRuns;
+  const hasLegacyDefault = !hasPerUserLimit
+    && !hasPerProjectLimit
+    && (
+      rawMaxConcurrentRuns === undefined
+      || rawMaxConcurrentRuns === null
+      || rawMaxConcurrentRuns === ''
+      || Number(rawMaxConcurrentRuns) === 3
+    );
+  const maxConcurrentRuns = hasLegacyDefault
+    ? 6
+    : normalizePositiveInteger(rawMaxConcurrentRuns, 6);
+  const defaultProjectLimit = Math.min(4, maxConcurrentRuns);
+
+  return {
+    maxConcurrentRuns,
+    maxConcurrentRunsPerUser: normalizeNonNegativeInteger(
+      codexConfig.maxConcurrentRunsPerUser,
+      0,
+    ),
+    maxConcurrentRunsPerProject: normalizePositiveInteger(
+      codexConfig.maxConcurrentRunsPerProject,
+      defaultProjectLimit,
+    ),
+  };
 }
 
 function normalizeBaseUrl(value) {

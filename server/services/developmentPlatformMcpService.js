@@ -25,6 +25,7 @@ export function createDevelopmentPlatformMcpService({
   aiPlanService,
   addWorkItemComment,
   submitAiPlanForReview,
+  setAiPlanApplied,
   addVersionComment,
   updateWorkItemStatus,
 }) {
@@ -36,6 +37,7 @@ export function createDevelopmentPlatformMcpService({
     loadProjectVersionOverview,
     addWorkItemComment,
     submitAiPlanForReview,
+    setAiPlanApplied,
     addVersionComment,
     updateWorkItemStatus,
   ];
@@ -73,6 +75,8 @@ export function createDevelopmentPlatformMcpService({
               submissionId: args.submissionId,
             })
           : aiPlanService.listMyApprovedPlans({ ...context, ...args });
+      case DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.SET_AI_PLAN_APPLIED:
+        return setAiPlanApplied({ ...context, ...args });
       case DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.ADD_WORK_ITEM_COMMENT:
         return addWorkItemComment({ ...context, ...args });
       case DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.SUBMIT_AI_PLAN_FOR_REVIEW:

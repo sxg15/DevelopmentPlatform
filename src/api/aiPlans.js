@@ -18,6 +18,10 @@ export function listAiPlans(projectId, filters = {}) {
   return requestJson(`/api/projects/${encodeURIComponent(projectId)}/ai-plans${suffix}`);
 }
 
+export function fetchAiProjectActivity(projectId) {
+  return requestJson(`/api/projects/${encodeURIComponent(projectId)}/ai-activity`);
+}
+
 export function fetchAiPlan(projectId, submissionId) {
   return requestJson(
     `/api/projects/${encodeURIComponent(projectId)}/ai-plans/${encodeURIComponent(submissionId)}`,
@@ -35,6 +39,17 @@ export function approveAiPlan(projectId, submissionId) {
   return requestJson(
     `/api/projects/${encodeURIComponent(projectId)}/ai-plans/${encodeURIComponent(submissionId)}/approve`,
     { method: 'POST' },
+  );
+}
+
+export function setAiPlanApplied(projectId, submissionId, applied, clientMutationId) {
+  return requestJson(
+    `/api/projects/${encodeURIComponent(projectId)}/ai-plans/${encodeURIComponent(submissionId)}/applied`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ applied, clientMutationId }),
+    },
   );
 }
 

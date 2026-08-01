@@ -65,7 +65,7 @@ async function startTestServer(options = {}) {
   };
 }
 
-test('official MCP client initializes, lists eleven tools and calls read/write operations', async () => {
+test('official MCP client initializes, lists twelve tools and calls read/write operations', async () => {
   const server = await startTestServer();
   const transport = new StreamableHTTPClientTransport(new URL(server.url), {
     requestInit: {
@@ -78,7 +78,7 @@ test('official MCP client initializes, lists eleven tools and calls read/write o
   try {
     await client.connect(transport);
     const tools = await client.listTools();
-    assert.equal(tools.tools.length, 11);
+    assert.equal(tools.tools.length, 12);
     assert.deepEqual(
       new Set(tools.tools.map((tool) => tool.name)),
       new Set(Object.values(DEVELOPMENT_PLATFORM_MCP_TOOL_IDS)),
@@ -92,6 +92,11 @@ test('official MCP client initializes, lists eleven tools and calls read/write o
       (tool) => tool.name === DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.UPDATE_WORK_ITEM_STATUS,
     );
     assert.equal(statusTool.annotations.readOnlyHint, false);
+    const appliedTool = tools.tools.find(
+      (tool) => tool.name === DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.SET_AI_PLAN_APPLIED,
+    );
+    assert.equal(appliedTool.title, '设置AI计划已应用状态');
+    assert.equal(appliedTool.annotations.readOnlyHint, false);
 
     const listResult = await client.callTool({
       name: DEVELOPMENT_PLATFORM_MCP_TOOL_ID,
@@ -135,6 +140,19 @@ test('official MCP client initializes, lists eleven tools and calls read/write o
     assert.equal(
       statusResult.structuredContent.toolName,
       DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.UPDATE_WORK_ITEM_STATUS,
+    );
+
+    const appliedResult = await client.callTool({
+      name: DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.SET_AI_PLAN_APPLIED,
+      arguments: {
+        submissionId: 'plan-1',
+        applied: true,
+        clientMutationId: 'mutation-2',
+      },
+    });
+    assert.equal(
+      appliedResult.structuredContent.toolName,
+      DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.SET_AI_PLAN_APPLIED,
     );
   } finally {
     await client.close().catch(() => {});

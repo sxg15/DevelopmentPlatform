@@ -64,11 +64,11 @@ the current or rollback release.
 - Client runtime diagnostics and redaction: `test/clientErrorUtils.test.js`.
 - Backend config/runtime/integrations: `test/serverConfig.test.js`,
   `test/serverRuntime.test.js`, `test/configEditor.test.js`,
-  `test/wikiClient.test.js`.
+  `test/wikiClient.test.js`, and `test/feishuAssistant.test.js`.
 - Personal settings and reminder scheduling:
   `test/personalSettingsUtils.test.js`,
   `test/personalSettingsService.test.js`.
-- MCP authentication, eleven-tool transport/dispatch, mutation idempotency,
+- MCP authentication, twelve-tool transport/dispatch, mutation idempotency,
   AI-plan filtering, and client configuration:
   `test/developmentPlatformMcpServer.test.js`,
   `test/developmentPlatformMcpService.test.js`,
@@ -117,6 +117,8 @@ bundled dependency installer, which uses `npm ci --omit=dev` and downloads the
 locked Express and Codex production dependencies only when missing or stale.
 Keep npm attached to the visible startup console with native progress enabled and
 HTTP fetch status output so first-launch downloads never look stalled.
+Portable backend start/stop must use the packaged verified PID controller; smoke
+tests must never rely on scanning a port and terminating whichever process owns it.
 Production packages must also contain `ConfigureWebBackend.bat`,
 `StopConfigureWebBackend.bat`, `config-editor/`, `config.example.json`, and the
 config editor start/stop helpers and folder picker under `server/config/`. The

@@ -17,6 +17,7 @@ import { createBoundedTaskScheduler } from '../server/runtime/boundedTaskSchedul
 import { createAiRunContextService } from '../server/services/aiRunContextService.js';
 import { createAiPlanningNotificationService } from '../server/services/aiPlanningNotificationService.js';
 import {
+  buildAiProjectActivity,
   buildPlanningPrompt,
   buildTransportRetryPrompt,
   createAiPlanningService,
@@ -25,6 +26,79 @@ import {
   resolveTransportRetryReasoningEffort,
   serializeAiConversation,
 } from '../server/services/aiPlanningService.js';
+
+test('AI project activity prioritizes active owner tasks and summarizes shared plans', () => {
+  const result = buildAiProjectActivity({
+    allowedToolIds: ['requirements', 'bugs'],
+    submissions: [
+      {
+        toolId: 'requirements',
+        recordId: 'req-1',
+        pendingReviewCount: 2,
+      },
+      {
+        toolId: 'bugs',
+        recordId: 'bug-2',
+        pendingReviewCount: 0,
+      },
+      {
+        toolId: 'feedback',
+        recordId: 'feedback-1',
+        pendingReviewCount: 9,
+      },
+    ],
+    conversations: [
+      {
+        id: 'conversation-running',
+        toolId: 'requirements',
+        recordId: 'req-1',
+        title: 'Requirement plan',
+        status: 'running',
+        updatedAt: '2026-07-29T10:00:00.000Z',
+        hasDraft: false,
+        ownerOpenId: 'must-not-leak',
+        codexThreadId: 'must-not-leak',
+        latestRun: {
+          startedAt: '2026-07-29T09:59:00.000Z',
+          progressStage: 'analyzing',
+          progressMessage: '正在分析项目',
+          progressUpdatedAt: '2026-07-29T10:00:00.000Z',
+        },
+      },
+      {
+        id: 'conversation-awaiting',
+        toolId: 'bugs',
+        recordId: 'bug-1',
+        title: 'Bug plan',
+        status: 'awaiting_user',
+        updatedAt: '2026-07-29T09:50:00.000Z',
+        hasDraft: true,
+        latestRun: {
+          startedAt: '2026-07-29T09:40:00.000Z',
+          progressStage: 'awaiting_user',
+          progressMessage: '等待用户确认关键决策',
+          progressUpdatedAt: '2026-07-29T09:50:00.000Z',
+        },
+      },
+    ],
+  });
+
+  assert.equal(result.pendingReviewCount, 2);
+  assert.equal(result.activeTaskCount, 2);
+  assert.deepEqual(
+    result.items.map((item) => [item.toolId, item.recordId, item.state]),
+    [
+      ['requirements', 'req-1', 'generating'],
+      ['bugs', 'bug-2', 'generated'],
+      ['bugs', 'bug-1', 'awaiting_user'],
+    ],
+  );
+  assert.equal(result.items[0].hasSharedPlan, true);
+  assert.equal(result.items[2].hasPrivateDraft, true);
+  assert.equal(result.tasks[0].conversationId, 'conversation-running');
+  assert.equal(Object.hasOwn(result.tasks[0], 'ownerOpenId'), false);
+  assert.equal(Object.hasOwn(result.tasks[0], 'codexThreadId'), false);
+});
 
 test('AI plan definitions keep source paths relative and permission-derived', () => {
   assert.equal(AI_PLAN_TOOL_ID, 'aiPlans');
@@ -288,6 +362,131 @@ test('AI planning repository isolates conversations and preserves revisions', ()
   }
 });
 
+test('AI plan applied marker is approved-only, idempotent, audited and cleared on replacement', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-plan-applied-'));
+  const repository = new AiPlanningRepository(path.join(root, 'planning.sqlite'));
+  try {
+    const conversation = repository.createConversation({
+      ownerOpenId: 'owner-a',
+      ownerName: 'Owner A',
+      projectId: 'P1',
+      toolId: 'requirements',
+      recordId: 'rec-1',
+      title: 'Plan',
+    });
+    const first = repository.createSubmission({
+      conversationId: conversation.id,
+      ownerOpenId: 'owner-a',
+      title: 'Plan v1',
+      summary: '',
+      markdown: '# Plan v1',
+      sourceReferences: [],
+    });
+    assert.equal(first.applied, false);
+    assert.throws(() => repository.setSubmissionApplied({
+      submissionId: first.id,
+      actorOpenId: 'reviewer-a',
+      actorName: 'Reviewer A',
+      applied: true,
+      clientMutationId: 'apply-pending',
+      mutationFingerprint: 'apply-pending-fingerprint',
+    }), /只有已通过的 AI 方案/);
+
+    repository.approveSubmission(first.id, {
+      openId: 'reviewer-a',
+      name: 'Reviewer A',
+    });
+    const applied = repository.setSubmissionApplied({
+      submissionId: first.id,
+      actorOpenId: 'reviewer-a',
+      actorName: 'Reviewer A',
+      applied: true,
+      clientMutationId: 'apply-1',
+      mutationFingerprint: 'apply-1-fingerprint',
+    });
+    assert.equal(applied.duplicate, false);
+    assert.equal(applied.changed, true);
+    assert.equal(applied.submission.applied, true);
+    assert.equal(applied.submission.appliedByOpenId, 'reviewer-a');
+    assert.equal(applied.submission.appliedByName, 'Reviewer A');
+    assert.ok(applied.submission.appliedAt);
+    const appliedEventCount = repository.listSubmissionEvents(first.rootSubmissionId)
+      .filter((event) => event.eventType === 'applied').length;
+
+    const duplicate = repository.setSubmissionApplied({
+      submissionId: first.id,
+      actorOpenId: 'reviewer-a',
+      actorName: 'Reviewer A',
+      applied: true,
+      clientMutationId: 'apply-1',
+      mutationFingerprint: 'apply-1-fingerprint',
+    });
+    assert.equal(duplicate.duplicate, true);
+    assert.equal(duplicate.changed, false);
+    assert.equal(
+      repository.listSubmissionEvents(first.rootSubmissionId)
+        .filter((event) => event.eventType === 'applied').length,
+      appliedEventCount,
+    );
+    assert.throws(() => repository.setSubmissionApplied({
+      submissionId: first.id,
+      actorOpenId: 'reviewer-a',
+      actorName: 'Reviewer A',
+      applied: false,
+      clientMutationId: 'apply-1',
+      mutationFingerprint: 'remove-conflict-fingerprint',
+    }), /不同的 AI 方案应用状态修改/);
+
+    const removed = repository.setSubmissionApplied({
+      submissionId: first.id,
+      actorOpenId: 'reviewer-a',
+      actorName: 'Reviewer A',
+      applied: false,
+      clientMutationId: 'remove-1',
+      mutationFingerprint: 'remove-1-fingerprint',
+    });
+    assert.equal(removed.changed, true);
+    assert.equal(removed.submission.applied, false);
+    assert.equal(removed.submission.appliedByOpenId, '');
+    assert.equal(removed.submission.appliedAt, '');
+
+    repository.setSubmissionApplied({
+      submissionId: first.id,
+      actorOpenId: 'reviewer-a',
+      actorName: 'Reviewer A',
+      applied: true,
+      clientMutationId: 'apply-2',
+      mutationFingerprint: 'apply-2-fingerprint',
+    });
+    const replacement = repository.createSubmission({
+      conversationId: conversation.id,
+      ownerOpenId: 'owner-a',
+      title: 'Plan v2',
+      summary: '',
+      markdown: '# Plan v2',
+      sourceReferences: [],
+    });
+    assert.equal(repository.getSubmission(first.id).applied, true);
+    repository.approveSubmission(replacement.id, {
+      openId: 'reviewer-b',
+      name: 'Reviewer B',
+    });
+    const superseded = repository.getSubmission(first.id);
+    assert.equal(superseded.status, AI_PLAN_STATUSES.SUPERSEDED);
+    assert.equal(superseded.applied, false);
+    assert.equal(superseded.appliedByName, '');
+    assert.equal(superseded.appliedAt, '');
+    assert.ok(repository.listSubmissionEvents(first.rootSubmissionId).some((event) => (
+      event.submissionId === first.id
+      && event.eventType === 'application_removed'
+      && event.reason === '方案已被替代'
+    )));
+  } finally {
+    repository.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('AI repository migrates legacy run tables with persistent progress columns', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-migration-'));
   const databasePath = path.join(root, 'planning.sqlite');
@@ -381,8 +580,24 @@ test('AI repository migrates legacy plan statuses and keeps one pending revision
     assert.equal(repository.getSubmission('p1').status, AI_PLAN_STATUSES.SUPERSEDED);
     assert.equal(repository.getSubmission('p2').status, AI_PLAN_STATUSES.PENDING_REVIEW);
     assert.equal(repository.getSubmission('p3').status, AI_PLAN_STATUSES.APPROVED);
+    assert.equal(repository.getSubmission('p3').applied, false);
     assert.equal(repository.getSubmission('p2').rootSubmissionId, 'p1');
     assert.equal(repository.getSubmission('p2').revisionAuthorName, 'User');
+    const submissionColumns = repository.database.prepare(
+      'PRAGMA table_info(plan_submissions)',
+    ).all().map((column) => column.name);
+    assert.ok(submissionColumns.includes('applied'));
+    assert.ok(submissionColumns.includes('applied_by_open_id'));
+    assert.ok(submissionColumns.includes('applied_by_name'));
+    assert.ok(submissionColumns.includes('applied_at'));
+    assert.equal(
+      repository.database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'ai_plan_application_mutations'
+      `).get().count,
+      1,
+    );
     const revisionThree = repository.createSubmission({
       conversationId: 'c1',
       ownerOpenId: 'u1',
@@ -673,6 +888,63 @@ test('AI service accepts a first-turn plan without confirmation questions', asyn
   }
 });
 
+test('AI project conversation activity is owner-private and tool-filtered', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-activity-'));
+  const repository = new AiPlanningRepository(path.join(root, 'planning.sqlite'));
+  try {
+    function startConversation({ ownerOpenId, toolId, recordId }) {
+      const conversation = repository.createConversation({
+        ownerOpenId,
+        ownerName: ownerOpenId,
+        projectId: 'P1',
+        toolId,
+        recordId,
+        title: recordId,
+      });
+      const appended = repository.appendUserMessage({
+        conversationId: conversation.id,
+        ownerOpenId,
+        content: 'Generate a plan',
+        expectedVersion: 1,
+        clientMutationId: `mutation-${recordId}`,
+      });
+      repository.startRun({
+        conversationId: conversation.id,
+        userMessageId: appended.message.id,
+        model: 'codex-test',
+      });
+      return conversation;
+    }
+
+    const ownerRequirement = startConversation({
+      ownerOpenId: 'owner-a',
+      toolId: 'requirements',
+      recordId: 'req-1',
+    });
+    startConversation({
+      ownerOpenId: 'owner-b',
+      toolId: 'requirements',
+      recordId: 'req-2',
+    });
+    startConversation({
+      ownerOpenId: 'owner-a',
+      toolId: 'bugs',
+      recordId: 'bug-1',
+    });
+
+    const activity = repository.listProjectConversationActivity({
+      ownerOpenId: 'owner-a',
+      projectId: 'P1',
+      allowedToolIds: ['requirements'],
+    });
+    assert.deepEqual(activity.map((item) => item.id), [ownerRequirement.id]);
+    assert.equal(activity[0].latestRun.progressStage, 'queued');
+  } finally {
+    repository.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('external AI plan submissions keep one MCP revision chain and enforce idempotency', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'igp-ai-external-submission-'));
   const repository = new AiPlanningRepository(path.join(root, 'planning.sqlite'));
@@ -804,6 +1076,24 @@ test('external AI plan service redacts workspace paths and internal mutation met
       ).get().count,
       1,
     );
+
+    repository.approveSubmission(first.submission.id, {
+      openId: 'reviewer-a',
+      name: 'Reviewer A',
+    });
+    const application = service.setSubmissionApplied({
+      user: { openId: 'owner-a', name: 'Owner A' },
+      submissionId: first.submission.id,
+      projectId: 'P1',
+      allowedToolIds: ['requirements'],
+      applied: true,
+      clientMutationId: 'apply-service-1',
+    });
+    assert.equal(application.submission.applied, true);
+    assert.equal(application.submission.appliedByName, 'Owner A');
+    assert.equal(application.submission.appliedByOpenId, undefined);
+    assert.equal(application.submission.clientMutationId, undefined);
+    assert.equal(application.submission.mutationFingerprint, undefined);
   } finally {
     repository.close();
     fs.rmSync(root, { recursive: true, force: true });
@@ -1258,6 +1548,33 @@ test('bounded AI scheduler limits user and project concurrency', async () => {
   assert.equal(maxActive, 2);
   assert.ok(order.indexOf('end:a') < order.indexOf('start:b'));
   assert.ok(order.indexOf('end:a') < order.indexOf('start:c'));
+});
+
+test('bounded AI scheduler allows one user to run multiple conversations in one project', async () => {
+  const scheduler = createBoundedTaskScheduler({
+    maxConcurrent: 3,
+    maxPerUser: 0,
+    maxPerProject: 2,
+  });
+  let active = 0;
+  let maxActive = 0;
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const task = async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await gate;
+    active -= 1;
+  };
+
+  const first = scheduler.schedule({ userKey: 'u1', projectKey: 'p1', task });
+  const second = scheduler.schedule({ userKey: 'u1', projectKey: 'p1', task });
+  await waitFor(() => scheduler.stats().active === 2);
+  assert.equal(maxActive, 2);
+  release();
+  await Promise.all([first, second]);
 });
 
 test('AI realtime hub publishes only to the matching owner', () => {

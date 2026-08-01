@@ -64,6 +64,7 @@ export function createVersionManagementService({
     findNodeByTitle: findWikiNodeByTitle,
     getChildren: getCachedWikiChildNodes,
   },
+  onTableContextResolved = () => {},
   now = () => new Date(),
   randomId = () => crypto.randomUUID(),
 } = {}) {
@@ -81,7 +82,7 @@ export function createVersionManagementService({
   async function ensure(token, project, user) {
     return queue.run(buildQueueKey(project), async () => {
       const context = await ensureProjectContext(token, project);
-      const data = await readContextData(token, context);
+      const data = await readContextData(token, context, { consistency: 'fresh' });
       const cleanedRecordIds = [];
       for (const version of data.versions.filter(isEmptyVersionRecord)) {
         if (!version.recordId) {
@@ -91,7 +92,7 @@ export function createVersionManagementService({
         cleanedRecordIds.push(version.recordId);
       }
       const refreshedData = cleanedRecordIds.length > 0
-        ? await readContextData(token, context)
+        ? await readContextData(token, context, { consistency: 'fresh' })
         : data;
       return buildReadResult(
         refreshedData,
@@ -120,7 +121,7 @@ export function createVersionManagementService({
   async function createVersion(token, project, user, payload) {
     return queue.run(buildQueueKey(project), async () => {
       const context = await ensureProjectContext(token, project);
-      const data = await readContextData(token, context);
+      const data = await readContextData(token, context, { consistency: 'fresh' });
       const versions = data.versions.filter((version) => !isEmptyVersionRecord(version));
       const versionNumber = String(payload?.versionNumber || '').trim();
       const platform = String(payload?.platform || '').trim();
@@ -159,7 +160,7 @@ export function createVersionManagementService({
         });
         targetApplied = true;
         const recordId = getRecordId(createdRecord);
-        const refreshed = await readContextData(token, context);
+        const refreshed = await readContextData(token, context, { consistency: 'fresh' });
         const version = refreshed.versions.find((item) => item.recordId === recordId)
           || normalizeVersionRecord(createdRecord, normalizedConfig.fieldNames);
         return {
@@ -180,7 +181,7 @@ export function createVersionManagementService({
   async function updateVersion(token, project, user, recordId, payload) {
     return queue.run(buildQueueKey(project), async () => {
       const context = await requireProjectContext(token, project.projectId);
-      const data = await readContextData(token, context);
+      const data = await readContextData(token, context, { consistency: 'fresh' });
       const versions = data.versions.filter((version) => !isEmptyVersionRecord(version));
       const current = requireVersion(versions, recordId);
       const versionNumber = String(payload?.versionNumber || '').trim();
@@ -222,7 +223,7 @@ export function createVersionManagementService({
           [normalizedConfig.fieldNames.previousVersion]: serializePreviousVersionDocument(previousVersion),
         });
         targetApplied = true;
-        const refreshed = await readContextData(token, context);
+        const refreshed = await readContextData(token, context, { consistency: 'fresh' });
         return {
           version: serializeVersionRecordForClient(
             requireVersion(refreshed.versions, recordId),
@@ -251,7 +252,7 @@ export function createVersionManagementService({
       }
 
       const context = await requireProjectContext(token, project.projectId);
-      const data = await readContextData(token, context);
+      const data = await readContextData(token, context, { consistency: 'fresh' });
       const versions = data.versions.filter((version) => !isEmptyVersionRecord(version));
       const current = requireVersion(versions, recordId);
       const newStatus = validateVersionStatus(payload?.newStatus);
@@ -295,7 +296,7 @@ export function createVersionManagementService({
           ]),
         });
         targetApplied = true;
-        const refreshed = await readContextData(token, context);
+        const refreshed = await readContextData(token, context, { consistency: 'fresh' });
         return {
           version: serializeVersionRecordForClient(
             requireVersion(refreshed.versions, recordId),
@@ -317,7 +318,7 @@ export function createVersionManagementService({
   async function deleteVersion(token, project, recordId) {
     return queue.run(buildQueueKey(project), async () => {
       const context = await requireProjectContext(token, project.projectId);
-      const data = await readContextData(token, context);
+      const data = await readContextData(token, context, { consistency: 'fresh' });
       const versions = data.versions.filter((version) => !isEmptyVersionRecord(version));
       requireVersion(versions, recordId);
       const referencing = versions.find((version) => version.previousVersion?.recordId === recordId);
@@ -341,7 +342,7 @@ export function createVersionManagementService({
         throw new Error('留言内容不能超过2000字');
       }
       const context = await requireProjectContext(token, project.projectId);
-      const data = await readContextData(token, context);
+      const data = await readContextData(token, context, { consistency: 'fresh' });
       requireVersion(data.versions, recordId);
       const comments = parseVersionCommentsDocument(
         getRawField(data.records, recordId, normalizedConfig.fieldNames.comments),
@@ -382,7 +383,7 @@ export function createVersionManagementService({
           comment,
         ]),
       });
-      const refreshed = await readContextData(token, context);
+      const refreshed = await readContextData(token, context, { consistency: 'fresh' });
       return {
         comment: serializeVersionCommentForClient(comment),
         version: serializeVersionRecordForClient(
@@ -397,7 +398,7 @@ export function createVersionManagementService({
   async function deleteComment(token, project, user, recordId, commentId) {
     return queue.run(buildQueueKey(project), async () => {
       const context = await requireProjectContext(token, project.projectId);
-      const data = await readContextData(token, context);
+      const data = await readContextData(token, context, { consistency: 'fresh' });
       requireVersion(data.versions, recordId);
       const comments = parseVersionCommentsDocument(
         getRawField(data.records, recordId, normalizedConfig.fieldNames.comments),
@@ -415,7 +416,7 @@ export function createVersionManagementService({
           comments.items.filter((item) => item.id !== commentId),
         ),
       });
-      const refreshed = await readContextData(token, context);
+      const refreshed = await readContextData(token, context, { consistency: 'fresh' });
       return {
         version: serializeVersionRecordForClient(
           requireVersion(refreshed.versions, recordId),
@@ -465,7 +466,7 @@ export function createVersionManagementService({
       project.projectId,
     );
     const context = await resolveContextWithRetry(token, copied);
-    return { ...context, created: true };
+    return registerResolvedContext({ ...context, projectId: project.projectId, created: true });
   }
 
   async function findProjectContext(token, projectId) {
@@ -481,7 +482,8 @@ export function createVersionManagementService({
     if (!isWikiBitableNode(projectNode)) {
       throw new Error(`${projectId}的版本管理节点不是多维表格`);
     }
-    return resolveContext(token, projectNode);
+    const context = await resolveContext(token, projectNode);
+    return registerResolvedContext({ ...context, projectId });
   }
 
   async function requireProjectContext(token, projectId) {
@@ -528,7 +530,7 @@ export function createVersionManagementService({
     };
   }
 
-  async function readContextData(token, context) {
+  async function readContextData(token, context, { consistency = 'cache' } = {}) {
     const [fields, records] = await Promise.all([
       bitable.fetchFields(token, context.appToken, context.tableId),
       bitable.fetchRecords(token, {
@@ -536,7 +538,7 @@ export function createVersionManagementService({
         tableId: context.tableId,
         viewId: context.viewId,
         fieldNames: normalizedConfig.fieldNames,
-      }),
+      }, { consistency }),
     ]);
     validateSchema(fields);
     const versions = records.map((record) => normalizeVersionRecord(record, normalizedConfig.fieldNames));
@@ -546,6 +548,22 @@ export function createVersionManagementService({
       versions,
       warnings: versions.flatMap((version) => version.warnings),
     };
+  }
+
+  function registerResolvedContext(context) {
+    try {
+      onTableContextResolved({
+        appToken: context.appToken,
+        tableId: context.tableId,
+        viewId: context.viewId,
+        fieldNames: normalizedConfig.fieldNames,
+        projectId: context.projectId,
+        toolId: 'versions',
+      });
+    } catch {
+      // Realtime registration is optional and must not block version reads.
+    }
+    return context;
   }
 
   function validateSchema(fields) {
@@ -629,7 +647,7 @@ export function createVersionManagementService({
       tableId: context.tableId,
       viewId: context.viewId,
       fieldNames: normalizedConfig.fieldNames,
-    });
+    }, { consistency: 'fresh' });
     const record = records.find((item) => getRecordId(item) === recordId);
     if (!record) {
       throw new Error('版本记录不存在');

@@ -85,6 +85,10 @@ Treat shared definitions as the canonical frontend/backend contract.
 - Question-required, plan-ready, and run-failed cards notify only the conversation
   owner and deep-link to the exact private conversation. Other project members
   continue to see only explicitly submitted plan revisions.
+- Requirement and Bug list rows derive their AI badge from one owner-safe project
+  activity summary. Active generation takes precedence over pending questions,
+  which takes precedence over an existing private draft or shared pending/approved
+  plan. Feedback never receives an AI badge.
 - If AI planning is globally enabled but the current project lacks a model
   connection or code-root mapping, requirement and Bug details retain a disabled
   AI status action so the configuration issue is visible.
@@ -97,6 +101,10 @@ Treat shared definitions as the canonical frontend/backend contract.
   reviewer edits return to pending review and rejection requires a reason.
 - Keep one approved plan per work item. Replacing it marks the former approved
   plan superseded while preserving its Markdown, revision chain, and audit events.
+- `已应用` is a reversible boolean on an approved AI plan, not another review
+  status. It may be changed only while the work item exists and the plan remains
+  approved. Record actor/time and audit events, make browser and MCP writes
+  idempotent, and clear it when that approved plan is superseded.
 - Deleting a shared AI plan removes its complete revision chain and audit events.
   Only the original submitter, project development super-admins, or global
   super-admins may delete; current assignee review permission alone is insufficient.
@@ -109,17 +117,21 @@ Treat shared definitions as the canonical frontend/backend contract.
   Approved plans remain visible only while the authenticated user is a current
   assignee with project tool and AI-plan access. Match stable Feishu identifiers
   only and repeat access/assignment checks before returning full Markdown.
-- MCP work-item comments, version comments, external AI-plan submissions, and
-  status updates require idempotency IDs. Retry matches must not repeat writes,
-  realtime events, or notifications; conflicting reuse must fail. Hidden
-  idempotency metadata stays in stored JSON/SQLite rows and is removed from client
-  payloads.
+- MCP work-item comments, version comments, external AI-plan submissions,
+  approved-plan application changes, and status updates require idempotency IDs.
+  Retry matches must not repeat writes, realtime events, audit events, or
+  notifications; conflicting reuse must fail. Hidden idempotency metadata stays
+  in stored JSON/SQLite rows and is removed from client payloads.
 - MCP status updates remain assignee-only, require an expected current status, and
   preserve the requirement attachment confirmation workflow. Mention and proposer
   notifications are always explicit caller choices.
 - MCP external AI plans have no private conversation. They join the submitter's
   `conversation_id=''` revision chain for that work item and notify the same
   current reviewers as web submissions.
+- The Feishu private-chat assistant may create only requirements and Bugs after a
+  confirmation card. It must collect a project, title, actionable description,
+  and either stable mentioned assignees or an explicit unassigned-routing choice;
+  no name-only assignee matching is permitted.
 
 ## Change Sequence
 

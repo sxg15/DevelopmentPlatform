@@ -161,8 +161,18 @@ test('project tool navigation renders icons and pending work item badges', () =>
 
   assert.match(source, /getProjectToolIcon\(tool\.iconKey\)/);
   assert.match(source, /project-tool-pending-badge/);
-  assert.match(source, /\{pendingCount\}未处理/);
   assert.match(source, /isProjectToolPendingCountTool\(normalizedToolId\)/);
+  assert.match(source, /tool\.id === 'aiPlans' \? '待审核' : '未处理'/);
+  assert.match(source, /\{pendingCount\}\{pendingLabel\}/);
+});
+
+test('workspace removes a deleted realtime work item from state and local cache', () => {
+  const source = fs.readFileSync('src/ui/workspace/PlatformWorkspace.jsx', 'utf8');
+
+  assert.match(source, /payload\?\.changeType === 'deleted' \? 'deleted' : 'updated'/);
+  assert.match(source, /realtimeEvent\.changeType === 'deleted'/);
+  assert.match(source, /removeWorkItemFromState\(currentState, realtimeEvent\.recordId, toolConfig\)/);
+  assert.match(source, /removeWorkItemByRecordId/);
 });
 
 test('new work item file selection accepts ordinary attachments while paste stays media-only', () => {
@@ -230,12 +240,27 @@ test('AI planning separates private conversations from shared submissions', () =
   assert.match(librarySource, /rejectAiPlan/);
   assert.match(librarySource, /createAiPlanRevision/);
   assert.match(librarySource, /deleteAiPlan/);
+  assert.match(librarySource, /setAiPlanApplied/);
+  assert.match(librarySource, /permissions\.canSetApplied/);
+  assert.match(librarySource, /AiPlanAppliedBadge/);
+  assert.match(librarySource, /application_removed/);
   assert.match(librarySource, /permissions\.canDelete/);
   assert.match(librarySource, /全部修订记录/);
   assert.match(librarySource, /修订历史/);
+  assert.match(librarySource, /function AiGenerationTaskPanel/);
+  assert.match(librarySource, /生成任务/);
+  assert.match(platformWorkspaceSource, /fetchAiProjectActivity/);
+  assert.match(platformWorkspaceSource, /requirement-ai-status/);
+  assert.match(platformWorkspaceSource, /AI 生成中/);
+  assert.match(aiPlanApiSource, /\/ai-activity/);
   assert.match(aiPlanApiSource, /export function deleteAiPlan/);
+  assert.match(aiPlanApiSource, /export function setAiPlanApplied/);
+  assert.match(aiPlanApiSource, /\/applied/);
   assert.match(aiPlanApiSource, /method:\s*'DELETE'/);
   assert.match(serverSource, /app\.delete\('\/api\/projects\/:projectId\/ai-plans\/:submissionId'/);
+  assert.match(serverSource, /app\.post\('\/api\/projects\/:projectId\/ai-plans\/:submissionId\/applied'/);
+  assert.match(serverSource, /canSetApplied/);
+  assert.match(serverSource, /app\.get\('\/api\/projects\/:projectId\/ai-activity'/);
   assert.match(serverSource, /只有原提交者、研发超级管理员或超级管理员可以删除方案/);
   assert.match(buildSource, /runtime\\node\.exe/);
   assert.match(buildSource, /runtime\\npm\\bin\\npm-cli\.js/);
@@ -262,6 +287,9 @@ test('AI planning separates private conversations from shared submissions', () =
 test('AI planning configuration editor exposes attachment and notification controls', () => {
   const source = fs.readFileSync('config-editor/main.jsx', 'utf8');
 
+  assert.match(source, /aiPlanning\.codex\.maxConcurrentRuns/);
+  assert.match(source, /aiPlanning\.codex\.maxConcurrentRunsPerUser/);
+  assert.match(source, /aiPlanning\.codex\.maxConcurrentRunsPerProject/);
   assert.match(source, /aiPlanning\.attachments\.enabled/);
   assert.match(source, /aiPlanning\.attachments\.maxFiles/);
   assert.match(source, /aiPlanning\.attachments\.maxTotalBytes/);

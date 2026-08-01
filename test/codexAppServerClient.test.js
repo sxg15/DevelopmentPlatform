@@ -34,6 +34,10 @@ test('Codex app-server client uses JSONL and a key-free config', async () => {
           send({ id: message.id, result: { userAgent: 'fake' } });
         }
       } else if (message.method === 'thread/start') {
+        if (message.params.model !== 'turn-model') {
+          send({ id: message.id, error: { message: 'thread model is incorrect' } });
+          return;
+        }
         send({ id: message.id, result: { thread: { id: 'thread-1' } } });
       } else if (message.method === 'thread/resume') {
         send({ id: message.id, result: { thread: { id: message.params.threadId } } });
@@ -44,6 +48,7 @@ test('Codex app-server client uses JSONL and a key-free config', async () => {
           || textItems[0].text !== 'Project-specific instructions'
           || textItems[1].text !== 'Plan this'
           || message.params.effort !== 'medium'
+          || message.params.model !== 'turn-model'
         ) {
           send({ id: message.id, error: { message: 'prompt order is incorrect' } });
           return;
@@ -164,6 +169,7 @@ test('Codex app-server client uses JSONL and a key-free config', async () => {
       preludePrompt: 'Project-specific instructions',
       prompt: 'Plan this',
       outputSchema: { type: 'object' },
+      model: 'turn-model',
       reasoningEffort: 'medium',
       onDelta: (delta) => deltas.push(delta),
       onProgress: (progress) => progressEvents.push(progress),
@@ -224,6 +230,7 @@ test('Codex API bridge authenticates loopback requests and streams through the u
     path: '',
     body: '',
   };
+  const diagnostics = [];
   const upstreamServer = http.createServer((request, response) => {
     upstreamState.requests += 1;
     upstreamState.authorization = String(request.headers.authorization || '');
@@ -232,6 +239,20 @@ test('Codex API bridge authenticates loopback requests and streams through the u
     request.on('data', (chunk) => chunks.push(chunk));
     request.on('end', () => {
       upstreamState.body = Buffer.concat(chunks).toString('utf8');
+      if (upstreamState.body === '{"upstreamFailure":true}') {
+        response.writeHead(502, {
+          'Content-Type': 'application/json',
+          'x-request-id': 'provider-request-id-for-test',
+          'x-error-code': 'model_not_available',
+        });
+        response.end(JSON.stringify({
+          error: {
+            code: 'model_not_available',
+            message: 'This message remains opaque to bridge diagnostics.',
+          },
+        }));
+        return;
+      }
       response.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -251,6 +272,9 @@ test('Codex API bridge authenticates loopback requests and streams through the u
     apiKey: 'upstream-secret',
     bridgeToken: 'bridge-token',
     requestTimeoutMs: 5_000,
+    onDiagnostic(diagnostic) {
+      diagnostics.push(diagnostic);
+    },
   });
 
   try {
@@ -289,6 +313,24 @@ test('Codex API bridge authenticates loopback requests and streams through the u
     assert.equal(upstreamState.path, '/v1/responses');
     assert.equal(upstreamState.body, '{"test":true}');
 
+    const upstreamFailure = await requestText(`${bridge.baseUrl}/responses`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer bridge-token',
+        'Content-Type': 'application/json',
+      },
+      body: '{"upstreamFailure":true}',
+    });
+    assert.equal(upstreamFailure.statusCode, 502);
+    assert.equal(upstreamFailure.body.includes('This message remains opaque to bridge diagnostics.'), true);
+    assert.deepEqual(diagnostics, [{
+      type: 'upstream_response',
+      statusCode: 502,
+      category: 'upstream_model_unavailable',
+      upstreamCode: 'model_not_available',
+      requestIdFingerprint: '3fa5a921b18d',
+    }]);
+
     const unknownPath = await requestText(`${bridge.baseUrl}/models`, {
       method: 'POST',
       headers: {
@@ -296,7 +338,7 @@ test('Codex API bridge authenticates loopback requests and streams through the u
       },
     });
     assert.equal(unknownPath.statusCode, 404);
-    assert.equal(upstreamState.requests, 1);
+    assert.equal(upstreamState.requests, 2);
 
     await assert.rejects(requestText(`${bridge.baseUrl}/responses`, {
       method: 'POST',
@@ -316,7 +358,7 @@ test('Codex API bridge authenticates loopback requests and streams through the u
       body: '{"recovered":true}',
     });
     assert.equal(recovered.statusCode, 200);
-    assert.equal(upstreamState.requests, 3);
+    assert.equal(upstreamState.requests, 4);
   } finally {
     await bridge.stop();
     await closeServer(upstreamServer);
@@ -336,11 +378,16 @@ test('Codex app-server user questions interrupt the turn and resolve as awaiting
       if (message.method === 'initialize') {
         send({ id: message.id, result: {} });
       } else if (message.method === 'thread/start') {
+        if (message.params.model !== 'codex-test') {
+          send({ id: message.id, error: { message: 'default thread model is incorrect' } });
+          return;
+        }
         send({ id: message.id, result: { thread: { id: 'thread-question' } } });
       } else if (message.method === 'turn/start') {
         if (
           Object.prototype.hasOwnProperty.call(message.params, 'outputSchema')
           || message.params.effort !== 'medium'
+          || message.params.model !== 'codex-test'
         ) {
           send({ id: message.id, error: { message: 'question turn options are incorrect' } });
           return;

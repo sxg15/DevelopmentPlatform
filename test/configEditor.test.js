@@ -26,6 +26,15 @@ test('config editor redacts secrets while reporting configured state', () => {
 
   assert.equal(result.config.feishu.appSecret, '');
   assert.equal(result.config.aiPlanning.codex.apiKey, '');
+  assert.equal(result.config.aiPlanning.codex.maxConcurrentRuns, 6);
+  assert.equal(result.config.aiPlanning.codex.maxConcurrentRunsPerUser, 0);
+  assert.equal(result.config.aiPlanning.codex.maxConcurrentRunsPerProject, 4);
+  assert.equal(result.config.aiPlanning.assistant.enabled, true);
+  assert.equal(result.config.aiPlanning.assistant.model, 'gpt-5.6-luna');
+  assert.equal(result.config.aiPlanning.assistant.reasoningEffort, 'none');
+  assert.equal(result.config.aiPlanning.assistant.fallbackModel, 'gpt-5.6-terra');
+  assert.equal(result.config.aiPlanning.assistant.fallbackReasoningEffort, 'low');
+  assert.equal(result.config.aiPlanning.assistant.requestTimeoutMs, 15_000);
   assert.equal(result.secretState['feishu.appSecret'], true);
   assert.equal(result.secretState['aiPlanning.codex.apiKey'], true);
 });
@@ -97,6 +106,11 @@ test('config editor aligns portable form validation with runtime configuration r
   config.knowledgeBase.requirementsIdDigits = 0;
   config.bitable.personalSettings.defaultTime = '25:10';
   config.bitable.projectPermission.fieldNames.permissionUsers = '研发';
+  config.bitable.cache.eventDebounceMs = 0;
+  config.aiPlanning.assistant.retentionDays = 0;
+  config.aiPlanning.assistant.model = '';
+  config.aiPlanning.assistant.fallbackModel = '';
+  config.aiPlanning.assistant.requestTimeoutMs = 0;
 
   const errors = validateConfigDocument(config);
   assert.ok(errors.some((error) => error.path === 'updates.manifestUrl'));
@@ -104,6 +118,44 @@ test('config editor aligns portable form validation with runtime configuration r
   assert.ok(errors.some((error) => error.path === 'bitable.personalSettings.defaultTime'));
   assert.ok(errors.some((error) => (
     error.path === 'bitable.projectPermission.fieldNames.permissionUsers'
+  )));
+  assert.ok(errors.some((error) => error.path === 'bitable.cache.eventDebounceMs'));
+  assert.ok(errors.some((error) => error.path === 'aiPlanning.assistant.retentionDays'));
+  assert.ok(errors.some((error) => error.path === 'aiPlanning.assistant.model'));
+  assert.ok(errors.some((error) => error.path === 'aiPlanning.assistant.fallbackModel'));
+  assert.ok(errors.some((error) => error.path === 'aiPlanning.assistant.requestTimeoutMs'));
+});
+
+test('config editor validates AI concurrency limits and legacy defaults', () => {
+  const legacy = createEditableConfig({
+    aiPlanning: {
+      codex: {
+        maxConcurrentRuns: 3,
+      },
+    },
+  }).config;
+  assert.equal(legacy.aiPlanning.codex.maxConcurrentRuns, 6);
+  assert.equal(legacy.aiPlanning.codex.maxConcurrentRunsPerUser, 0);
+  assert.equal(legacy.aiPlanning.codex.maxConcurrentRunsPerProject, 4);
+
+  legacy.aiPlanning.codex.maxConcurrentRuns = 4;
+  legacy.aiPlanning.codex.maxConcurrentRunsPerUser = 5;
+  legacy.aiPlanning.codex.maxConcurrentRunsPerProject = 6;
+  let errors = validateConfigDocument(legacy);
+  assert.ok(errors.some((error) => (
+    error.path === 'aiPlanning.codex.maxConcurrentRunsPerUser'
+    && error.message.includes('不能超过')
+  )));
+  assert.ok(errors.some((error) => (
+    error.path === 'aiPlanning.codex.maxConcurrentRunsPerProject'
+    && error.message.includes('不能超过')
+  )));
+
+  legacy.aiPlanning.codex.maxConcurrentRunsPerUser = -1;
+  errors = validateConfigDocument(legacy);
+  assert.ok(errors.some((error) => (
+    error.path === 'aiPlanning.codex.maxConcurrentRunsPerUser'
+    && error.message.includes('非负整数')
   )));
 });
 
@@ -120,6 +172,8 @@ test('config editor validates enabled AI roots against the local filesystem', ()
         reasoningEffort: 'high',
         requestTimeoutMs: 60_000,
         maxConcurrentRuns: 2,
+        maxConcurrentRunsPerUser: 0,
+        maxConcurrentRunsPerProject: 2,
       },
       projects: [{
         projectId: 'PROJECT-001',
@@ -180,6 +234,9 @@ test('config editor store saves transactionally, creates a backup, and detects c
     const persisted = JSON.parse(fs.readFileSync(path.join(rootDir, 'config.json'), 'utf8'));
     assert.equal(persisted.server.port, 3200);
     assert.equal(persisted.feishu.appSecret, 'original-secret');
+    assert.equal(persisted.aiPlanning.codex.maxConcurrentRuns, 6);
+    assert.equal(persisted.aiPlanning.codex.maxConcurrentRunsPerUser, 0);
+    assert.equal(persisted.aiPlanning.codex.maxConcurrentRunsPerProject, 4);
     assert.deepEqual(persisted.futureSection, { value: 7 });
 
     const conflict = store.save({

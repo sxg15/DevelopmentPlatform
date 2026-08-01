@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bot } from 'lucide-react';
+import {
+  Bot,
+  CircleHelp,
+  LoaderCircle,
+  Sparkles,
+} from 'lucide-react';
 import {
   DEADLINE_FILTER_OPTIONS,
   compareWorkItemStatus,
@@ -31,6 +36,7 @@ import {
 } from '../localCache.js';
 import {
   countWaitingAssignedWorkItems,
+  removeWorkItemByRecordId,
   replaceWorkItemByRecordId,
 } from '../../../shared/workItemRealtimeUtils.js';
 import {
@@ -68,6 +74,7 @@ import { ProjectOverview } from '../ProjectOverview.jsx';
 import { VersionManagement } from '../versions/VersionManagement.jsx';
 import { AiPlanLibrary } from '../ai/AiPlanLibrary.jsx';
 import { AiPlanningWorkspace } from '../ai/AiPlanningWorkspace.jsx';
+import { fetchAiProjectActivity } from '../../api/aiPlans.js';
 import {
   getProjectToolPendingCount,
   isProjectToolPendingCountTool,
@@ -136,6 +143,16 @@ const INITIAL_REQUIREMENTS_STATE = {
   status: 'idle',
   message: '',
   result: null,
+};
+
+const INITIAL_AI_ACTIVITY_STATE = {
+  status: 'idle',
+  message: '',
+  tasks: [],
+  items: [],
+  pendingReviewCount: 0,
+  activeTaskCount: 0,
+  allowedToolIds: [],
 };
 
 export function PlatformWorkspace({ user, cacheUserKey }) {
@@ -251,6 +268,7 @@ export function PlatformWorkspace({ user, cacheUserKey }) {
           projectId,
           toolId,
           recordId,
+          changeType: payload?.changeType === 'deleted' ? 'deleted' : 'updated',
         });
       } catch {
         // Ignore malformed realtime messages and let EventSource continue reconnecting.
@@ -464,6 +482,9 @@ function ProjectWorkspace({
   const [highlightCommentId, setHighlightCommentId] = useState('');
   const [aiPlanningOffer, setAiPlanningOffer] = useState(null);
   const [aiPlanningLaunch, setAiPlanningLaunch] = useState(null);
+  const [aiConversationTarget, setAiConversationTarget] = useState(null);
+  const [aiActivity, setAiActivity] = useState(INITIAL_AI_ACTIVITY_STATE);
+  const [aiActivityRefreshSequence, setAiActivityRefreshSequence] = useState(0);
   const processedDirectKeyRef = useRef('');
   const processedRealtimeEventRef = useRef('');
   const visibleTools = getProjectTools(project);
@@ -474,6 +495,7 @@ function ProjectWorkspace({
   const mentionableUsersByTool = project.mentionableUsersByTool && typeof project.mentionableUsersByTool === 'object'
     ? project.mentionableUsersByTool
     : {};
+  const aiActivityByWorkItem = indexAiActivityItems(aiActivity.items);
 
   useEffect(() => {
     const preferences = getInitialWorkspacePreferences(cacheUserKey, project);
@@ -487,9 +509,56 @@ function ProjectWorkspace({
     setHighlightCommentId('');
     setAiPlanningOffer(null);
     setAiPlanningLaunch(null);
+    setAiConversationTarget(null);
+    setAiActivity(INITIAL_AI_ACTIVITY_STATE);
     processedDirectKeyRef.current = '';
     processedRealtimeEventRef.current = '';
   }, [cacheUserKey, project.recordId]);
+
+  useEffect(() => {
+    if (!visibleTools.some((tool) => tool.id === 'aiPlans')) {
+      setAiActivity(INITIAL_AI_ACTIVITY_STATE);
+      return undefined;
+    }
+
+    let active = true;
+    let timer = null;
+
+    async function loadAiActivity() {
+      try {
+        const payload = await fetchAiProjectActivity(project.projectId);
+        if (!active) {
+          return;
+        }
+        const next = normalizeAiProjectActivity(payload);
+        setAiActivity({
+          ...next,
+          status: 'ready',
+          message: '',
+        });
+        timer = setTimeout(
+          loadAiActivity,
+          next.activeTaskCount > 0 ? 5_000 : 15_000,
+        );
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+        setAiActivity((current) => ({
+          ...current,
+          status: 'error',
+          message: formatErrorMessage(error),
+        }));
+        timer = setTimeout(loadAiActivity, 15_000);
+      }
+    }
+
+    void loadAiActivity();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [aiActivityRefreshSequence, project.projectId]);
 
   useEffect(() => {
     writeLocalPreference(cacheUserKey, getWorkspacePreferenceName(project), {
@@ -525,6 +594,17 @@ function ProjectWorkspace({
     }
 
     processedRealtimeEventRef.current = realtimeEvent.id;
+
+    if (realtimeEvent.changeType === 'deleted') {
+      updateWorkItemState(
+        toolConfig.toolId,
+        (currentState) => removeWorkItemFromState(currentState, realtimeEvent.recordId, toolConfig),
+      );
+      setSelectedWorkItemId((current) => (
+        current === realtimeEvent.recordId ? '' : current
+      ));
+      return;
+    }
 
     async function refreshChangedWorkItem() {
       await refreshWorkItemFromServer(toolConfig, realtimeEvent.recordId);
@@ -795,24 +875,28 @@ function ProjectWorkspace({
           <nav className="project-tool-nav" aria-label="项目功能">
             {visibleTools.map((tool) => {
               const ToolIcon = getProjectToolIcon(tool.iconKey);
-              const pendingCount = getProjectToolPendingCount(relatedWorkItemCounts, tool.id);
+              const pendingCount = tool.id === 'aiPlans'
+                ? aiActivity.pendingReviewCount
+                : getProjectToolPendingCount(relatedWorkItemCounts, tool.id);
+              const pendingLabel = tool.id === 'aiPlans' ? '待审核' : '未处理';
               return (
                 <button
                   key={tool.id}
                   type="button"
                   className={[
                     'project-tool-button',
+                    `project-tool-button-${tool.id}`,
                     activeToolId === tool.id ? 'is-active' : '',
                     pendingCount > 0 ? 'has-pending-count' : '',
                   ].filter(Boolean).join(' ')}
-                  aria-label={pendingCount > 0 ? `${tool.label}，${pendingCount}项未处理` : tool.label}
+                  aria-label={pendingCount > 0 ? `${tool.label}，${pendingCount}${pendingLabel}` : tool.label}
                   aria-pressed={activeToolId === tool.id}
                   onClick={() => handleToolClick(tool.id)}
                 >
                   <ToolIcon className="project-tool-icon" aria-hidden="true" />
                   <span className="project-tool-label">{tool.label}</span>
                   {pendingCount > 0 ? (
-                    <span className="project-tool-pending-badge">{pendingCount}未处理</span>
+                    <span className="project-tool-pending-badge">{pendingCount}{pendingLabel}</span>
                   ) : null}
                 </button>
               );
@@ -859,15 +943,28 @@ function ProjectWorkspace({
             {activeToolId === 'aiPlans' ? (
               <AiPlanLibrary
                 project={project}
+                activity={aiActivity}
+                onActivityChange={() => setAiActivityRefreshSequence((current) => current + 1)}
                 directTarget={
                   directTarget?.type === 'ai-plan'
                   && directTarget.projectId === String(project.projectId || '')
                     ? directTarget
                     : null
                 }
-                onOpenWorkItem={(toolId, recordId) => {
+                onOpenWorkItem={(toolId, recordId, aiTarget = null) => {
                   const toolConfig = getWorkItemToolConfig(toolId);
                   if (toolConfig) {
+                    setAiConversationTarget(aiTarget
+                      ? {
+                          key: `ai-activity-${Date.now()}-${aiTarget.conversationId || recordId}`,
+                          type: 'ai-conversation',
+                          projectId: String(project.projectId || ''),
+                          toolId,
+                          recordId,
+                          conversationId: aiTarget.conversationId || '',
+                          focus: aiTarget.focus || '',
+                        }
+                      : null);
                     setActiveToolId(toolId);
                     void loadWorkItems(toolConfig, { recordId });
                   }
@@ -914,19 +1011,27 @@ function ProjectWorkspace({
                     ? project.aiPlanning?.unavailableReason || ''
                     : ''
                 }
+                aiActivityByWorkItem={aiActivityByWorkItem}
                 aiDirectTarget={
-                  directTarget?.type === 'ai-conversation'
+                  aiConversationTarget?.type === 'ai-conversation'
+                  && aiConversationTarget.toolId === activeWorkItemConfig.toolId
+                    ? aiConversationTarget
+                    : directTarget?.type === 'ai-conversation'
                   && directTarget.projectId === String(project.projectId || '')
                   && directTarget.toolId === activeWorkItemConfig.toolId
                     ? directTarget
                     : null
                 }
+                onAiDirectTargetConsumed={aiConversationTarget
+                  ? () => setAiConversationTarget(null)
+                  : undefined}
                 aiLaunchRequest={
                   aiPlanningLaunch?.toolId === activeWorkItemConfig.toolId
                     ? aiPlanningLaunch
                     : null
                 }
                 onAiLaunchConsumed={() => setAiPlanningLaunch(null)}
+                onAiActivityChange={() => setAiActivityRefreshSequence((current) => current + 1)}
                 onWorkItemCreated={(payload) => {
                   const createdItem = payload.item || payload.requirement;
                   updateWorkItemState(
@@ -1027,9 +1132,12 @@ function RequirementsStatus({
   isDevelopmentSuperAdmin,
   aiPlanningEnabled,
   aiPlanningUnavailableReason,
+  aiActivityByWorkItem,
   aiDirectTarget,
+  onAiDirectTargetConsumed,
   aiLaunchRequest,
   onAiLaunchConsumed,
+  onAiActivityChange,
   onWorkItemCreated,
   onRequirementUpdated,
   onRequirementDeleted,
@@ -1117,8 +1225,10 @@ function RequirementsStatus({
         aiPlanningEnabled={aiPlanningEnabled}
         aiPlanningUnavailableReason={aiPlanningUnavailableReason}
         aiDirectTarget={aiDirectTarget}
+        onAiDirectTargetConsumed={onAiDirectTargetConsumed}
         aiLaunchRequest={aiLaunchRequest}
         onAiLaunchConsumed={onAiLaunchConsumed}
+        onAiActivityChange={onAiActivityChange}
         onBack={onRequirementBack}
       />
     );
@@ -1180,6 +1290,7 @@ function RequirementsStatus({
         onGroupToggle={onGroupToggle}
         onStatusToggle={onStatusToggle}
         onRequirementSelect={onRequirementSelect}
+        aiActivityByWorkItem={aiActivityByWorkItem}
       />
     </section>
   );
@@ -2350,6 +2461,7 @@ function RequirementGroups({
   onGroupToggle,
   onStatusToggle,
   onRequirementSelect,
+  aiActivityByWorkItem,
 }) {
   if (toolConfig.supportsPriority === false) {
     return (
@@ -2363,6 +2475,7 @@ function RequirementGroups({
             statusCollapseOverrides={statusCollapseOverrides}
             onStatusToggle={onStatusToggle}
             onRequirementSelect={onRequirementSelect}
+            aiActivityByWorkItem={aiActivityByWorkItem}
           />
         ) : (
           <div className="requirement-empty">暂无{toolConfig.itemLabel}</div>
@@ -2413,6 +2526,7 @@ function RequirementGroups({
                     statusCollapseOverrides={statusCollapseOverrides}
                     onStatusToggle={onStatusToggle}
                     onRequirementSelect={onRequirementSelect}
+                    aiActivityByWorkItem={aiActivityByWorkItem}
                   />
                 ) : (
                   <div className="requirement-empty">暂无{toolConfig.itemLabel}</div>
@@ -2426,7 +2540,16 @@ function RequirementGroups({
   );
 }
 
-function RequirementStatusGroups({ toolConfig, priority, requirements, user, statusCollapseOverrides, onStatusToggle, onRequirementSelect }) {
+function RequirementStatusGroups({
+  toolConfig,
+  priority,
+  requirements,
+  user,
+  statusCollapseOverrides,
+  onStatusToggle,
+  onRequirementSelect,
+  aiActivityByWorkItem,
+}) {
   const groupedStatuses = groupRequirementsByStatus(requirements, toolConfig.toolId);
 
   return (
@@ -2460,6 +2583,10 @@ function RequirementStatusGroups({ toolConfig, priority, requirements, user, sta
                     toolConfig={toolConfig}
                     requirement={requirement}
                     user={user}
+                    aiActivity={aiActivityByWorkItem?.[buildAiWorkItemKey(
+                      toolConfig.toolId,
+                      requirement.recordId,
+                    )]}
                     onSelect={onRequirementSelect}
                   />
                 ))}
@@ -2472,23 +2599,37 @@ function RequirementStatusGroups({ toolConfig, priority, requirements, user, sta
   );
 }
 
-function RequirementItem({ toolConfig, requirement, user, onSelect }) {
+function RequirementItem({ toolConfig, requirement, user, aiActivity, onSelect }) {
   const assignees = Array.isArray(requirement.assignees) ? requirement.assignees : [];
   const itemId = getWorkItemDisplayId(requirement);
+  const aiStatusLabel = formatAiWorkItemStatus(aiActivity?.state);
 
   return (
     <button
       type="button"
       className="requirement-item"
-      aria-label={`查看${toolConfig.itemLabel} ${requirement.title || itemId || toolConfig.unnamedTitle}`}
+      aria-label={[
+        `查看${toolConfig.itemLabel} ${requirement.title || itemId || toolConfig.unnamedTitle}`,
+        aiStatusLabel,
+      ].filter(Boolean).join('，')}
       onClick={() => onSelect(requirement)}
     >
       <div className="requirement-main">
         <span className="requirement-title" title={requirement.title}>
           {requirement.title || toolConfig.unnamedTitle}
         </span>
-        <span className="requirement-id" title={itemId || toolConfig.noIdText}>
-          {itemId || toolConfig.noIdText}
+        <span className="requirement-id-row">
+          <span className="requirement-id" title={itemId || toolConfig.noIdText}>
+            {itemId || toolConfig.noIdText}
+          </span>
+          {aiStatusLabel ? (
+            <span className={`requirement-ai-status is-${aiActivity.state}`}>
+              {aiActivity.state === 'generating' ? <LoaderCircle aria-hidden="true" /> : null}
+              {aiActivity.state === 'awaiting_user' ? <CircleHelp aria-hidden="true" /> : null}
+              {aiActivity.state === 'generated' ? <Sparkles aria-hidden="true" /> : null}
+              {aiStatusLabel}
+            </span>
+          ) : null}
         </span>
       </div>
       <p className="requirement-description" title={requirement.description || '暂无描述'}>
@@ -2533,8 +2674,10 @@ function BitableRecordDetail({
   aiPlanningEnabled,
   aiPlanningUnavailableReason,
   aiDirectTarget,
+  onAiDirectTargetConsumed,
   aiLaunchRequest,
   onAiLaunchConsumed,
+  onAiActivityChange,
   onRequirementUpdated,
   onRequirementDeleted,
   onBack,
@@ -2579,7 +2722,7 @@ function BitableRecordDetail({
 
   useEffect(() => {
     setActiveAction(canUpdateStatus ? 'status' : canChangeAssignees ? 'assignees' : 'comments');
-  }, [record.recordId, canUpdateStatus, canChangeAssignees]);
+  }, [record.recordId]);
 
   useEffect(() => {
     if (
@@ -2587,11 +2730,13 @@ function BitableRecordDetail({
       && String(aiDirectTarget.recordId || '') === String(record.recordId || '')
     ) {
       setAiPlanningOpen(true);
+      onAiDirectTargetConsumed?.();
     }
   }, [
     aiDirectTarget?.key,
     aiDirectTarget?.recordId,
     aiDirectTarget?.type,
+    onAiDirectTargetConsumed,
     record.recordId,
   ]);
 
@@ -2721,6 +2866,7 @@ function BitableRecordDetail({
           initialConversationId={aiDirectTarget?.conversationId || ''}
           initialFocus={aiDirectTarget?.focus || ''}
           autoCreateRequest={aiAutoCreateRequest}
+          onActivityChange={onAiActivityChange}
           onClose={() => {
             setAiPlanningOpen(false);
             setAiAutoCreateRequest(null);
@@ -4315,6 +4461,26 @@ function updateRequirementInState(state, requirement, toolConfig = getWorkItemTo
   };
 }
 
+function removeWorkItemFromState(state, recordId, toolConfig = getWorkItemToolConfig('requirements')) {
+  if (state?.status !== 'ready' || !state.result) {
+    return state;
+  }
+
+  const nextRequirements = removeWorkItemByRecordId(
+    getPayloadWorkItems(state.result, toolConfig),
+    recordId,
+  );
+  return {
+    ...state,
+    result: {
+      ...state.result,
+      items: nextRequirements,
+      [toolConfig.toolId === 'bugs' ? 'bugs' : toolConfig.toolId === 'feedback' ? 'feedbacks' : 'requirements']: nextRequirements,
+      requirements: toolConfig.toolId === 'requirements' ? nextRequirements : state.result.requirements,
+    },
+  };
+}
+
 function mergeCreatedWorkItemsIntoState(state, payload, toolConfig) {
   if (!state?.result || !payload) {
     return state;
@@ -4542,6 +4708,97 @@ function formatRemainingDays(value) {
 
   const rounded = Math.abs(days).toFixed(1);
   return days < 0 ? `逾期 ${rounded} 天` : `剩余 ${rounded} 天`;
+}
+
+function normalizeAiProjectActivity(payload) {
+  const tasks = Array.isArray(payload?.tasks)
+    ? payload.tasks
+        .map((task) => {
+          const toolId = String(task?.toolId || '').trim();
+          const recordId = String(task?.recordId || '').trim();
+          const conversationId = String(task?.conversationId || '').trim();
+          const status = String(task?.status || '').trim();
+          if (
+            !['requirements', 'bugs'].includes(toolId)
+            || !recordId
+            || !conversationId
+            || !['queued', 'running', 'awaiting_user'].includes(status)
+          ) {
+            return null;
+          }
+          return {
+            conversationId,
+            toolId,
+            recordId,
+            title: String(task?.title || '').trim(),
+            status,
+            startedAt: String(task?.startedAt || '').trim(),
+            updatedAt: String(task?.updatedAt || '').trim(),
+            progress: {
+              stage: String(task?.progress?.stage || '').trim(),
+              message: String(task?.progress?.message || '').trim(),
+              updatedAt: String(task?.progress?.updatedAt || '').trim(),
+            },
+          };
+        })
+        .filter(Boolean)
+    : [];
+  const items = Array.isArray(payload?.items)
+    ? payload.items
+        .map((item) => {
+          const toolId = String(item?.toolId || '').trim();
+          const recordId = String(item?.recordId || '').trim();
+          const state = String(item?.state || '').trim();
+          if (
+            !['requirements', 'bugs'].includes(toolId)
+            || !recordId
+            || !['generating', 'awaiting_user', 'generated'].includes(state)
+          ) {
+            return null;
+          }
+          return {
+            toolId,
+            recordId,
+            state,
+            conversationId: String(item?.conversationId || '').trim(),
+            hasSharedPlan: Boolean(item?.hasSharedPlan),
+            hasPrivateDraft: Boolean(item?.hasPrivateDraft),
+            pendingReviewCount: Math.max(0, Number(item?.pendingReviewCount || 0)),
+            updatedAt: String(item?.updatedAt || '').trim(),
+          };
+        })
+        .filter(Boolean)
+    : [];
+  return {
+    tasks,
+    items,
+    pendingReviewCount: Math.max(0, Number(payload?.pendingReviewCount || 0)),
+    activeTaskCount: tasks.length,
+    allowedToolIds: Array.isArray(payload?.allowedToolIds)
+      ? payload.allowedToolIds.filter((toolId) => ['requirements', 'bugs'].includes(toolId))
+      : [],
+  };
+}
+
+function indexAiActivityItems(items) {
+  return Object.fromEntries(
+    (Array.isArray(items) ? items : []).map((item) => [
+      buildAiWorkItemKey(item.toolId, item.recordId),
+      item,
+    ]),
+  );
+}
+
+function buildAiWorkItemKey(toolId, recordId) {
+  return `${String(toolId || '').trim()}:${String(recordId || '').trim()}`;
+}
+
+function formatAiWorkItemStatus(state) {
+  return {
+    generating: 'AI 生成中',
+    awaiting_user: 'AI 待你确认',
+    generated: '已有 AI 方案',
+  }[String(state || '')] || '';
 }
 
 function normalizeClientComments(value) {

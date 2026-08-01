@@ -391,6 +391,9 @@ function serializeMcpAiPlan(submission, project, workItem) {
     revisionAuthorName: String(submission.revisionAuthorName || submission.authorName || ''),
     reviewerName: String(submission.reviewedByName || ''),
     approvedAt: String(submission.reviewedAt || submission.submittedAt || ''),
+    applied: submission.applied === true,
+    appliedAt: String(submission.appliedAt || ''),
+    appliedByName: String(submission.appliedByName || ''),
     submittedAt: String(submission.submittedAt || ''),
   };
 }

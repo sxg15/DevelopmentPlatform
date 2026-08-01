@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react';
 import {
+  ArrowUpRight,
+  BadgeCheck,
+  Bot,
   Check,
+  CircleHelp,
   Download,
   ExternalLink,
   FileText,
@@ -9,6 +13,7 @@ import {
   Pencil,
   RotateCcw,
   Search,
+  Sparkles,
   Trash2,
   X,
   XCircle,
@@ -23,12 +28,16 @@ import {
   getAiPlanRawUrl,
   listAiPlans,
   rejectAiPlan,
+  setAiPlanApplied,
   withdrawAiPlan,
 } from '../../api/aiPlans.js';
+import { createAiClientMutationId } from '../../api/aiConversations.js';
 
 export function AiPlanLibrary({
   project,
+  activity = null,
   directTarget = null,
+  onActivityChange,
   onOpenWorkItem,
 }) {
   const [filters, setFilters] = useState({ toolId: '', status: '', search: '' });
@@ -163,6 +172,7 @@ export function AiPlanLibrary({
         type: 'success',
         message: formatReviewNotificationMessage(result, '方案已通过审核'),
       });
+      onActivityChange?.();
       setRefreshSequence((current) => current + 1);
     } catch (error) {
       setActionStatus({ type: 'error', message: formatPlanError(error) });
@@ -178,6 +188,44 @@ export function AiPlanLibrary({
         type: 'success',
         message: formatReviewNotificationMessage(result, '方案已拒绝'),
       });
+      onActivityChange?.();
+      setRefreshSequence((current) => current + 1);
+    } catch (error) {
+      setActionStatus({ type: 'error', message: formatPlanError(error) });
+    }
+  }
+
+  async function handleAppliedChange(applied) {
+    if (!detail || actionStatus.type === 'loading') {
+      return;
+    }
+    setActionStatus({
+      type: 'loading',
+      message: applied ? '正在标记方案为已应用' : '正在取消已应用标记',
+    });
+    try {
+      const result = await setAiPlanApplied(
+        project.projectId,
+        detail.id,
+        applied,
+        createAiClientMutationId(),
+      );
+      setActionStatus({
+        type: 'success',
+        message: applied ? '方案已标记为已应用' : '已取消方案的已应用标记',
+      });
+      setDetailState((current) => ({
+        ...current,
+        submission: result.submission || current.submission,
+      }));
+      setState((current) => ({
+        ...current,
+        submissions: current.submissions.map((submission) => (
+          submission.id === detail.id
+            ? { ...submission, ...(result.submission || {}) }
+            : submission
+        )),
+      }));
       setRefreshSequence((current) => current + 1);
     } catch (error) {
       setActionStatus({ type: 'error', message: formatPlanError(error) });
@@ -197,6 +245,7 @@ export function AiPlanLibrary({
           '已创建新修订并重新进入待审核',
         ),
       });
+      onActivityChange?.();
       setRefreshSequence((current) => current + 1);
     } catch (error) {
       setActionStatus({ type: 'error', message: formatPlanError(error) });
@@ -214,6 +263,7 @@ export function AiPlanLibrary({
     try {
       await withdrawAiPlan(project.projectId, detail.id);
       setActionStatus({ type: 'success', message: '方案已撤回' });
+      onActivityChange?.();
       setRefreshSequence((current) => current + 1);
     } catch (error) {
       setActionStatus({ type: 'error', message: formatPlanError(error) });
@@ -241,6 +291,7 @@ export function AiPlanLibrary({
         workItem: null,
       });
       setActionStatus({ type: 'success', message: '方案及其修订记录已删除' });
+      onActivityChange?.();
       setRefreshSequence((current) => current + 1);
     } catch (error) {
       setActionStatus({ type: 'error', message: formatPlanError(error) });
@@ -251,10 +302,21 @@ export function AiPlanLibrary({
     <section className="ai-plan-library" aria-label="AI 方案库">
       <header className="ai-plan-library-header">
         <div>
-          <h1>AI 方案</h1>
+          <h1><Sparkles aria-hidden="true" />AI 方案</h1>
           <span>查看需求与 Bug 的实施计划、审核状态和修订记录</span>
         </div>
       </header>
+      <AiGenerationTaskPanel
+        activity={activity}
+        onOpen={(task) => onOpenWorkItem?.(
+          task.toolId,
+          task.recordId,
+          {
+            conversationId: task.conversationId,
+            focus: task.status === 'awaiting_user' ? 'questions' : '',
+          },
+        )}
+      />
       <div className="ai-plan-filters">
         <label className="ai-plan-search">
           <Search aria-hidden="true" />
@@ -322,6 +384,7 @@ export function AiPlanLibrary({
                 <span className={`ai-plan-status is-${submission.status}`}>
                   {formatPlanStatus(submission.status)}
                 </span>
+                {submission.applied ? <AiPlanAppliedBadge compact /> : null}
                 <span>{submission.toolId === 'bugs' ? 'Bug' : '需求'} · {submission.workItemId || submission.recordId}</span>
               </div>
               <strong>{submission.title}</strong>
@@ -353,6 +416,7 @@ export function AiPlanLibrary({
                 <div>
                   <div className="ai-plan-detail-meta">
                     <span className={`ai-plan-status is-${detail.status}`}>{formatPlanStatus(detail.status)}</span>
+                    {detail.applied ? <AiPlanAppliedBadge /> : null}
                     <span>{detail.toolId === 'bugs' ? 'Bug' : '需求'} · {detail.workItemId || detail.recordId}</span>
                     <span>修订 {detail.revision}</span>
                   </div>
@@ -420,6 +484,36 @@ export function AiPlanLibrary({
                 <p className="ai-inline-status is-warning">
                   原工作项已不存在或暂时无法读取，方案关联和审核记录仍会保留。
                 </p>
+              ) : null}
+              {detail.status === 'approved' ? (
+                <section className="ai-plan-application-row" aria-label="方案应用状态">
+                  <div>
+                    <span>应用状态</span>
+                    {detail.applied ? (
+                      <>
+                        <AiPlanAppliedBadge />
+                        <small>
+                          {detail.appliedByName || '处理人'} · {formatPlanTime(detail.appliedAt)}
+                        </small>
+                      </>
+                    ) : (
+                      <strong>未应用</strong>
+                    )}
+                  </div>
+                  {detailState.permissions.canSetApplied ? (
+                    <label className="ai-plan-application-switch">
+                      <input
+                        type="checkbox"
+                        role="switch"
+                        checked={detail.applied === true}
+                        disabled={actionStatus.type === 'loading'}
+                        onChange={(event) => handleAppliedChange(event.target.checked)}
+                      />
+                      <span aria-hidden="true" />
+                      <strong>{detail.applied ? '已应用' : '未应用'}</strong>
+                    </label>
+                  ) : null}
+                </section>
               ) : null}
               {detail.reviewReason ? (
                 <section className="ai-plan-review-note">
@@ -508,6 +602,73 @@ export function AiPlanLibrary({
           onSubmit={handleEdit}
         />
       ) : null}
+    </section>
+  );
+}
+
+function AiGenerationTaskPanel({ activity, onOpen }) {
+  const tasks = Array.isArray(activity?.tasks) ? activity.tasks : [];
+  const isLoading = activity?.status === 'idle' || activity?.status === 'loading';
+
+  return (
+    <section className="ai-generation-task-panel" aria-label="AI 生成任务">
+      <div className="ai-generation-task-heading">
+        <span className="ai-generation-task-heading-icon" aria-hidden="true">
+          <Bot />
+        </span>
+        <div>
+          <strong>生成任务</strong>
+          <span>仅显示你在当前项目中的私有任务</span>
+        </div>
+        <span className={`ai-generation-task-count ${tasks.length > 0 ? 'has-tasks' : ''}`}>
+          {tasks.length > 0 ? `${tasks.length} 项进行中` : '当前无任务'}
+        </span>
+      </div>
+      <div className="ai-generation-task-list">
+        {isLoading ? (
+          <span className="ai-generation-task-empty">
+            <LoaderCircle aria-hidden="true" />
+            正在同步任务
+          </span>
+        ) : null}
+        {activity?.status === 'error' ? (
+          <span className="ai-generation-task-empty is-error">任务状态暂时无法同步</span>
+        ) : null}
+        {activity?.status === 'ready' && tasks.length === 0 ? (
+          <span className="ai-generation-task-empty">
+            <Sparkles aria-hidden="true" />
+            新任务开始后会显示在这里
+          </span>
+        ) : null}
+        {tasks.map((task) => {
+          const awaitingUser = task.status === 'awaiting_user';
+          const queued = task.progress?.stage === 'queued';
+          const label = awaitingUser ? '待你确认' : queued ? '排队中' : '生成中';
+          return (
+            <button
+              key={task.conversationId}
+              type="button"
+              className={`ai-generation-task is-${awaitingUser ? 'awaiting' : 'running'}`}
+              onClick={() => onOpen?.(task)}
+            >
+              <span className="ai-generation-task-state" aria-hidden="true">
+                {awaitingUser ? <CircleHelp /> : <LoaderCircle />}
+              </span>
+              <span className="ai-generation-task-content">
+                <span>
+                  <b>{label}</b>
+                  <small>{task.toolId === 'bugs' ? 'Bug' : '需求'}</small>
+                </span>
+                <strong>{task.title || 'AI 计划任务'}</strong>
+                <small>{task.progress?.message || (awaitingUser ? '等待你回答关键问题' : 'Codex 正在处理')}</small>
+              </span>
+              <span className="ai-generation-task-open" title="打开任务" aria-label="打开任务">
+                <ArrowUpRight aria-hidden="true" />
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </section>
   );
 }
@@ -633,6 +794,15 @@ function PlanLoading({ label }) {
   );
 }
 
+function AiPlanAppliedBadge({ compact = false }) {
+  return (
+    <span className={`ai-plan-applied-badge ${compact ? 'is-compact' : ''}`}>
+      <BadgeCheck aria-hidden="true" />
+      已应用
+    </span>
+  );
+}
+
 function formatPlanStatus(status) {
   return {
     pending_review: '待审核',
@@ -653,6 +823,8 @@ function formatPlanEvent(event) {
     rejected: `${actor}拒绝了方案${event.reason ? `：${event.reason}` : ''}`,
     withdrawn: `${actor}撤回了方案`,
     superseded: '方案已被后续修订或通过方案替代',
+    applied: `${actor}将方案标记为已应用`,
+    application_removed: `${actor}移除了已应用标记${event.reason ? `：${event.reason}` : ''}`,
   };
   return labels[event.eventType] || `${actor}更新了方案`;
 }

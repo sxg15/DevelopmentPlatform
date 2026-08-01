@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { createBitableTableDataService } from '../server/services/bitableTableDataService.js';
 import { createVersionManagementService } from '../server/services/versionManagementService.js';
 
 const FIELD_NAMES = {
@@ -98,6 +99,29 @@ test('deletion is blocked while another version references the target', async ()
   assert.equal(harness.recordCount(), 2);
 });
 
+test('version reads register the resolved Bitable table for realtime cache events', async () => {
+  const contexts = [];
+  const harness = createHarness([
+    createRecord('ver-1', '1.0.0', 'IGP', '测试开发'),
+  ]);
+  const service = harness.createService({
+    onTableContextResolved(context) {
+      contexts.push(context);
+    },
+  });
+
+  await service.readOne('token', { projectId: 'P1' }, 'ver-1');
+
+  assert.deepEqual(contexts, [{
+    appToken: 'app-token',
+    tableId: 'table-1',
+    viewId: '',
+    fieldNames: FIELD_NAMES,
+    projectId: 'P1',
+    toolId: 'versions',
+  }]);
+});
+
 test('version comments are idempotent and never expose mutation metadata', async () => {
   const harness = createHarness([
     createRecord('ver-1', '1.0.0', 'IGP', '测试开发'),
@@ -151,9 +175,34 @@ test('version comments are idempotent and never expose mutation metadata', async
   assert.equal(harness.getStoredComments('ver-1').length, 1);
 });
 
+test('partial Bitable update responses cannot make a real version look like an empty placeholder', async () => {
+  const harness = createHarness([
+    createRecord('ver-1', '1.0.0', 'IGP', '测试开发'),
+  ], {
+    cacheEnabled: true,
+    partialUpdateResponse: true,
+  });
+  const service = harness.createService();
+
+  const result = await service.createComment(
+    'token',
+    { projectId: 'P1' },
+    createUser(),
+    'ver-1',
+    { content: '缓存回归验证' },
+  );
+
+  assert.equal(result.version.versionNumber, '1.0.0');
+  await service.ensure('token', { projectId: 'P1' }, createUser());
+  assert.equal(harness.recordCount(), 1);
+  assert.equal(harness.getRecord('ver-1').fields.版本号, '1.0.0');
+});
+
 function createHarness(initialRecords, {
   failCreate = false,
   projectNodeExists = true,
+  cacheEnabled = false,
+  partialUpdateResponse = false,
 } = {}) {
   const records = initialRecords.map(clone);
   const projectNode = {
@@ -189,7 +238,9 @@ function createHarness(initialRecords, {
         throw new Error('记录不存在');
       }
       Object.assign(record.fields, clone(fields));
-      return clone(record);
+      return partialUpdateResponse
+        ? { record_id: recordId, fields: clone(fields) }
+        : clone(record);
     },
     async deleteRecord(_token, _appToken, _tableId, recordId) {
       const index = records.findIndex((item) => item.record_id === recordId);
@@ -216,14 +267,34 @@ function createHarness(initialRecords, {
   };
 
   return {
-    createService() {
+    createService(overrides = {}) {
+      const gateway = cacheEnabled
+        ? createBitableTableDataService({
+            config: {
+              enabled: true,
+              freshTtlMs: 60_000,
+              staleWhileRevalidateMs: 60_000,
+              maxSnapshots: 8,
+            },
+            bitable,
+          })
+        : null;
       return createVersionManagementService({
         config: {
           wikiNodeToken: 'template-node',
           parentName: '版本管理',
           fieldNames: FIELD_NAMES,
         },
-        bitable,
+        bitable: gateway
+          ? {
+              createRecord: gateway.createRecord,
+              deleteRecord: gateway.deleteRecord,
+              fetchFields: bitable.fetchFields,
+              fetchRecords: gateway.readRecords,
+              fetchTables: bitable.fetchTables,
+              updateRecord: gateway.updateRecord,
+            }
+          : bitable,
         wiki,
         loadCompletedWorkItemCandidates: async () => ({
           candidates: { requirements: [], bugs: [], feedback: [] },
@@ -234,6 +305,7 @@ function createHarness(initialRecords, {
           let sequence = 0;
           return () => `id-${sequence += 1}`;
         })(),
+        ...overrides,
       });
     },
     getRecord(recordId) {

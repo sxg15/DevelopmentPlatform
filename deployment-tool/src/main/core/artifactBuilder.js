@@ -15,6 +15,7 @@ import { runProcess } from './processRunner.js';
 const REQUIRED_PUBLISH_FILES = [
   'client/index.html',
   'server/index.js',
+  'server/runtime/backendProcessController.js',
   'runtime/node.exe',
   'runtime/npm/bin/npm-cli.js',
   'runtime/dependency-version.txt',
@@ -25,6 +26,7 @@ const REQUIRED_PUBLISH_FILES = [
 
 const REQUIRED_PRODUCTION_DEPENDENCIES = [
   'express/package.json',
+  '@larksuiteoapi/node-sdk/package.json',
   '@openai/codex/package.json',
   '@openai/codex-win32-x64/package.json',
   '@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe',

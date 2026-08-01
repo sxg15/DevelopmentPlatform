@@ -65,6 +65,7 @@ try {
         (Join-Path $smokeDir 'server\config\configEditorServer.js'),
         (Join-Path $smokeDir 'server\config\stopConfigEditor.js'),
         (Join-Path $smokeDir 'server\config\selectFolder.ps1'),
+        (Join-Path $smokeDir 'server\runtime\backendProcessController.js'),
         (Join-Path $smokeDir 'config.example.json')
     )) {
         if (-not (Test-Path -LiteralPath $requiredConfigEditorFile -PathType Leaf)) {
@@ -225,6 +226,9 @@ try {
         ) -join ' '
         throw "Portable server health check failed: $errorTail"
     }
+    if ($null -eq $health.realtimeCache -or $null -eq $health.realtimeCache.cache) {
+        throw 'Portable server health response is missing realtime cache status'
+    }
     $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
         Select-Object -First 1
     $serverProcessId = [int]$listener.OwningProcess
@@ -236,6 +240,25 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Portable dependency recheck failed with exit code $LASTEXITCODE"
     }
+    & (Join-Path $smokeDir 'StopWebBackend.bat')
+    if ($LASTEXITCODE -ne 0) {
+        throw "Portable stop command failed with exit code $LASTEXITCODE"
+    }
+    $stopped = $false
+    for ($attempt = 0; $attempt -lt 20; $attempt += 1) {
+        Start-Sleep -Milliseconds 250
+        if (-not (Get-Process -Id $serverProcessId -ErrorAction SilentlyContinue)) {
+            $stopped = $true
+            break
+        }
+    }
+    if (-not $stopped) {
+        throw 'Portable stop command left the recorded backend process running'
+    }
+    if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {
+        throw 'Portable stop command left the backend listening port active'
+    }
+    $serverProcessId = 0
 
     $nodeInfo = & (Join-Path $smokeDir 'runtime\node.exe') -p (
         "process.platform + '/' + process.arch + ' Node ' + process.versions.node"
@@ -245,14 +268,14 @@ try {
     if ($configEditorProcessId -gt 0) {
         Stop-Process -Id $configEditorProcessId -Force -ErrorAction SilentlyContinue
     }
-    if ($serverProcessId -gt 0) {
-        Stop-Process -Id $serverProcessId -Force -ErrorAction SilentlyContinue
-    } else {
-        Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty OwningProcess -Unique |
-            ForEach-Object {
-                Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue
-            }
+    if ((Test-Path -LiteralPath (Join-Path $smokeDir 'runtime\node.exe') -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $smokeDir 'server\runtime\backendProcessController.js') -PathType Leaf)) {
+        & (Join-Path $smokeDir 'runtime\node.exe') `
+            (Join-Path $smokeDir 'server\runtime\backendProcessController.js') `
+            stop `
+            --root $smokeDir `
+            --state-root (Join-Path $smokeDir 'runtime') `
+            --node-exe (Join-Path $smokeDir 'runtime\node.exe') `
+            --server-entry (Join-Path $smokeDir 'server\index.js') 2>$null | Out-Null
     }
 
     if (-not $resolvedSmokeDir.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {

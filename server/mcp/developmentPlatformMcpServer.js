@@ -15,6 +15,7 @@ export const DEVELOPMENT_PLATFORM_MCP_TOOL_IDS = Object.freeze({
   GET_PROJECT_VERSION_OVERVIEW: 'get_project_version_overview',
   LIST_MY_PENDING_AI_PLAN_REVIEWS: 'list_my_pending_ai_plan_reviews',
   GET_MY_APPROVED_AI_PLANS: 'get_my_approved_ai_plans',
+  SET_AI_PLAN_APPLIED: 'set_ai_plan_applied',
   ADD_WORK_ITEM_COMMENT: 'add_work_item_comment',
   SUBMIT_AI_PLAN_FOR_REVIEW: 'submit_ai_plan_for_review',
   ADD_VERSION_COMMENT: 'add_version_comment',
@@ -135,6 +136,17 @@ const TOOL_DEFINITIONS = Object.freeze([
     title: '获取与自己有关的AI计划',
     description: '获取当前用户作为处理人的、已经通过审核的需求或 Bug AI 计划。支持分页摘要和按 submissionId 获取完整 Markdown。',
     inputSchema: APPROVED_AI_PLAN_SCHEMA,
+  }),
+  createToolDefinition({
+    name: DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.SET_AI_PLAN_APPLIED,
+    title: '设置AI计划已应用状态',
+    description: '为当前用户负责的已通过 AI 计划设置或取消独立的已应用标记。',
+    inputSchema: z.object({
+      submissionId: z.string().trim().min(1).max(200),
+      applied: z.boolean(),
+      clientMutationId: CLIENT_MUTATION_ID_SCHEMA,
+    }),
+    readOnly: false,
   }),
   createToolDefinition({
     name: DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.ADD_WORK_ITEM_COMMENT,

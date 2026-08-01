@@ -5,7 +5,10 @@
   },
   "feishu": {
     "appId": "",
-    "appSecret": ""
+    "appSecret": "",
+    "events": {
+      "enabled": true
+    }
   },
   "webApp": {
     "publicBaseUrl": "http://127.0.0.1:3000/",
@@ -22,7 +25,9 @@
       "apiKey": "",
       "reasoningEffort": "high",
       "requestTimeoutMs": 600000,
-      "maxConcurrentRuns": 3
+      "maxConcurrentRuns": 6,
+      "maxConcurrentRunsPerUser": 0,
+      "maxConcurrentRunsPerProject": 4
     },
     "attachments": {
       "enabled": true,
@@ -35,6 +40,17 @@
     },
     "notifications": {
       "enabled": true
+    },
+    "assistant": {
+      "enabled": true,
+      "model": "gpt-5.6-luna",
+      "reasoningEffort": "none",
+      "fallbackModel": "gpt-5.6-terra",
+      "fallbackReasoningEffort": "low",
+      "requestTimeoutMs": 15000,
+      "pollIntervalMs": 2000,
+      "draftTtlHours": 24,
+      "retentionDays": 30
     },
     "projects": [
       {
@@ -147,6 +163,15 @@
     "openId": ""
   },
   "bitable": {
+    "cache": {
+      "enabled": true,
+      "freshTtlMs": 30000,
+      "staleWhileRevalidateMs": 300000,
+      "maxSnapshots": 128,
+      "eventDebounceMs": 500,
+      "eventDedupeTtlMs": 86400000,
+      "maxEventIds": 10000
+    },
     "projectBase": {
       "appToken": "",
       "tableId": "",

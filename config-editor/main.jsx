@@ -557,6 +557,12 @@ function FeishuSection({
       <InlineInfo icon={ShieldCheck}>
         已保存的 App Secret 不会从本机配置服务返回浏览器。留空时保持原值。
       </InlineInfo>
+      <ToggleField
+        label="启用飞书长连接事件"
+        description="通过飞书长连接同步多维表格记录变动；连接异常时，普通读取仍会继续使用飞书接口。"
+        checked={config.feishu.events.enabled}
+        onChange={(checked) => onChange('feishu.events.enabled', checked)}
+      />
     </ConfigPanel>
   );
 }
@@ -615,6 +621,23 @@ function KnowledgeSection({ config, errors, onChange }) {
 function BitableSection({ config, errors, onChange }) {
   return (
     <>
+      <ConfigPanel title="实时缓存" icon={Database}>
+        <ToggleField
+          label="启用多维表格内存缓存"
+          description="后端缓存近期读取结果，并由飞书记录事件及时校正；重启后不会保留数据。"
+          checked={config.bitable.cache.enabled}
+          onChange={(checked) => onChange('bitable.cache.enabled', checked)}
+        />
+        <FieldGrid>
+          <NumberField label="新鲜时间（毫秒）" path="bitable.cache.freshTtlMs" value={config.bitable.cache.freshTtlMs} error={errors['bitable.cache.freshTtlMs']} onChange={onChange} min={1} />
+          <NumberField label="后台刷新窗口（毫秒）" path="bitable.cache.staleWhileRevalidateMs" value={config.bitable.cache.staleWhileRevalidateMs} error={errors['bitable.cache.staleWhileRevalidateMs']} onChange={onChange} min={1} />
+          <NumberField label="缓存表上限" path="bitable.cache.maxSnapshots" value={config.bitable.cache.maxSnapshots} error={errors['bitable.cache.maxSnapshots']} onChange={onChange} min={1} />
+          <NumberField label="事件合并时间（毫秒）" path="bitable.cache.eventDebounceMs" value={config.bitable.cache.eventDebounceMs} error={errors['bitable.cache.eventDebounceMs']} onChange={onChange} min={1} />
+          <NumberField label="事件去重时间（毫秒）" path="bitable.cache.eventDedupeTtlMs" value={config.bitable.cache.eventDedupeTtlMs} error={errors['bitable.cache.eventDedupeTtlMs']} onChange={onChange} min={1} />
+          <NumberField label="事件去重数量上限" path="bitable.cache.maxEventIds" value={config.bitable.cache.maxEventIds} error={errors['bitable.cache.maxEventIds']} onChange={onChange} min={1} />
+        </FieldGrid>
+      </ConfigPanel>
+
       <ConfigPanel title="项目基础信息" icon={Database}>
         <ResourceFields basePath="bitable.projectBase" config={config} errors={errors} onChange={onChange} includeView />
         <FieldMappingGrid
@@ -860,15 +883,32 @@ function AiSection({
             min={1}
           />
           <NumberField
-            label="最大并发任务"
+            label="最大总并发任务"
             path="aiPlanning.codex.maxConcurrentRuns"
             value={config.aiPlanning.codex.maxConcurrentRuns}
             error={errors['aiPlanning.codex.maxConcurrentRuns']}
             onChange={onChange}
             min={1}
           />
+          <NumberField
+            label="单用户并发上限（0 表示不限）"
+            path="aiPlanning.codex.maxConcurrentRunsPerUser"
+            value={config.aiPlanning.codex.maxConcurrentRunsPerUser}
+            error={errors['aiPlanning.codex.maxConcurrentRunsPerUser']}
+            onChange={onChange}
+            min={0}
+          />
+          <NumberField
+            label="单项目并发上限"
+            path="aiPlanning.codex.maxConcurrentRunsPerProject"
+            value={config.aiPlanning.codex.maxConcurrentRunsPerProject}
+            error={errors['aiPlanning.codex.maxConcurrentRunsPerProject']}
+            onChange={onChange}
+            min={1}
+          />
         </FieldGrid>
         <datalist id="reasoning-effort-options">
+          <option value="none" />
           <option value="low" />
           <option value="medium" />
           <option value="high" />
@@ -935,6 +975,77 @@ function AiSection({
             path="aiPlanning.attachments.retentionHours"
             value={config.aiPlanning.attachments.retentionHours}
             error={errors['aiPlanning.attachments.retentionHours']}
+            onChange={onChange}
+            min={1}
+          />
+        </FieldGrid>
+      </ConfigPanel>
+
+      <ConfigPanel title="飞书对话助手" icon={Bot}>
+        <ToggleField
+          label="启用飞书私聊助手"
+          description="允许当前飞书应用在私聊中接收需求、Bug、待办和优先级咨询；建单仍需通过确认卡片。"
+          checked={config.aiPlanning.assistant.enabled}
+          onChange={(checked) => onChange('aiPlanning.assistant.enabled', checked)}
+        />
+        <FieldGrid>
+          <TextField
+            label="快速模型"
+            path="aiPlanning.assistant.model"
+            value={config.aiPlanning.assistant.model}
+            error={errors['aiPlanning.assistant.model']}
+            onChange={onChange}
+          />
+          <TextField
+            label="快速模型推理等级"
+            path="aiPlanning.assistant.reasoningEffort"
+            value={config.aiPlanning.assistant.reasoningEffort}
+            onChange={onChange}
+            list="reasoning-effort-options"
+          />
+          <TextField
+            label="降级模型"
+            path="aiPlanning.assistant.fallbackModel"
+            value={config.aiPlanning.assistant.fallbackModel}
+            error={errors['aiPlanning.assistant.fallbackModel']}
+            onChange={onChange}
+          />
+          <TextField
+            label="降级模型推理等级"
+            path="aiPlanning.assistant.fallbackReasoningEffort"
+            value={config.aiPlanning.assistant.fallbackReasoningEffort}
+            onChange={onChange}
+            list="reasoning-effort-options"
+          />
+          <NumberField
+            label="快速模型超时（毫秒）"
+            path="aiPlanning.assistant.requestTimeoutMs"
+            value={config.aiPlanning.assistant.requestTimeoutMs}
+            error={errors['aiPlanning.assistant.requestTimeoutMs']}
+            onChange={onChange}
+            min={1}
+          />
+          <NumberField
+            label="消息轮询间隔（毫秒）"
+            path="aiPlanning.assistant.pollIntervalMs"
+            value={config.aiPlanning.assistant.pollIntervalMs}
+            error={errors['aiPlanning.assistant.pollIntervalMs']}
+            onChange={onChange}
+            min={1}
+          />
+          <NumberField
+            label="草稿有效小时数"
+            path="aiPlanning.assistant.draftTtlHours"
+            value={config.aiPlanning.assistant.draftTtlHours}
+            error={errors['aiPlanning.assistant.draftTtlHours']}
+            onChange={onChange}
+            min={1}
+          />
+          <NumberField
+            label="会话保留天数"
+            path="aiPlanning.assistant.retentionDays"
+            value={config.aiPlanning.assistant.retentionDays}
+            error={errors['aiPlanning.assistant.retentionDays']}
             onChange={onChange}
             min={1}
           />

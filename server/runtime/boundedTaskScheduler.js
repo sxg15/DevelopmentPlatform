@@ -1,7 +1,7 @@
 export function createBoundedTaskScheduler({
-  maxConcurrent = 3,
-  maxPerUser = 1,
-  maxPerProject = 2,
+  maxConcurrent = 6,
+  maxPerUser = 0,
+  maxPerProject = 4,
 } = {}) {
   const pending = [];
   const userCounts = new Map();
@@ -47,8 +47,8 @@ export function createBoundedTaskScheduler({
   }
 
   function canStart(entry) {
-    return (userCounts.get(entry.userKey) || 0) < maxPerUser
-      && (projectCounts.get(entry.projectKey) || 0) < maxPerProject;
+    return isBelowLimit(userCounts.get(entry.userKey) || 0, maxPerUser)
+      && isBelowLimit(projectCounts.get(entry.projectKey) || 0, maxPerProject);
   }
 
   return {
@@ -60,6 +60,11 @@ export function createBoundedTaskScheduler({
       };
     },
   };
+}
+
+function isBelowLimit(count, limit) {
+  const normalizedLimit = Number(limit);
+  return normalizedLimit <= 0 || count < normalizedLimit;
 }
 
 function increment(map, key) {

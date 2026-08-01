@@ -61,6 +61,7 @@ import {
 } from './config/runtimeConfig.js';
 import { createCodexAppServerClient } from './integrations/codexAppServerClient.js';
 import { AiPlanningRepository } from './repositories/aiPlanningRepository.js';
+import { FeishuAssistantRepository } from './repositories/feishuAssistantRepository.js';
 import { ensureAiDataDirectories } from './runtime/aiDataPaths.js';
 import { createAiPlanningRealtimeHub } from './runtime/aiPlanningRealtime.js';
 import { createBoundedTaskScheduler } from './runtime/boundedTaskScheduler.js';
@@ -75,6 +76,8 @@ import {
   getSessionId,
 } from './runtime/sessionStore.js';
 import { createWorkItemRealtimeHub } from './runtime/workItemRealtime.js';
+import { createBitableTableDataService } from './services/bitableTableDataService.js';
+import { createFeishuBitableEventService } from './services/feishuBitableEventService.js';
 import {
   clientErrorLogFilePath,
   createClientErrorRateLimiter,
@@ -93,6 +96,7 @@ import { createTodoNotificationScheduler } from './services/todoNotificationSche
 import { createVersionManagementService } from './services/versionManagementService.js';
 import { createAiRunContextService } from './services/aiRunContextService.js';
 import { createAiPlanningNotificationService } from './services/aiPlanningNotificationService.js';
+import { createFeishuAssistantService } from './services/feishuAssistantService.js';
 import {
   createAiPlanningService,
   getAllowedAiPlanToolIds,
@@ -102,7 +106,10 @@ import {
   createDevelopmentPlatformMcpService,
 } from './services/developmentPlatformMcpService.js';
 import { createMcpAiPlanService } from './services/mcpAiPlanService.js';
-import { registerDevelopmentPlatformMcp } from './mcp/developmentPlatformMcpServer.js';
+import {
+  DEVELOPMENT_PLATFORM_MCP_TOOL_IDS,
+  registerDevelopmentPlatformMcp,
+} from './mcp/developmentPlatformMcpServer.js';
 import {
   ensureWorkItemStatusOptions,
   migrateWorkItemStatusOptions,
@@ -115,19 +122,26 @@ import {
   getTenantAccessToken,
   readJson,
 } from './integrations/feishuClient.js';
-import { sendFeishuInteractiveMessage } from './integrations/feishuMessageClient.js';
 import {
-  createBitableRecord,
-  deleteBitableRecord,
+  replyFeishuMessage,
+  sendFeishuInteractiveMessage,
+  sendFeishuTextMessage,
+} from './integrations/feishuMessageClient.js';
+import {
+  createBitableRecord as createBitableRecordFromApi,
+  deleteBitableRecord as deleteBitableRecordFromApi,
   ensureBitableTextField,
   ensureCachedBitableTextField,
-  fetchBitableRecords,
+  fetchBitableRecord as fetchBitableRecordFromApi,
+  fetchBitableRecords as fetchBitableRecordsFromApi,
   fetchCachedBitableFields,
   fetchCachedBitableRecords,
   fetchCachedBitableTables,
   formatFeishuApiError,
-  updateBitableRecordFields,
+  updateBitableRecordFields as updateBitableRecordFieldsFromApi,
 } from './integrations/bitableClient.js';
+import { createFeishuLongConnectionClient } from './integrations/feishuLongConnectionClient.js';
+import { createFeishuDocumentEventSubscriptionClient } from './integrations/feishuDocumentEventSubscriptionClient.js';
 import {
   copyWikiNode,
   createWikiNode,
@@ -172,8 +186,53 @@ const {
 } = createWorkItemRealtimeHub({
   onPublish: ({ projectId }) => invalidateProjectOverviewCache(projectId),
 });
+const bitableTableDataService = createBitableTableDataService({
+  config: runtimeConfig.bitable.cache,
+  bitable: {
+    createRecord: createBitableRecordFromApi,
+    deleteRecord: deleteBitableRecordFromApi,
+    fetchRecord: fetchBitableRecordFromApi,
+    fetchRecords: fetchBitableRecordsFromApi,
+    updateRecord: updateBitableRecordFieldsFromApi,
+  },
+});
+const feishuDocumentEventSubscriptionClient = createFeishuDocumentEventSubscriptionClient({
+  enabled: runtimeConfig.feishu.events.enabled,
+  getTenantToken: getTenantAccessToken,
+  onError(error) {
+    console.error('[feishu-bitable-events] document subscription failed', formatLogError(error));
+  },
+});
+const feishuLongConnectionClient = createFeishuLongConnectionClient({
+  appId,
+  appSecret,
+  onError(error) {
+    console.error('[feishu-bitable-events] long connection failed', formatLogError(error));
+  },
+});
+const feishuBitableEventService = createFeishuBitableEventService({
+  enabled: runtimeConfig.feishu.events.enabled,
+  ...runtimeConfig.bitable.cache,
+  getTenantToken: getTenantAccessToken,
+  tableDataService: bitableTableDataService,
+  longConnection: feishuLongConnectionClient,
+  documentSubscriptions: feishuDocumentEventSubscriptionClient,
+  publishWorkItemUpdated,
+  onError(error) {
+    console.error('[feishu-bitable-events] event processing failed', formatLogError(error));
+  },
+});
 const versionManagementService = createVersionManagementService({
   loadCompletedWorkItemCandidates: loadCompletedVersionWorkItemCandidates,
+  bitable: {
+    createRecord: createBitableRecord,
+    deleteRecord: deleteBitableRecord,
+    fetchFields: fetchCachedBitableFields,
+    fetchRecords: fetchBitableRecords,
+    fetchTables: fetchCachedBitableTables,
+    updateRecord: updateBitableRecordFields,
+  },
+  onTableContextResolved: registerBitableTableContext,
 });
 const todoNotificationScheduler = createTodoNotificationScheduler({
   run: runTodoNotificationTick,
@@ -185,11 +244,12 @@ const aiDataPaths = ensureAiDataDirectories();
 const aiPlanningRepository = new AiPlanningRepository(aiDataPaths.database);
 const aiPlanMutationQueue = createKeyedTaskQueue();
 const workItemMutationQueue = createKeyedTaskQueue();
+const workItemTableMutationQueue = createKeyedTaskQueue();
 const aiPlanningRealtimeHub = createAiPlanningRealtimeHub();
 const aiPlanningScheduler = createBoundedTaskScheduler({
   maxConcurrent: runtimeConfig.aiPlanning.codex.maxConcurrentRuns,
-  maxPerUser: 1,
-  maxPerProject: 2,
+  maxPerUser: runtimeConfig.aiPlanning.codex.maxConcurrentRunsPerUser,
+  maxPerProject: runtimeConfig.aiPlanning.codex.maxConcurrentRunsPerProject,
 });
 const codexRuntimeReady = Boolean(
   runtimeConfig.aiPlanning.enabled
@@ -207,6 +267,9 @@ const codexAppServerClient = codexRuntimeReady
       model: runtimeConfig.aiPlanning.codex.model,
       reasoningEffort: runtimeConfig.aiPlanning.codex.reasoningEffort,
       requestTimeoutMs: runtimeConfig.aiPlanning.codex.requestTimeoutMs,
+      onApiDiagnostic(diagnostic) {
+        console.error('[codex-api-bridge]', formatCodexBridgeDiagnostic(diagnostic));
+      },
     })
   : null;
 const aiRunContextService = createAiRunContextService({
@@ -250,8 +313,68 @@ const developmentPlatformMcpService = createDevelopmentPlatformMcpService({
   aiPlanService: mcpAiPlanService,
   addWorkItemComment: addDevelopmentPlatformMcpWorkItemComment,
   submitAiPlanForReview: submitDevelopmentPlatformMcpAiPlan,
+  setAiPlanApplied: setDevelopmentPlatformMcpAiPlanApplied,
   addVersionComment: addDevelopmentPlatformMcpVersionComment,
   updateWorkItemStatus: updateDevelopmentPlatformMcpWorkItemStatus,
+});
+const feishuAssistantRepository = new FeishuAssistantRepository(aiDataPaths.assistantDatabase);
+const feishuAssistantService = createFeishuAssistantService({
+  config: runtimeConfig.aiPlanning.assistant,
+  repository: feishuAssistantRepository,
+  codexClient: codexAppServerClient,
+  skillPath: path.join(rootDir, 'server', 'ai', 'skills', 'feishu-assistant', 'SKILL.md'),
+  cwd: aiDataPaths.assistantWorkspace,
+  async listAccessibleProjects({ user }) {
+    const token = await getTenantAccessToken();
+    return getAccessibleProjectsForUser(token, user);
+  },
+  async listAssignedTasks({ user }) {
+    const token = await getTenantAccessToken();
+    return developmentPlatformMcpService.execute({
+      toolName: DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.LIST_MY_WORK_ITEMS,
+      authContext: { token, user },
+      arguments: {
+        includeCompleted: false,
+        limit: 50,
+        offset: 0,
+      },
+    });
+  },
+  createWorkItem: createWorkItemForAssistant,
+  async deliver(ownerOpenId, payload) {
+    const token = await getTenantAccessToken();
+    if (payload?.type === 'card') {
+      await sendFeishuInteractiveMessage(token, ownerOpenId, payload.card);
+      return;
+    }
+    if (payload?.replyToMessageId) {
+      await replyFeishuMessage(token, payload.replyToMessageId, {
+        msgType: 'text',
+        content: { text: payload.content || '' },
+      });
+      return;
+    }
+    await sendFeishuTextMessage(token, ownerOpenId, payload?.content || '');
+  },
+  onError(error) {
+    console.error('[feishu-assistant]', formatFeishuAssistantLogError(error));
+  },
+});
+feishuLongConnectionClient.setEventHandlers({
+  'drive.file.bitable_record_changed_v1': (payload) => feishuBitableEventService.handleEvent(payload),
+  'im.message.receive_v1': (payload) => {
+    const event = normalizeFeishuAssistantMessageEvent(payload);
+    if (event) {
+      feishuAssistantService.handleMessage(event);
+    }
+  },
+  'card.action.trigger': async (payload) => {
+    const action = normalizeFeishuAssistantCardAction(payload);
+    if (!action) {
+      return;
+    }
+    await feishuAssistantService.handleCardAction(action);
+  },
 });
 
 const app = express();
@@ -288,6 +411,11 @@ app.get('/api/health', (_request, response) => {
   response.json({
     ok: true,
     version: currentAppVersion,
+    realtimeCache: {
+      cache: bitableTableDataService.getHealth(),
+      events: feishuBitableEventService.getHealth(),
+    },
+    feishuAssistant: feishuAssistantService.getHealth(),
   });
 });
 
@@ -513,6 +641,10 @@ app.get('/api/projects/:projectId/ai-plans', async (request, response) => {
   await handleAiPlanList(request, response);
 });
 
+app.get('/api/projects/:projectId/ai-activity', async (request, response) => {
+  await handleAiProjectActivity(request, response);
+});
+
 app.get('/api/projects/:projectId/ai-plans/:submissionId/raw', async (request, response) => {
   await handleAiPlanRawRead(request, response);
 });
@@ -531,6 +663,10 @@ app.post('/api/projects/:projectId/ai-plans/:submissionId/adopt', async (request
 
 app.post('/api/projects/:projectId/ai-plans/:submissionId/approve', async (request, response) => {
   await handleAiPlanApprove(request, response);
+});
+
+app.post('/api/projects/:projectId/ai-plans/:submissionId/applied', async (request, response) => {
+  await handleAiPlanAppliedUpdate(request, response);
 });
 
 app.post('/api/projects/:projectId/ai-plans/:submissionId/reject', async (request, response) => {
@@ -1255,6 +1391,19 @@ async function handleAiPlanList(request, response) {
   }
 }
 
+async function handleAiProjectActivity(request, response) {
+  try {
+    const context = await getAiPlanProjectRequestContext(request);
+    response.json(aiPlanningService.getProjectActivity({
+      user: context.session.user,
+      projectId: context.project.projectId,
+      allowedToolIds: context.allowedToolIds,
+    }));
+  } catch (error) {
+    sendAiPlanningError(response, error, '读取 AI 任务状态失败');
+  }
+}
+
 async function handleAiPlanRead(request, response) {
   try {
     const context = await getAiPlanProjectRequestContext(request);
@@ -1373,6 +1522,34 @@ async function handleAiPlanApprove(request, response) {
     response.json(result);
   } catch (error) {
     sendAiPlanningError(response, error, '通过 AI 方案失败');
+  }
+}
+
+async function handleAiPlanAppliedUpdate(request, response) {
+  try {
+    const initial = await getAiPlanReviewRequestContext(request);
+    const result = await aiPlanMutationQueue.run(
+      buildAiPlanMutationKey(initial.submission),
+      async () => {
+        const context = await getAiPlanReviewRequestContext(request);
+        assertCanSetAiPlanApplied(context);
+        const mutation = aiPlanningService.setSubmissionApplied({
+          user: context.session.user,
+          submissionId: context.submission.id,
+          projectId: context.project.projectId,
+          allowedToolIds: context.allowedToolIds,
+          applied: request.body?.applied,
+          clientMutationId: request.body?.clientMutationId,
+        });
+        if (!mutation) {
+          throw createHttpError('方案不存在', 404);
+        }
+        return mutation;
+      },
+    );
+    response.json(result);
+  } catch (error) {
+    sendAiPlanningError(response, error, '更新 AI 方案应用状态失败');
   }
 }
 
@@ -1761,6 +1938,7 @@ function canReviewAiPlan({ projectAccess, workItem, user }) {
 
 function buildAiPlanPermissions(context, submission) {
   const isPending = submission?.status === AI_PLAN_STATUSES.PENDING_REVIEW;
+  const isApproved = submission?.status === AI_PLAN_STATUSES.APPROVED;
   return {
     canApprove: Boolean(context.canReview && context.isLatestRevision && isPending),
     canReject: Boolean(context.canReview && context.isLatestRevision && isPending),
@@ -1776,6 +1954,7 @@ function buildAiPlanPermissions(context, submission) {
       && isPending,
     ),
     canDelete: canDeleteAiPlan(context, submission),
+    canSetApplied: Boolean(context.canReview && context.workItem && isApproved),
   };
 }
 
@@ -1811,6 +1990,18 @@ function assertCanEditAiPlan(context) {
       .includes(context.submission.status)
   ) {
     throw createHttpError('只能编辑修订链中的最新有效方案', 409);
+  }
+}
+
+function assertCanSetAiPlanApplied(context) {
+  if (!context.workItem) {
+    throw createHttpError('原工作项不存在，无法修改已应用状态', 409);
+  }
+  if (!context.canReview) {
+    throw createHttpError('只有当前处理人、研发超级管理员或超级管理员可以修改已应用状态', 403);
+  }
+  if (context.submission.status !== AI_PLAN_STATUSES.APPROVED) {
+    throw createHttpError('只有已通过的 AI 方案可以设置已应用状态', 409);
   }
 }
 
@@ -2344,6 +2535,59 @@ async function submitDevelopmentPlatformMcpAiPlan({
   );
 }
 
+async function setDevelopmentPlatformMcpAiPlanApplied({
+  token,
+  user,
+  submissionId,
+  applied,
+  clientMutationId,
+}) {
+  return runMcpOperation(
+    async () => {
+      const initial = await mcpAiPlanService.getMyApprovedPlan({
+        token,
+        user,
+        submissionId,
+      });
+      const initialSubmission = aiPlanningRepository.getSubmission(
+        initial.plan.submissionId,
+      );
+      if (!initialSubmission) {
+        throw createHttpError('AI 计划不存在或不再属于当前用户', 404);
+      }
+      return aiPlanMutationQueue.run(
+        buildAiPlanMutationKey(initialSubmission),
+        async () => {
+          const current = await mcpAiPlanService.getMyApprovedPlan({
+            token,
+            user,
+            submissionId,
+          });
+          const rawSubmission = aiPlanningRepository.getSubmission(
+            current.plan.submissionId,
+          );
+          if (!rawSubmission) {
+            throw createHttpError('AI 计划不存在或不再属于当前用户', 404);
+          }
+          const result = aiPlanningService.setSubmissionApplied({
+            user,
+            submissionId: rawSubmission.id,
+            projectId: rawSubmission.projectId,
+            allowedToolIds: [rawSubmission.toolId],
+            applied,
+            clientMutationId,
+          });
+          if (!result) {
+            throw createHttpError('AI 计划不存在或不再属于当前用户', 404);
+          }
+          return result;
+        },
+      );
+    },
+    '更新 AI 计划应用状态失败',
+  );
+}
+
 async function addDevelopmentPlatformMcpVersionComment({
   token,
   user,
@@ -2543,6 +2787,10 @@ async function runMcpOperation(task, fallbackMessage) {
 
 function buildWorkItemMutationKey(projectId, toolId, recordId) {
   return ['work-item', projectId, toolId, recordId].join(':');
+}
+
+function buildWorkItemTableMutationKey(projectId, toolId) {
+  return ['work-item', projectId, toolId, 'table'].join(':');
 }
 
 function getRequestOrigin(request) {
@@ -2842,6 +3090,168 @@ async function handleRealtimeStream(request, response) {
   }
 }
 
+async function createWorkItemForAssistant({
+  user,
+  projectId,
+  toolId,
+  draft,
+  sourceMutationId = '',
+}) {
+  const toolConfig = getWorkItemToolConfig(toolId);
+  validateProjectBaseConfig();
+  validateProjectPermissionConfig();
+  validateKnowledgeBaseConfig();
+
+  if (!appId || !appSecret) {
+    throw new Error('缺少飞书应用配置');
+  }
+
+  const title = String(draft?.title || '').trim();
+  const description = String(draft?.description || '').trim();
+  const priority = String(draft?.priority || 'P4').trim();
+  const assignees = normalizeMentionedUsers(draft?.assignees || []);
+  const needsAssigneeAssignment = supportsUnassignedWorkItemRouting(toolId)
+    && draft?.needsAssigneeAssignment === true;
+  const expectedDays = normalizeNumberValue(draft?.expectedDays);
+  if (!title || !description) {
+    throw new Error(`${toolConfig.itemLabel}标题和描述不能为空`);
+  }
+  if (title.length > 200 || description.length > 5000) {
+    throw new Error(`${toolConfig.itemLabel}内容超过允许长度`);
+  }
+  if (expectedDays !== null && expectedDays < 0) {
+    throw new Error('期望时限不能小于0');
+  }
+  const assignmentError = validateWorkItemAssignmentChoice({
+    toolId,
+    assignees,
+    needsAssigneeAssignment,
+  });
+  if (assignmentError) {
+    throw new Error(assignmentError);
+  }
+
+  const token = await getTenantAccessToken();
+  const { project, projectAccess } = await getAuthorizedProjectAccess(
+    token,
+    String(projectId || '').trim(),
+    user,
+    toolId,
+  );
+  if (needsAssigneeAssignment && projectAccess.developmentSuperAdmins.length === 0) {
+    throw new Error('项目权限表未配置研发超级管理员，暂时无法提交未指定处理人的工作项');
+  }
+  const allowedAssignees = filterMentionedUsersByCandidates(
+    assignees,
+    projectAccess.mentionableUsersByTool[toolId] || [],
+  );
+  if (allowedAssignees.length !== assignees.length) {
+    throw new Error('处理人员不在可选范围内');
+  }
+
+  await ensureProjectWorkItemBitable(token, project, user, toolConfig);
+  const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
+  const { appToken, tableId } = await getCachedWorkItemTableContext(token, node, toolConfig);
+  let fields = await ensureCachedBitableTextField(
+    token,
+    appToken,
+    tableId,
+    toolConfig.fieldNames.comments,
+  );
+  ({ fields } = await ensureWorkItemStatusOptions(token, { appToken, tableId }, toolConfig));
+  validateWorkItemTableSchema(fields, toolConfig);
+
+  const result = await workItemTableMutationQueue.run(
+    buildWorkItemTableMutationKey(project.projectId, toolId),
+    async () => {
+      const currentRecords = await fetchBitableRecords(token, {
+        appToken,
+        tableId,
+        viewId: '',
+        fieldNames: {},
+      }, { consistency: 'fresh' });
+      const existing = findWorkItemBySourceMutationId(
+        currentRecords,
+        toolConfig.fieldNames.comments,
+        sourceMutationId,
+      );
+      if (existing) {
+        return { createdRecord: existing, nextRecords: currentRecords, duplicate: true };
+      }
+      const createdRecord = await createWorkItemRecord(token, {
+        appToken,
+        tableId,
+        records: currentRecords,
+        fields,
+        toolConfig,
+        user,
+        payload: {
+          title,
+          description,
+          priority,
+          assignees: allowedAssignees,
+          requiresSubmissionAttachment: false,
+          expectedDays,
+          contactInfo: null,
+          attachments: [],
+          sourceMutationId,
+        },
+      });
+      const nextRecords = await fetchBitableRecords(token, {
+        appToken,
+        tableId,
+        viewId: '',
+        fieldNames: {},
+      }, { consistency: 'fresh' });
+      return { createdRecord, nextRecords, duplicate: false };
+    },
+  );
+  const createdRecordId = String(
+    result.createdRecord?.record_id || result.createdRecord?.recordId || result.createdRecord?.id || '',
+  );
+  const item = normalizeWorkItemRecords(result.nextRecords, user, toolConfig)
+    .find((candidate) => candidate.recordId === createdRecordId)
+    || normalizeWorkItemRecords([result.createdRecord], user, toolConfig)[0]
+    || null;
+  const notificationResults = !result.duplicate && item
+    ? await notifyWorkItemCreationRecipients(
+      token,
+      needsAssigneeAssignment ? projectAccess.developmentSuperAdmins : allowedAssignees,
+      {
+        project,
+        item,
+        submitter: user,
+        toolConfig,
+        needsAssigneeAssignment,
+      },
+    )
+    : [];
+  if (!result.duplicate && createdRecordId) {
+    publishWorkItemUpdated({
+      projectId: project.projectId,
+      toolId,
+      recordId: createdRecordId,
+    });
+  }
+  return {
+    project,
+    item,
+    duplicate: result.duplicate,
+    notificationResults,
+  };
+}
+
+function findWorkItemBySourceMutationId(records, commentsFieldName, sourceMutationId) {
+  const mutationId = String(sourceMutationId || '').trim();
+  if (!mutationId) {
+    return null;
+  }
+  return (Array.isArray(records) ? records : []).find((record) => {
+    const document = parseCommentsDocument(record?.fields?.[commentsFieldName], false);
+    return document.internal?.sourceMutationIds?.includes(mutationId);
+  }) || null;
+}
+
 async function handleWorkItemCreate(request, response, toolId) {
   const toolConfig = getWorkItemToolConfig(toolId);
   try {
@@ -2920,15 +3330,12 @@ async function handleWorkItemCreate(request, response, toolId) {
     await ensureProjectWorkItemBitable(token, project, session.user, toolConfig);
     const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
     const { appToken, tableId } = await getCachedWorkItemTableContext(token, node, toolConfig);
-    let [fields, records] = await Promise.all([
-      ensureCachedBitableTextField(token, appToken, tableId, toolConfig.fieldNames.comments),
-      fetchBitableRecords(token, {
-        appToken,
-        tableId,
-        viewId: '',
-        fieldNames: {},
-      }),
-    ]);
+    let fields = await ensureCachedBitableTextField(
+      token,
+      appToken,
+      tableId,
+      toolConfig.fieldNames.comments,
+    );
     ({ fields } = await ensureWorkItemStatusOptions(token, { appToken, tableId }, toolConfig));
     validateWorkItemTableSchema(fields, toolConfig);
 
@@ -2944,31 +3351,42 @@ async function handleWorkItemCreate(request, response, toolId) {
       response.status(400).json({ message: '处理人员不在可选范围内' });
       return;
     }
-    const createdRecord = await createWorkItemRecord(token, {
-      appToken,
-      tableId,
-      records,
-      fields,
-      toolConfig,
-      user: session.user,
-      payload: {
-        title,
-        description,
-        priority,
-        assignees: allowedAssignees,
-        requiresSubmissionAttachment,
-        expectedDays,
-        contactInfo,
-        attachments: uploadedAttachments,
+    const { createdRecord, nextRecords } = await workItemTableMutationQueue.run(
+      buildWorkItemTableMutationKey(project.projectId, toolId),
+      async () => {
+        const currentRecords = await fetchBitableRecords(token, {
+          appToken,
+          tableId,
+          viewId: '',
+          fieldNames: {},
+        }, { consistency: 'fresh' });
+        const createdRecord = await createWorkItemRecord(token, {
+          appToken,
+          tableId,
+          records: currentRecords,
+          fields,
+          toolConfig,
+          user: session.user,
+          payload: {
+            title,
+            description,
+            priority,
+            assignees: allowedAssignees,
+            requiresSubmissionAttachment,
+            expectedDays,
+            contactInfo,
+            attachments: uploadedAttachments,
+          },
+        });
+        const nextRecords = await fetchBitableRecords(token, {
+          appToken,
+          tableId,
+          viewId: '',
+          fieldNames: {},
+        }, { consistency: 'fresh' });
+        return { createdRecord, nextRecords };
       },
-    });
-
-    const nextRecords = await fetchBitableRecords(token, {
-      appToken,
-      tableId,
-      viewId: '',
-      fieldNames: {},
-    });
+    );
     const items = normalizeWorkItemRecords(nextRecords, session.user, toolConfig);
     const createdRecordId = String(createdRecord?.record_id || createdRecord?.recordId || createdRecord?.id || '');
     const item = items.find((candidate) => candidate.recordId === createdRecordId) || normalizeWorkItemRecords([createdRecord], session.user, toolConfig)[0] || null;
@@ -3055,11 +3473,14 @@ async function handleWorkItemUpdate(request, response, toolId) {
 
     const token = await getTenantAccessToken();
     const { project, projectAccess } = await getAuthorizedProjectAccess(token, projectId, session.user, toolId);
+    return workItemMutationQueue.run(
+      buildWorkItemMutationKey(project.projectId, toolId, recordId),
+      async () => {
     const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
     const { appToken, tableId } = await fetchWorkItemTableContext(token, node, toolConfig);
     const [fields, record] = await Promise.all([
       fetchCachedBitableFields(token, appToken, tableId),
-      fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig),
+      fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig, { consistency: 'fresh' }),
     ]);
 
     const source = record.fields || {};
@@ -3098,7 +3519,14 @@ async function handleWorkItemUpdate(request, response, toolId) {
     }
 
     await updateBitableRecordFields(token, appToken, tableId, recordId, updateFields);
-    const updatedRecord = await fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig);
+    const updatedRecord = await fetchWorkItemRecordById(
+      token,
+      appToken,
+      tableId,
+      recordId,
+      toolConfig,
+      { consistency: 'fresh' },
+    );
     const normalizedItem = normalizeWorkItemRecords([updatedRecord], session.user, toolConfig)[0] || null;
     publishWorkItemUpdated({
       projectId: project.projectId,
@@ -3127,6 +3555,8 @@ async function handleWorkItemUpdate(request, response, toolId) {
       mentionableUsers: projectAccess.mentionableUsersByTool[toolId] || [],
       notificationResults,
     });
+      },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : `编辑${toolConfig.itemLabel}失败`;
     const status = message.includes('缺少')
@@ -3174,9 +3604,19 @@ async function handleWorkItemDelete(request, response, toolId) {
       return;
     }
 
+    return workItemMutationQueue.run(
+      buildWorkItemMutationKey(project.projectId, toolId, recordId),
+      async () => {
     const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
     const { appToken, tableId } = await fetchWorkItemTableContext(token, node, toolConfig);
-    await fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig);
+    await fetchWorkItemRecordById(
+      token,
+      appToken,
+      tableId,
+      recordId,
+      toolConfig,
+      { consistency: 'fresh' },
+    );
     await deleteBitableRecord(token, appToken, tableId, recordId);
 
     const nextRecords = await fetchBitableRecords(token, {
@@ -3184,7 +3624,7 @@ async function handleWorkItemDelete(request, response, toolId) {
       tableId,
       viewId: '',
       fieldNames: {},
-    });
+    }, { consistency: 'fresh' });
     const fields = await fetchCachedBitableFields(token, appToken, tableId);
     const items = normalizeWorkItemRecords(nextRecords, session.user, toolConfig);
     publishWorkItemUpdated({
@@ -3203,6 +3643,8 @@ async function handleWorkItemDelete(request, response, toolId) {
       statusOptions: normalizeWorkItemStatusOptions(fields, toolConfig),
       mentionableUsers: projectAccess.mentionableUsersByTool[toolId] || [],
     });
+      },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : `删除${toolConfig.itemLabel}失败`;
     const status = message.includes('缺少') ? 500 : message.includes('权限') || message.includes('超级管理员') ? 403 : message.includes('不存在') ? 404 : 502;
@@ -3314,12 +3756,15 @@ async function handleRequirementSubmissionAttachmentsUpdate(request, response) {
     const notifyProposer = parseBooleanValue(updatePayload.fields?.notifyProposer);
     const token = await getTenantAccessToken();
     const { project } = await getAuthorizedProjectAccess(token, projectId, session.user, 'requirements');
+    return workItemMutationQueue.run(
+      buildWorkItemMutationKey(project.projectId, 'requirements', recordId),
+      async () => {
     const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
     const { appToken, tableId } = await fetchWorkItemTableContext(token, node, toolConfig);
     await ensureBitableTextField(token, appToken, tableId, toolConfig.fieldNames.comments);
     const [statusSchema, record] = await Promise.all([
       ensureWorkItemStatusOptions(token, { appToken, tableId }, toolConfig),
-      fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig),
+      fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig, { consistency: 'fresh' }),
     ]);
     const fields = statusSchema.fields;
     validateWorkItemTableSchema(fields, toolConfig);
@@ -3389,7 +3834,14 @@ async function handleRequirementSubmissionAttachmentsUpdate(request, response) {
       [fieldNames.comments]: JSON.stringify(nextCommentsDocument),
     });
 
-    const updatedRecord = await fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig);
+    const updatedRecord = await fetchWorkItemRecordById(
+      token,
+      appToken,
+      tableId,
+      recordId,
+      toolConfig,
+      { consistency: 'fresh' },
+    );
     const normalizedItem = normalizeWorkItemRecords([updatedRecord], session.user, toolConfig)[0] || null;
     publishWorkItemUpdated({
       projectId: project.projectId,
@@ -3424,6 +3876,8 @@ async function handleRequirementSubmissionAttachmentsUpdate(request, response) {
       },
       notificationResults,
     });
+      },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : '变动提交附件失败';
     const status = message.includes('缺少')
@@ -3534,6 +3988,7 @@ async function executeWorkItemCommentMutation({
         tableId,
         recordId,
         toolConfig,
+        { consistency: 'fresh' },
       );
       const commentsDocument = parseCommentsDocument(
         (record.fields || {})[commentsFieldName],
@@ -3642,12 +4097,22 @@ async function handleWorkItemCommentDelete(request, response, toolId) {
 
     const token = await getTenantAccessToken();
     const { project } = await getAuthorizedProjectAccess(token, projectId, session.user, toolId);
+    return workItemMutationQueue.run(
+      buildWorkItemMutationKey(project.projectId, toolId, recordId),
+      async () => {
     const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
     const { appToken, tableId } = await fetchWorkItemTableContext(token, node, toolConfig);
     const commentsFieldName = toolConfig.fieldNames.comments;
     await ensureBitableTextField(token, appToken, tableId, commentsFieldName);
 
-    const record = await fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig);
+    const record = await fetchWorkItemRecordById(
+      token,
+      appToken,
+      tableId,
+      recordId,
+      toolConfig,
+      { consistency: 'fresh' },
+    );
     const commentsDocument = parseCommentsDocument((record.fields || {})[commentsFieldName], true);
     const comment = commentsDocument.items.find((item) => item.id === commentId);
     if (!comment) {
@@ -3677,6 +4142,8 @@ async function handleWorkItemCommentDelete(request, response, toolId) {
     response.json({
       comments: normalizeCommentsForClient(nextDocument),
     });
+      },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : '删除留言失败';
     const status = message.includes('缺少') ? 500 : message.includes('权限') || message.includes('只能') ? 403 : message.includes('不存在') ? 404 : message.includes('JSON') ? 409 : 502;
@@ -3776,7 +4243,7 @@ async function executeWorkItemStatusMutation({
 
       const [statusSchema, record] = await Promise.all([
         ensureWorkItemStatusOptions(token, { appToken, tableId }, toolConfig),
-        fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig),
+        fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig, { consistency: 'fresh' }),
       ]);
       const source = record.fields || {};
       const currentStatus = normalizeTextValue(source[fieldNames.status]) || '未设置状态';
@@ -3889,6 +4356,7 @@ async function executeWorkItemStatusMutation({
         tableId,
         recordId,
         toolConfig,
+        { consistency: 'fresh' },
       );
       const item = normalizeWorkItemRecords([updatedRecord], user, toolConfig)[0] || null;
       publishWorkItemUpdated({
@@ -3968,6 +4436,9 @@ async function handleWorkItemAssigneeChange(request, response, toolId) {
 
     const token = await getTenantAccessToken();
     const { project, projectAccess } = await getAuthorizedProjectAccess(token, projectId, session.user, toolId);
+    return workItemMutationQueue.run(
+      buildWorkItemMutationKey(project.projectId, toolId, recordId),
+      async () => {
     const candidates = projectAccess.mentionableUsersByTool[toolId] || [];
     const allowedAssignees = filterMentionedUsersByCandidates(requestedAssignees, candidates);
     if (allowedAssignees.length !== requestedAssignees.length) {
@@ -3981,7 +4452,14 @@ async function handleWorkItemAssigneeChange(request, response, toolId) {
     const commentsFieldName = fieldNames.comments;
     await ensureBitableTextField(token, appToken, tableId, commentsFieldName);
 
-    const record = await fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig);
+    const record = await fetchWorkItemRecordById(
+      token,
+      appToken,
+      tableId,
+      recordId,
+      toolConfig,
+      { consistency: 'fresh' },
+    );
     const source = record.fields || {};
     const currentAssignees = normalizeUserListValue(source[fieldNames.assignees]);
     const isCurrentAssignee = currentAssignees.some((assignee) => isSameUser(assignee, session.user));
@@ -4014,7 +4492,14 @@ async function handleWorkItemAssigneeChange(request, response, toolId) {
       [commentsFieldName]: JSON.stringify(nextCommentsDocument),
     });
 
-    const updatedRecord = await fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig);
+    const updatedRecord = await fetchWorkItemRecordById(
+      token,
+      appToken,
+      tableId,
+      recordId,
+      toolConfig,
+      { consistency: 'fresh' },
+    );
     const normalizedItem = normalizeWorkItemRecords([updatedRecord], session.user, toolConfig)[0] || null;
     publishWorkItemUpdated({
       projectId: project.projectId,
@@ -4060,6 +4545,8 @@ async function handleWorkItemAssigneeChange(request, response, toolId) {
       notificationResults,
       aiPlanNotificationQueuedCount,
     });
+      },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : `变更${toolConfig.itemLabel}处理人员失败`;
     const status = message.includes('缺少')
@@ -4138,6 +4625,11 @@ const httpServer = app.listen(port, host, () => {
     console.log(url);
   }
   todoNotificationScheduler.start();
+  void feishuBitableEventService.start();
+  if (runtimeConfig.aiPlanning.assistant.enabled && !runtimeConfig.feishu.events.enabled) {
+    void feishuLongConnectionClient.start();
+  }
+  feishuAssistantService.start();
   void migrateConfiguredWorkItemStatusOptions();
 });
 
@@ -4150,7 +4642,12 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     shuttingDown = true;
     todoNotificationScheduler.stop();
     aiPlanningNotificationService.stop();
-    void codexAppServerClient?.stop().finally(() => {
+    void Promise.allSettled([
+      feishuBitableEventService.stop(),
+      Promise.resolve(feishuAssistantService.stop()),
+      codexAppServerClient?.stop(),
+    ]).finally(() => {
+      feishuAssistantRepository.close();
       httpServer.close(() => process.exit(0));
     });
     setTimeout(() => process.exit(1), 5_000).unref();
@@ -4497,6 +4994,18 @@ function setCachedWorkItemTableContext(toolConfig, node, context) {
     value: context,
     expiresAt: Date.now() + LONG_STRUCTURE_CACHE_TTL_MS,
   });
+  registerBitableTableContext({
+    appToken: context.appToken,
+    tableId: context.tableId,
+    viewId: '',
+    fieldNames: {},
+    projectId: String(node.title || '').trim(),
+    toolId: toolConfig.toolId,
+  });
+}
+
+function registerBitableTableContext(context) {
+  return feishuBitableEventService.registerTableContext(context);
 }
 
 function getWorkItemTableContextCacheKey(toolConfig, node) {
@@ -5583,6 +6092,15 @@ async function createWorkItemRecord(token, context) {
   if (fieldNames.attachments && Array.isArray(payload.attachments) && payload.attachments.length > 0) {
     values[fieldNames.attachments] = payload.attachments.map(toBitableAttachmentValue).filter(Boolean);
   }
+  if (fieldNames.comments && payload.sourceMutationId) {
+    values[fieldNames.comments] = JSON.stringify({
+      version: 1,
+      items: [],
+      internal: {
+        sourceMutationIds: [String(payload.sourceMutationId).slice(0, 100)],
+      },
+    });
+  }
 
   const writableValues = removeNonWritableCreateFields(values, normalizedFields);
   return createBitableRecord(token, appToken, tableId, writableValues);
@@ -5811,6 +6329,7 @@ function parseCommentsDocument(value, throwOnInvalid) {
     return {
       version: 1,
       items: items.map(normalizeStoredComment).filter(Boolean),
+      internal: normalizeCommentInternal(parsed?.internal),
     };
   } catch {
     if (throwOnInvalid) {
@@ -5862,6 +6381,86 @@ function normalizeStoredComment(item) {
     mutationFingerprint: String(item.mutationFingerprint || item.mutation_fingerprint || '').trim(),
     notifyMentioned: Boolean(item.notifyMentioned ?? item.notify_mentioned),
   };
+}
+
+function normalizeCommentInternal(value) {
+  const sourceMutationIds = Array.isArray(value?.sourceMutationIds)
+    ? value.sourceMutationIds
+      .map((item) => String(item || '').trim().slice(0, 100))
+      .filter(Boolean)
+    : [];
+  return {
+    sourceMutationIds: [...new Set(sourceMutationIds)].slice(0, 20),
+  };
+}
+
+function normalizeFeishuAssistantMessageEvent(payload) {
+  const event = payload?.event || payload || {};
+  const message = event.message || {};
+  const sender = event.sender || {};
+  const senderId = sender.sender_id || sender.senderId || {};
+  const openId = String(
+    senderId.open_id || senderId.openId || sender.open_id || sender.openId || '',
+  ).trim();
+  const chatType = String(message.chat_type || message.chatType || '').trim();
+  const senderType = String(sender.sender_type || sender.senderType || '').trim();
+  const text = extractFeishuMessageText(message.content);
+  if (!openId || !text || senderType === 'app') {
+    return null;
+  }
+  const mentions = (Array.isArray(message.mentions) ? message.mentions : []).map((mention) => {
+    const id = mention?.id || mention?.user_id || mention?.userId || {};
+    return {
+      openId: String(id?.open_id || id?.openId || mention?.open_id || mention?.openId || '').trim(),
+      userId: String(id?.user_id || id?.userId || mention?.user_id || mention?.userId || '').trim(),
+      unionId: String(id?.union_id || id?.unionId || mention?.union_id || mention?.unionId || '').trim(),
+      name: String(mention?.name || mention?.user_name || '').trim(),
+    };
+  }).filter((mention) => mention.openId);
+  return {
+    eventId: String(
+      payload?.header?.event_id || payload?.header?.eventId || message.message_id || message.messageId || '',
+    ).trim(),
+    messageId: String(message.message_id || message.messageId || '').trim(),
+    chatId: String(message.chat_id || message.chatId || '').trim(),
+    chatType,
+    ownerOpenId: openId,
+    ownerName: String(sender.sender_name || sender.senderName || '').trim(),
+    text,
+    mentions,
+  };
+}
+
+function normalizeFeishuAssistantCardAction(payload) {
+  const event = payload?.event || payload || {};
+  const operator = event.operator || {};
+  const operatorId = operator.operator_id || operator.operatorId || operator;
+  const ownerOpenId = String(
+    operatorId.open_id || operatorId.openId || operator.open_id || operator.openId || '',
+  ).trim();
+  const action = event.action || {};
+  let value = action.value;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      value = {};
+    }
+  }
+  const actionId = String(value?.actionId || value?.action_id || '').trim();
+  return ownerOpenId && actionId ? { ownerOpenId, actionId } : null;
+}
+
+function extractFeishuMessageText(content) {
+  if (typeof content === 'object' && content) {
+    return String(content.text || '').trim();
+  }
+  try {
+    const parsed = JSON.parse(String(content || ''));
+    return String(parsed?.text || '').trim();
+  } catch {
+    return '';
+  }
 }
 
 function normalizeCommentsForClient(document) {
@@ -6571,6 +7170,26 @@ function isBitableCopyingError(error) {
   return message.toLowerCase().includes('bitable is copying') || message.includes('复制中');
 }
 
+async function fetchBitableRecords(token, tableConfig, options) {
+  return bitableTableDataService.readRecords(token, tableConfig, options);
+}
+
+async function fetchBitableRecord(token, appToken, tableId, recordId, options) {
+  return bitableTableDataService.readRecord(token, appToken, tableId, recordId, options);
+}
+
+async function createBitableRecord(token, appToken, tableId, fields) {
+  return bitableTableDataService.createRecord(token, appToken, tableId, fields);
+}
+
+async function updateBitableRecordFields(token, appToken, tableId, recordId, fields) {
+  return bitableTableDataService.updateRecord(token, appToken, tableId, recordId, fields);
+}
+
+async function deleteBitableRecord(token, appToken, tableId, recordId) {
+  return bitableTableDataService.deleteRecord(token, appToken, tableId, recordId);
+}
+
 async function fetchWorkItemItems(token, node, currentUser, toolConfig) {
   if (!node?.objToken) {
     throw new Error(toolConfig.notLinkedText);
@@ -6613,14 +7232,15 @@ async function fetchRequirementRecordById(token, appToken, tableId, recordId) {
   return fetchWorkItemRecordById(token, appToken, tableId, recordId, getWorkItemToolConfig('requirements'));
 }
 
-async function fetchWorkItemRecordById(token, appToken, tableId, recordId, toolConfig) {
-  const records = await fetchBitableRecords(token, {
-    appToken,
-    tableId,
-    viewId: '',
-    fieldNames: {},
-  });
-  const record = records.find((item) => String(item.record_id || item.recordId || '') === recordId);
+async function fetchWorkItemRecordById(
+  token,
+  appToken,
+  tableId,
+  recordId,
+  toolConfig,
+  { consistency = 'cache' } = {},
+) {
+  const record = await fetchBitableRecord(token, appToken, tableId, recordId, { consistency });
   if (!record) {
     throw new Error(toolConfig.missingRecordText);
   }
@@ -7695,6 +8315,34 @@ function escapeLarkAtId(value) {
 
 function formatLogError(error) {
   return error instanceof Error ? error.message : String(error || '未知错误');
+}
+
+function formatCodexBridgeDiagnostic(diagnostic) {
+  const type = String(diagnostic?.type || 'unknown').replace(/[^a-z_]/g, '').slice(0, 40);
+  const statusCode = Number.isInteger(diagnostic?.statusCode) ? diagnostic.statusCode : 0;
+  const category = String(diagnostic?.category || 'unknown').replace(/[^a-z_]/g, '').slice(0, 80);
+  const upstreamCode = String(diagnostic?.upstreamCode || '').replace(/[^a-z0-9_.-]/g, '').slice(0, 120);
+  const requestIdFingerprint = String(diagnostic?.requestIdFingerprint || '')
+    .replace(/[^a-f0-9]/g, '').slice(0, 12);
+  return [
+    `type=${type || 'unknown'}`,
+    `status=${statusCode}`,
+    `category=${category || 'unknown'}`,
+    ...(upstreamCode ? [`upstream_code=${upstreamCode}`] : []),
+    ...(requestIdFingerprint ? [`request_id_fp=${requestIdFingerprint}`] : []),
+  ].join(' ');
+}
+
+function formatFeishuAssistantLogError(error) {
+  const code = String(error?.code || '').replace(/[^a-z0-9_.-]/gi, '').slice(0, 80);
+  if (code.startsWith('codex_')) {
+    return `code=${code}`;
+  }
+  const message = formatLogError(error);
+  if (/upstream request failed|bad gateway|https?:\/\/127\.0\.0\.1:\d+\/responses|request id:/i.test(message)) {
+    return 'code=codex_upstream_failure';
+  }
+  return message;
 }
 
 function buildPlatformExternalLink(targetType, params = {}, request = null) {

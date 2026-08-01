@@ -45,6 +45,9 @@ function createSubmission(overrides = {}) {
     revisionAuthorName: '提交人',
     reviewedByName: '审核人',
     reviewedAt: '2026-07-28T08:00:00.000Z',
+    applied: false,
+    appliedAt: '',
+    appliedByName: '',
     submittedAt: '2026-07-28T07:00:00.000Z',
     status: AI_PLAN_STATUSES.APPROVED,
     ...overrides,
@@ -109,6 +112,9 @@ test('MCP AI plan list returns approved plans currently assigned to the user wit
       id: 'plan-latest',
       recordId: 'record-latest',
       reviewedAt: '2026-07-28T10:00:00.000Z',
+      applied: true,
+      appliedAt: '2026-07-28T11:00:00.000Z',
+      appliedByName: '当前处理人',
     }),
     createSubmission({
       id: 'plan-older',
@@ -180,6 +186,9 @@ test('MCP AI plan list returns approved plans currently assigned to the user wit
   assert.deepEqual(firstPage.plans.map((plan) => plan.submissionId), ['plan-latest']);
   assert.equal(firstPage.plans[0].workItemTitle, '最新需求');
   assert.equal(firstPage.plans[0].workItemStatus, '处理中');
+  assert.equal(firstPage.plans[0].applied, true);
+  assert.equal(firstPage.plans[0].appliedByName, '当前处理人');
+  assert.equal(firstPage.plans[0].appliedAt, '2026-07-28T11:00:00.000Z');
   assert.equal('markdown' in firstPage.plans[0], false);
 
   const secondPage = await service.listMyApprovedPlans({

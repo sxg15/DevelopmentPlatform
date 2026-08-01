@@ -35,6 +35,7 @@ export class CodexAppServerClient {
     executablePath = process.execPath,
     codexScriptPath = '',
     apiBridgeFactory = createCodexApiBridge,
+    onApiDiagnostic = () => {},
   }) {
     this.rootDir = rootDir;
     this.codexHome = codexHome;
@@ -54,6 +55,7 @@ export class CodexAppServerClient {
       'codex.js',
     );
     this.apiBridgeFactory = apiBridgeFactory;
+    this.onApiDiagnostic = typeof onApiDiagnostic === 'function' ? onApiDiagnostic : () => {};
     this.apiBridge = null;
     this.process = null;
     this.startPromise = null;
@@ -67,11 +69,14 @@ export class CodexAppServerClient {
     threadId = '',
     cwd,
     skillPath,
+    skillName = 'work-item-plan',
     preludePrompt = '',
     prompt,
     inputItems = [],
     outputSchema,
+    model = this.model,
     reasoningEffort = this.reasoningEffort,
+    requestTimeoutMs = this.requestTimeoutMs,
     onThread,
     onTurn,
     onDelta,
@@ -83,9 +88,11 @@ export class CodexAppServerClient {
       stage: 'preparing',
       message: SAFE_PROGRESS_MESSAGES.preparing,
     });
+    const resolvedModel = String(model || this.model).trim() || this.model;
+    const turnTimeoutMs = normalizePositiveInteger(requestTimeoutMs, this.requestTimeoutMs);
     const thread = threadId
-      ? await this.resumeThread(threadId, cwd)
-      : await this.startThread(cwd);
+      ? await this.resumeThread(threadId, cwd, resolvedModel)
+      : await this.startThread(cwd, resolvedModel);
     const resolvedThreadId = String(thread?.thread?.id || threadId || '').trim();
     if (!resolvedThreadId) {
       throw createCodexError('Codex 未返回会话标识', 'codex_protocol');
@@ -117,13 +124,13 @@ export class CodexAppServerClient {
           activeTurn,
           createCodexError('Codex 生成计划超时', 'codex_timeout'),
         );
-      }, this.requestTimeoutMs);
+      }, turnTimeoutMs);
 
       try {
         const response = await this.request('turn/start', {
           threadId: resolvedThreadId,
           cwd,
-          model: this.model,
+          model: resolvedModel,
           effort: reasoningEffort,
           approvalPolicy: 'never',
           sandboxPolicy: {
@@ -133,7 +140,7 @@ export class CodexAppServerClient {
           input: [
             {
               type: 'skill',
-              name: 'work-item-plan',
+              name: String(skillName || 'work-item-plan').trim() || 'work-item-plan',
               path: skillPath,
             },
             ...(normalizedPreludePrompt
@@ -294,6 +301,7 @@ export class CodexAppServerClient {
         apiBaseUrl: this.apiBaseUrl,
         apiKey: this.apiKey,
         requestTimeoutMs: this.requestTimeoutMs,
+        onDiagnostic: this.onApiDiagnostic,
       });
     }
     try {
@@ -337,10 +345,10 @@ export class CodexAppServerClient {
     });
   }
 
-  startThread(cwd) {
+  startThread(cwd, model = this.model) {
     return this.request('thread/start', {
       cwd,
-      model: this.model,
+      model,
       modelProvider: MODEL_PROVIDER_ID,
       approvalPolicy: 'never',
       sandbox: 'read-only',
@@ -359,11 +367,11 @@ export class CodexAppServerClient {
     });
   }
 
-  resumeThread(threadId, cwd) {
+  resumeThread(threadId, cwd, model = this.model) {
     return this.request('thread/resume', {
       threadId,
       cwd,
-      model: this.model,
+      model,
       modelProvider: MODEL_PROVIDER_ID,
       approvalPolicy: 'never',
       sandbox: 'read-only',
@@ -412,13 +420,15 @@ export class CodexAppServerClient {
       clearTimeout(pending.timeout);
       this.pendingRequests.delete(message.id);
       if (message.error) {
-        pending.reject(new Error(
+        const error = createCodexError(
           sanitizeCodexErrorText(
             message.error?.message || `Codex 请求失败：${pending.method}`,
             this.apiKey,
             this.apiBridge?.token,
           ),
-        ));
+          getCodexRequestErrorCode(message.error),
+        );
+        pending.reject(error);
       } else {
         pending.resolve(message.result);
       }
@@ -572,12 +582,16 @@ export class CodexAppServerClient {
 
     const message = params.turn?.error?.message
       || (params.turn?.status === 'interrupted' ? 'Codex 任务已取消' : 'Codex 生成计划失败');
-    const error = new Error(sanitizeCodexErrorText(
-      message,
-      this.apiKey,
-      this.apiBridge?.token,
-    ));
-    error.code = params.turn?.status === 'interrupted' ? 'interrupted' : 'codex_failed';
+    const error = createCodexError(
+      sanitizeCodexErrorText(
+        message,
+        this.apiKey,
+        this.apiBridge?.token,
+      ),
+      params.turn?.status === 'interrupted'
+        ? 'interrupted'
+        : getCodexRequestErrorCode(params.turn?.error),
+    );
     this.finishActiveTurn(activeTurn, error);
   }
 
@@ -768,6 +782,24 @@ function createCodexError(message, code) {
   const error = new Error(message);
   error.code = code;
   return error;
+}
+
+function getCodexRequestErrorCode(error) {
+  const code = String(error?.code || '').trim().toLowerCase();
+  const message = String(error?.message || '').trim().toLowerCase();
+  const combined = `${code} ${message}`;
+  if (
+    /model[_\s-]*(not[_\s-]*(found|available)|unavailable|unsupported|access[_\s-]*denied)/.test(combined)
+    || /\bmodel\b.{0,80}\b(not found|not available|unavailable|unsupported|access denied|forbidden|permission denied)\b/.test(combined)
+  ) {
+    return 'codex_model_unavailable';
+  }
+  return 'codex_failed';
+}
+
+function normalizePositiveInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : fallback;
 }
 
 function sanitizeCodexErrorText(value, ...secrets) {

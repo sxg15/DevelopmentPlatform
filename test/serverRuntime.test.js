@@ -95,6 +95,7 @@ test('realtime hub only publishes events allowed for each project and tool', () 
   assert.match(writes[0], /^event: ready/);
   assert.equal(writes.filter((value) => value.startsWith('event: work-item-updated')).length, 1);
   assert.match(writes.at(-1), /requirement-1/);
+  assert.match(writes.at(-1), /"changeType":"updated"/);
 });
 
 test('keyed task queue serializes one user without blocking other users', async () => {
