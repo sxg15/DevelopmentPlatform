@@ -23,6 +23,9 @@ import {
   validateVersionIdentity,
   validateVersionStatus,
 } from '../../shared/versionManagementUtils.js';
+import {
+  WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS,
+} from '../../shared/workItemVersionAssociationUtils.js';
 import { runtimeConfig } from '../config/runtimeConfig.js';
 import {
   createBitableRecord,
@@ -550,6 +553,193 @@ export function createVersionManagementService({
     };
   }
 
+  async function inspectWorkItemAssociations(token, project, {
+    toolId,
+    workItemRecordId,
+    operation,
+  }) {
+    validateWorkItemAssociationOperation(toolId, operation);
+    return queue.run(buildQueueKey(project), async () => {
+      const context = await findProjectContext(token, project.projectId);
+      if (!context) {
+        return {
+          initialized: false,
+          operation,
+          versions: [],
+        };
+      }
+
+      const data = await readContextData(token, context, { consistency: 'fresh' });
+      const versions = data.versions.filter((version) => !isEmptyVersionRecord(version));
+      const relevantVersions = operation === WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS.ASSOCIATE
+        ? versions.filter((version) => version.status === '测试开发')
+        : versions;
+      assertAssociationDocumentsReadable(relevantVersions, toolId);
+      const normalizedRecordId = String(workItemRecordId || '').trim();
+      const candidates = relevantVersions.filter((version) => {
+        const associated = version[toolId].some((item) => item.recordId === normalizedRecordId);
+        return operation === WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS.ASSOCIATE
+          ? !associated
+          : associated;
+      });
+
+      return {
+        initialized: true,
+        operation,
+        versions: candidates.map(toAssociationVersionSnapshot),
+      };
+    });
+  }
+
+  async function applyWorkItemAssociationDecision(token, project, {
+    toolId,
+    workItem,
+    operation,
+    versionRecordIds,
+  }) {
+    validateWorkItemAssociationOperation(toolId, operation);
+    const requestedRecordIds = [...new Set(
+      (Array.isArray(versionRecordIds) ? versionRecordIds : [])
+        .map((recordId) => String(recordId || '').trim())
+        .filter(Boolean),
+    )];
+    if (requestedRecordIds.length === 0) {
+      return {
+        operation,
+        requestedVersionRecordIds: [],
+        changedVersions: [],
+        unchangedVersionRecordIds: [],
+      };
+    }
+    const associationSnapshot = normalizeWorkItemAssociationSnapshot(workItem);
+
+    return queue.run(buildQueueKey(project), async () => {
+      const context = await requireProjectContext(token, project.projectId);
+      const data = await readContextData(token, context, { consistency: 'fresh' });
+      const versions = data.versions.filter((version) => !isEmptyVersionRecord(version));
+      const versionByRecordId = new Map(versions.map((version) => [version.recordId, version]));
+      const selectedVersions = requestedRecordIds.map((recordId) => {
+        const version = versionByRecordId.get(recordId);
+        if (!version) {
+          throw createVersionConflictError('所选版本已不存在，请重新选择');
+        }
+        return version;
+      });
+      if (
+        operation === WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS.ASSOCIATE
+        && selectedVersions.some((version) => version.status !== '测试开发')
+      ) {
+        throw createVersionConflictError('所选版本已不再是测试开发版本，请重新选择');
+      }
+      assertAssociationDocumentsReadable(selectedVersions, toolId);
+
+      const fieldName = normalizedConfig.fieldNames[toolId];
+      const changes = selectedVersions.flatMap((version) => {
+        const existing = Array.isArray(version[toolId]) ? version[toolId] : [];
+        const alreadyAssociated = existing.some(
+          (item) => item.recordId === associationSnapshot.recordId,
+        );
+        if (
+          (operation === WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS.ASSOCIATE && alreadyAssociated)
+          || (operation === WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS.UNLINK && !alreadyAssociated)
+        ) {
+          return [];
+        }
+        const nextItems = operation === WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS.ASSOCIATE
+          ? [...existing, associationSnapshot]
+          : existing.filter((item) => item.recordId !== associationSnapshot.recordId);
+        return [{
+          version,
+          originalValue: getRawField(data.records, version.recordId, fieldName),
+          nextValue: serializeVersionItemsDocument(nextItems),
+        }];
+      });
+      const applied = [];
+
+      try {
+        for (const change of changes) {
+          await bitable.updateRecord(token, context.appToken, context.tableId, change.version.recordId, {
+            [fieldName]: change.nextValue,
+          });
+          applied.push(change);
+        }
+      } catch (error) {
+        let rollbackFailure = null;
+        for (const change of [...applied].reverse()) {
+          try {
+            await bitable.updateRecord(token, context.appToken, context.tableId, change.version.recordId, {
+              [fieldName]: change.originalValue,
+            });
+          } catch (rollbackError) {
+            rollbackFailure = rollbackError;
+            break;
+          }
+        }
+        if (rollbackFailure) {
+          throw createVersionConflictError(
+            `版本关联写入失败，且回滚失败：${rollbackFailure instanceof Error ? rollbackFailure.message : '未知错误'}`,
+          );
+        }
+        throw error;
+      }
+
+      const changedRecordIds = new Set(changes.map((change) => change.version.recordId));
+      return {
+        operation,
+        requestedVersionRecordIds: requestedRecordIds,
+        changedVersions: selectedVersions
+          .filter((version) => changedRecordIds.has(version.recordId))
+          .map(toAssociationVersionSnapshot),
+        unchangedVersionRecordIds: requestedRecordIds.filter(
+          (recordId) => !changedRecordIds.has(recordId),
+        ),
+      };
+    });
+  }
+
+  async function validateWorkItemAssociationDecision(token, project, {
+    toolId,
+    operation,
+    versionRecordIds,
+  }) {
+    validateWorkItemAssociationOperation(toolId, operation);
+    const requestedRecordIds = [...new Set(
+      (Array.isArray(versionRecordIds) ? versionRecordIds : [])
+        .map((recordId) => String(recordId || '').trim())
+        .filter(Boolean),
+    )];
+    if (requestedRecordIds.length === 0) {
+      return { versions: [] };
+    }
+
+    return queue.run(buildQueueKey(project), async () => {
+      const context = await requireProjectContext(token, project.projectId);
+      const data = await readContextData(token, context, { consistency: 'fresh' });
+      const versionByRecordId = new Map(
+        data.versions
+          .filter((version) => !isEmptyVersionRecord(version))
+          .map((version) => [version.recordId, version]),
+      );
+      const selectedVersions = requestedRecordIds.map((recordId) => {
+        const version = versionByRecordId.get(recordId);
+        if (!version) {
+          throw createVersionConflictError('所选版本已不存在，请重新选择');
+        }
+        return version;
+      });
+      if (
+        operation === WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS.ASSOCIATE
+        && selectedVersions.some((version) => version.status !== '测试开发')
+      ) {
+        throw createVersionConflictError('所选版本已不再是测试开发版本，请重新选择');
+      }
+      assertAssociationDocumentsReadable(selectedVersions, toolId);
+      return {
+        versions: selectedVersions.map(toAssociationVersionSnapshot),
+      };
+    });
+  }
+
   function registerResolvedContext(context) {
     try {
       onTableContextResolved({
@@ -665,6 +855,9 @@ export function createVersionManagementService({
     createComment,
     deleteComment,
     readOverview,
+    inspectWorkItemAssociations,
+    validateWorkItemAssociationDecision,
+    applyWorkItemAssociationDecision,
   };
 }
 
@@ -755,6 +948,59 @@ function requireVersion(versions, recordId) {
 
 function buildReplacementReason(versionNumber, platform, status) {
   return `版本 ${versionNumber} 占用 ${platform} 的“${status}”状态槽位`;
+}
+
+function validateWorkItemAssociationOperation(toolId, operation) {
+  if (!VERSION_ASSOCIATION_TOOL_IDS.includes(String(toolId || '').trim())) {
+    throw new Error('版本关联工作项类型不受支持');
+  }
+  if (!Object.values(WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS).includes(operation)) {
+    throw new Error('版本关联操作不在可选范围内');
+  }
+}
+
+function assertAssociationDocumentsReadable(versions, toolId) {
+  const malformed = (Array.isArray(versions) ? versions : []).find(
+    (version) => String(version?.parseErrors?.[toolId] || '').trim(),
+  );
+  if (malformed) {
+    throw createVersionConflictError(
+      `版本“${malformed.versionNumber || malformed.recordId}”的关联字段不是合法 JSON`,
+    );
+  }
+}
+
+function normalizeWorkItemAssociationSnapshot(workItem) {
+  const recordId = String(workItem?.recordId || workItem?.record_id || '').trim();
+  if (!recordId) {
+    throw new Error('缺少工作项记录ID');
+  }
+  return {
+    recordId,
+    itemId: String(
+      workItem?.itemId
+      || workItem?.requirementId
+      || workItem?.bugId
+      || workItem?.feedbackId
+      || '',
+    ).trim(),
+    title: String(workItem?.title || '').trim() || '未命名工作项',
+  };
+}
+
+function toAssociationVersionSnapshot(version) {
+  return {
+    recordId: String(version?.recordId || '').trim(),
+    versionNumber: String(version?.versionNumber || '').trim(),
+    platform: String(version?.platform || '').trim(),
+    status: String(version?.status || '').trim(),
+  };
+}
+
+function createVersionConflictError(message) {
+  const error = new Error(message);
+  error.statusCode = 409;
+  return error;
 }
 
 function buildQueueKey(project) {

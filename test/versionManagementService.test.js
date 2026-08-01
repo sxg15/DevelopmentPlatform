@@ -198,8 +198,158 @@ test('partial Bitable update responses cannot make a real version look like an e
   assert.equal(harness.getRecord('ver-1').fields.版本号, '1.0.0');
 });
 
+test('work item association inspection supports multiple current and historical versions', async () => {
+  const first = createRecord('ver-1', '1.0.0', 'IGP', '测试开发');
+  const second = createRecord('ver-2', '2.0.0', 'Steam', '测试开发');
+  const released = createRecord('ver-3', '0.9.0', 'IGP', '正式发布');
+  second.fields.已处理需求 = JSON.stringify({
+    version: 1,
+    items: [{ recordId: 'req-1', itemId: 'R-0001', title: '需求一' }],
+  });
+  released.fields.已处理需求 = second.fields.已处理需求;
+  const harness = createHarness([first, second, released]);
+  const service = harness.createService();
+
+  const associate = await service.inspectWorkItemAssociations(
+    'token',
+    { projectId: 'P1' },
+    {
+      toolId: 'requirements',
+      workItemRecordId: 'req-1',
+      operation: 'associate',
+    },
+  );
+  const unlink = await service.inspectWorkItemAssociations(
+    'token',
+    { projectId: 'P1' },
+    {
+      toolId: 'requirements',
+      workItemRecordId: 'req-1',
+      operation: 'unlink',
+    },
+  );
+
+  assert.deepEqual(associate.versions.map((version) => version.recordId), ['ver-1']);
+  assert.deepEqual(unlink.versions.map((version) => version.recordId), ['ver-2', 'ver-3']);
+});
+
+test('work item association mutations add and remove selected version snapshots idempotently', async () => {
+  const first = createRecord('ver-1', '1.0.0', 'IGP', '测试开发');
+  const second = createRecord('ver-2', '2.0.0', 'Steam', '测试开发');
+  const harness = createHarness([first, second]);
+  const service = harness.createService();
+  const workItem = { recordId: 'bug-1', bugId: 'B-0001', title: '登录失败' };
+
+  const associated = await service.applyWorkItemAssociationDecision(
+    'token',
+    { projectId: 'P1' },
+    {
+      toolId: 'bugs',
+      workItem,
+      operation: 'associate',
+      versionRecordIds: ['ver-1', 'ver-2'],
+    },
+  );
+  const duplicate = await service.applyWorkItemAssociationDecision(
+    'token',
+    { projectId: 'P1' },
+    {
+      toolId: 'bugs',
+      workItem,
+      operation: 'associate',
+      versionRecordIds: ['ver-1', 'ver-2'],
+    },
+  );
+  const unlinked = await service.applyWorkItemAssociationDecision(
+    'token',
+    { projectId: 'P1' },
+    {
+      toolId: 'bugs',
+      workItem,
+      operation: 'unlink',
+      versionRecordIds: ['ver-2'],
+    },
+  );
+
+  assert.equal(associated.changedVersions.length, 2);
+  assert.deepEqual(duplicate.unchangedVersionRecordIds, ['ver-1', 'ver-2']);
+  assert.equal(unlinked.changedVersions[0].recordId, 'ver-2');
+  assert.deepEqual(harness.getStoredAssociations('ver-1', '已处理Bug'), [{
+    recordId: 'bug-1',
+    itemId: 'B-0001',
+    title: '登录失败',
+  }]);
+  assert.deepEqual(harness.getStoredAssociations('ver-2', '已处理Bug'), []);
+});
+
+test('multi-version association failure rolls back earlier version writes', async () => {
+  const harness = createHarness([
+    createRecord('ver-1', '1.0.0', 'IGP', '测试开发'),
+    createRecord('ver-2', '2.0.0', 'Steam', '测试开发'),
+  ], { failUpdateAt: 2 });
+  const service = harness.createService();
+
+  await assert.rejects(service.applyWorkItemAssociationDecision(
+    'token',
+    { projectId: 'P1' },
+    {
+      toolId: 'requirements',
+      workItem: { recordId: 'req-1', requirementId: 'R-0001', title: '需求一' },
+      operation: 'associate',
+      versionRecordIds: ['ver-1', 'ver-2'],
+    },
+  ), /模拟更新失败/);
+
+  assert.deepEqual(harness.getStoredAssociations('ver-1', '已处理需求'), []);
+  assert.deepEqual(harness.getStoredAssociations('ver-2', '已处理需求'), []);
+});
+
+test('association inspection blocks malformed relevant version documents', async () => {
+  const record = createRecord('ver-1', '1.0.0', 'IGP', '测试开发');
+  record.fields.已处理需求 = '{bad json';
+  const harness = createHarness([record]);
+  const service = harness.createService();
+
+  await assert.rejects(service.inspectWorkItemAssociations(
+    'token',
+    { projectId: 'P1' },
+    {
+      toolId: 'requirements',
+      workItemRecordId: 'req-1',
+      operation: 'associate',
+    },
+  ), /不是合法 JSON/);
+});
+
+test('association decision validation rejects stale current-version selections', async () => {
+  const harness = createHarness([
+    createRecord('ver-1', '1.0.0', 'IGP', '测试发布'),
+  ]);
+  const service = harness.createService();
+
+  await assert.rejects(service.validateWorkItemAssociationDecision(
+    'token',
+    { projectId: 'P1' },
+    {
+      toolId: 'requirements',
+      operation: 'associate',
+      versionRecordIds: ['ver-1'],
+    },
+  ), /不再是测试开发版本/);
+  await assert.rejects(service.validateWorkItemAssociationDecision(
+    'token',
+    { projectId: 'P1' },
+    {
+      toolId: 'requirements',
+      operation: 'unlink',
+      versionRecordIds: ['missing-version'],
+    },
+  ), /已不存在/);
+});
+
 function createHarness(initialRecords, {
   failCreate = false,
+  failUpdateAt = 0,
   projectNodeExists = true,
   cacheEnabled = false,
   partialUpdateResponse = false,
@@ -213,6 +363,7 @@ function createHarness(initialRecords, {
   };
   let hasProjectNode = projectNodeExists;
   let copies = 0;
+  let updateCount = 0;
 
   const bitable = {
     async fetchTables() {
@@ -233,6 +384,10 @@ function createHarness(initialRecords, {
       return clone(record);
     },
     async updateRecord(_token, _appToken, _tableId, recordId, fields) {
+      updateCount += 1;
+      if (failUpdateAt > 0 && updateCount === failUpdateAt) {
+        throw new Error('模拟更新失败');
+      }
       const record = records.find((item) => item.record_id === recordId);
       if (!record) {
         throw new Error('记录不存在');
@@ -313,6 +468,10 @@ function createHarness(initialRecords, {
     },
     getStoredComments(recordId) {
       const value = records.find((item) => item.record_id === recordId)?.fields?.留言;
+      return JSON.parse(value || '{"items":[]}').items || [];
+    },
+    getStoredAssociations(recordId, fieldName) {
+      const value = records.find((item) => item.record_id === recordId)?.fields?.[fieldName];
       return JSON.parse(value || '{"items":[]}').items || [];
     },
     recordCount() {

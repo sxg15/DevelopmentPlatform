@@ -198,6 +198,22 @@ test('new work item file selection accepts ordinary attachments while paste stay
   );
 });
 
+test('work item status updates bind version association confirmation and idempotent retry', () => {
+  const workspaceSource = fs.readFileSync('src/ui/workspace/PlatformWorkspace.jsx', 'utf8');
+  const apiSource = fs.readFileSync('src/api/workItems.js', 'utf8');
+  const serverSource = fs.readFileSync('server/index.js', 'utf8');
+  const mcpSource = fs.readFileSync('server/mcp/developmentPlatformMcpServer.js', 'utf8');
+
+  assert.match(apiSource, /createWorkItemClientMutationId/);
+  assert.match(workspaceSource, /WorkItemVersionAssociationDialog/);
+  assert.match(workspaceSource, /versionAssociationDecision/);
+  assert.match(workspaceSource, /retryVersionAssociation/);
+  assert.match(serverSource, /requireVersionAssociationDecision:\s*true/);
+  assert.match(serverSource, /inspectWorkItemAssociations/);
+  assert.match(serverSource, /applyStatusVersionAssociationDecision/);
+  assert.match(mcpSource, /VERSION_ASSOCIATION_DECISION_SCHEMA/);
+});
+
 test('AI planning separates private conversations from shared submissions', () => {
   const workspaceSource = fs.readFileSync('src/ui/ai/AiPlanningWorkspace.jsx', 'utf8');
   const platformWorkspaceSource = fs.readFileSync(

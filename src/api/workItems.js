@@ -118,6 +118,10 @@ export function updateWorkItemStatus(toolConfig, projectId, recordId, payload) {
   );
 }
 
+export function createWorkItemClientMutationId() {
+  return `work-item-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 export function changeWorkItemAssignees(toolConfig, projectId, recordId, payload) {
   return requestJson(
     `/api/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(toolConfig.routeSegment)}/${encodeURIComponent(recordId)}/assignees`,

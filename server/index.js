@@ -46,6 +46,14 @@ import {
   canManageVersions,
 } from '../shared/versionManagementUtils.js';
 import {
+  WORK_ITEM_COMPLETION_TRANSITIONS,
+  WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS,
+  buildWorkItemVersionAssociationConfirmation,
+  getVersionAssociationOperationForTransition,
+  getWorkItemCompletionTransition,
+  normalizeWorkItemVersionAssociationDecision,
+} from '../shared/workItemVersionAssociationUtils.js';
+import {
   blockDirectConfigAccess,
   clientDir,
   currentAppVersion,
@@ -2648,6 +2656,7 @@ async function updateDevelopmentPlatformMcpWorkItemStatus({
   message,
   notifyProposer,
   confirmWithoutRequiredAttachment,
+  versionAssociationDecision,
   clientMutationId,
 }) {
   return runMcpOperation(async () => {
@@ -2663,12 +2672,15 @@ async function updateDevelopmentPlatformMcpWorkItemStatus({
       message,
       notifyProposer,
       confirmWithoutRequiredAttachment,
+      versionAssociationDecision,
       clientMutationId,
+      requireVersionAssociationDecision: true,
     });
     return {
       item: serializeDevelopmentPlatformMcpWorkItem(result.item, toolConfig),
       statusChange: result.statusChange,
       notifications: summarizeNotificationResults(result.notificationResults),
+      versionAssociation: result.versionAssociation,
       duplicate: result.duplicate,
     };
   }, '更新工作项状态失败');
@@ -4175,6 +4187,12 @@ async function handleWorkItemStatusUpdate(request, response, toolId) {
     const newStatus = String(request.body?.newStatus || '').trim();
     const message = String(request.body?.message || '').trim();
     const notifyProposer = request.body?.notifyProposer !== false;
+    const expectedCurrentStatus = String(request.body?.expectedCurrentStatus || '').trim();
+    const clientMutationId = String(request.body?.clientMutationId || '').trim();
+    const confirmWithoutRequiredAttachment = Boolean(
+      request.body?.confirmWithoutRequiredAttachment,
+    );
+    const versionAssociationDecision = request.body?.versionAssociationDecision;
 
     if (!projectId || !recordId) {
       response.status(400).json({ message: `缺少${toolConfig.itemLabel}信息` });
@@ -4198,10 +4216,14 @@ async function handleWorkItemStatusUpdate(request, response, toolId) {
       projectId,
       toolId,
       recordId,
+      expectedCurrentStatus,
       newStatus,
       message,
       notifyProposer,
-      confirmWithoutRequiredAttachment: true,
+      confirmWithoutRequiredAttachment,
+      clientMutationId,
+      versionAssociationDecision,
+      requireVersionAssociationDecision: true,
       request,
     });
     response.json({
@@ -4213,7 +4235,10 @@ async function handleWorkItemStatusUpdate(request, response, toolId) {
     const status = Number(error?.statusCode) || (
       message.includes('缺少') ? 500 : message.includes('权限') || message.includes('只有处理人员') ? 403 : message.includes('不存在') ? 404 : message.includes('JSON') ? 409 : 502
     );
-    response.status(status).json({ message });
+    response.status(status).json({
+      message,
+      ...(error?.publicDetails ? { result: error.publicDetails } : {}),
+    });
   }
 }
 
@@ -4229,6 +4254,8 @@ async function executeWorkItemStatusMutation({
   notifyProposer = false,
   confirmWithoutRequiredAttachment = false,
   clientMutationId = '',
+  versionAssociationDecision = null,
+  requireVersionAssociationDecision = false,
   request = null,
 }) {
   const toolConfig = getWorkItemToolConfig(toolId);
@@ -4251,6 +4278,9 @@ async function executeWorkItemStatusMutation({
         source[fieldNames.statusChangeLog],
         true,
       );
+      const normalizedVersionDecision = normalizeStatusVersionAssociationDecision(
+        versionAssociationDecision,
+      );
       const normalizedMutationId = String(clientMutationId || '').trim().slice(0, 100);
       const mutationFingerprint = normalizedMutationId
         ? createMutationFingerprint({
@@ -4262,6 +4292,7 @@ async function executeWorkItemStatusMutation({
             message,
             notifyProposer: Boolean(notifyProposer),
             confirmWithoutRequiredAttachment: Boolean(confirmWithoutRequiredAttachment),
+            versionAssociationDecision: normalizedVersionDecision,
           })
         : '';
       const existingChange = findIdempotentMutation({
@@ -4276,11 +4307,19 @@ async function executeWorkItemStatusMutation({
       });
       if (existingChange) {
         const item = normalizeWorkItemRecords([record], user, toolConfig)[0] || null;
+        const versionAssociation = await applyStatusVersionAssociationDecision({
+          token,
+          project,
+          toolId,
+          item,
+          decision: normalizedVersionDecision,
+        });
         return {
           item,
           statusChange: normalizeStatusChangeLogForClient({ items: [existingChange] })[0],
           statusChangeLog: normalizeStatusChangeLogForClient(statusChangeLogDocument),
           notificationResults: [],
+          versionAssociation,
           duplicate: true,
         };
       }
@@ -4330,6 +4369,68 @@ async function executeWorkItemStatusMutation({
         throw createHttpError('处理状态不在可选范围内', 400);
       }
 
+      const completionTransition = getWorkItemCompletionTransition({
+        toolId,
+        currentStatus,
+        newStatus,
+        completedStatuses: runtimeConfig.dashboard.statusGroups?.[toolId]?.completed,
+      });
+      const expectedVersionOperation = getVersionAssociationOperationForTransition(
+        completionTransition,
+      );
+      if (
+        completionTransition === WORK_ITEM_COMPLETION_TRANSITIONS.NONE
+        && normalizedVersionDecision
+      ) {
+        throw createHttpError('当前状态变更不需要版本关联决定', 400);
+      }
+      if (expectedVersionOperation) {
+        const decision = normalizeStatusVersionAssociationDecision(
+          normalizedVersionDecision,
+          { expectedOperation: expectedVersionOperation },
+        );
+        const associationContext = await versionManagementService.inspectWorkItemAssociations(
+          token,
+          project,
+          {
+            toolId,
+            workItemRecordId: recordId,
+            operation: expectedVersionOperation,
+          },
+        );
+        if (
+          requireVersionAssociationDecision
+          && associationContext.versions.length > 0
+          && !decision
+        ) {
+          const error = createHttpError(
+            expectedVersionOperation === WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS.ASSOCIATE
+              ? '请选择是否关联当前测试开发版本'
+              : '请选择是否取消已有版本关联',
+            409,
+          );
+          error.mcpCode = 'confirmation_required';
+          error.publicDetails = buildWorkItemVersionAssociationConfirmation({
+            operation: expectedVersionOperation,
+            currentStatus,
+            requestedStatus: newStatus,
+            versions: associationContext.versions,
+          });
+          throw error;
+        }
+        if (decision?.apply) {
+          await versionManagementService.validateWorkItemAssociationDecision(
+            token,
+            project,
+            {
+              toolId,
+              operation: decision.operation,
+              versionRecordIds: decision.versionRecordIds,
+            },
+          );
+        }
+      }
+
       const statusChange = buildStatusChangeLogItem(
         user,
         currentStatus,
@@ -4359,6 +4460,13 @@ async function executeWorkItemStatusMutation({
         { consistency: 'fresh' },
       );
       const item = normalizeWorkItemRecords([updatedRecord], user, toolConfig)[0] || null;
+      const versionAssociation = await applyStatusVersionAssociationDecision({
+        token,
+        project,
+        toolId,
+        item,
+        decision: normalizedVersionDecision,
+      });
       publishWorkItemUpdated({
         projectId: project.projectId,
         toolId,
@@ -4384,10 +4492,80 @@ async function executeWorkItemStatusMutation({
         statusChange: normalizeStatusChangeLogForClient({ items: [statusChange] })[0],
         statusChangeLog: normalizeStatusChangeLogForClient(nextStatusChangeLog),
         notificationResults,
+        versionAssociation,
         duplicate: false,
       };
     },
   );
+}
+
+async function applyStatusVersionAssociationDecision({
+  token,
+  project,
+  toolId,
+  item,
+  decision,
+}) {
+  if (!decision) {
+    return {
+      operation: '',
+      applied: false,
+      ok: true,
+      changedVersions: [],
+      message: '',
+    };
+  }
+  if (!decision.apply) {
+    return {
+      operation: decision.operation,
+      applied: false,
+      ok: true,
+      changedVersions: [],
+      message: '',
+    };
+  }
+
+  try {
+    const result = await versionManagementService.applyWorkItemAssociationDecision(
+      token,
+      project,
+      {
+        toolId,
+        workItem: item,
+        operation: decision.operation,
+        versionRecordIds: decision.versionRecordIds,
+      },
+    );
+    for (const version of result.changedVersions) {
+      publishVersionUpdate(project.projectId, version.recordId);
+    }
+    return {
+      operation: decision.operation,
+      applied: true,
+      ok: true,
+      changedVersions: result.changedVersions,
+      message: '',
+    };
+  } catch (error) {
+    return {
+      operation: decision.operation,
+      applied: true,
+      ok: false,
+      changedVersions: [],
+      message: error instanceof Error ? error.message : '版本关联更新失败',
+    };
+  }
+}
+
+function normalizeStatusVersionAssociationDecision(value, options = {}) {
+  try {
+    return normalizeWorkItemVersionAssociationDecision(value, options);
+  } catch (error) {
+    throw createHttpError(
+      error instanceof Error ? error.message : '版本关联决定格式不正确',
+      400,
+    );
+  }
 }
 
 async function handleWorkItemAssigneeChange(request, response, toolId) {

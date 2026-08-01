@@ -142,6 +142,28 @@ test('official MCP client initializes, lists twelve tools and calls read/write o
       DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.UPDATE_WORK_ITEM_STATUS,
     );
 
+    const statusDecisionResult = await client.callTool({
+      name: DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.UPDATE_WORK_ITEM_STATUS,
+      arguments: {
+        projectId: '50',
+        toolId: 'bugs',
+        recordId: 'record-2',
+        expectedCurrentStatus: '修复中',
+        newStatus: '已修复',
+        notifyProposer: false,
+        versionAssociationDecision: {
+          operation: 'associate',
+          apply: false,
+          versionRecordIds: [],
+        },
+        clientMutationId: 'mutation-status-decision',
+      },
+    });
+    assert.equal(
+      statusDecisionResult.structuredContent.toolName,
+      DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.UPDATE_WORK_ITEM_STATUS,
+    );
+
     const appliedResult = await client.callTool({
       name: DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.SET_AI_PLAN_APPLIED,
       arguments: {
@@ -257,8 +279,26 @@ test('MCP failed authentication is rate limited per client address', async () =>
 
 test('MCP tool errors preserve expected codes and public confirmation details', async () => {
   const server = await startTestServer({
-    executeTool: async ({ toolName }) => {
+    executeTool: async ({ toolName, arguments: args }) => {
       if (toolName === DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.UPDATE_WORK_ITEM_STATUS) {
+        if (args?.newStatus === '已修复') {
+          const error = new Error('请选择是否关联当前测试开发版本');
+          error.mcpCode = 'confirmation_required';
+          error.publicDetails = {
+            confirmationType: 'version_association',
+            confirmField: 'versionAssociationDecision',
+            operation: 'associate',
+            currentStatus: '修复中',
+            requestedStatus: '已修复',
+            versions: [{
+              recordId: 'ver-1',
+              versionNumber: '1.2.0',
+              platform: 'IGP',
+              status: '测试开发',
+            }],
+          };
+          throw error;
+        }
         const error = new Error('当前需求要求提交附件，但还没有提交任何附件');
         error.mcpCode = 'confirmation_required';
         error.publicDetails = {
@@ -300,6 +340,28 @@ test('MCP tool errors preserve expected codes and public confirmation details', 
       currentStatus: '处理中',
       requestedStatus: '已完成',
     });
+
+    const versionConfirmation = await client.callTool({
+      name: DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.UPDATE_WORK_ITEM_STATUS,
+      arguments: {
+        projectId: '50',
+        toolId: 'bugs',
+        recordId: 'record-2',
+        expectedCurrentStatus: '修复中',
+        newStatus: '已修复',
+        notifyProposer: false,
+        clientMutationId: 'status-2',
+      },
+    });
+    assert.equal(versionConfirmation.isError, true);
+    assert.equal(
+      versionConfirmation.structuredContent.error.details.confirmField,
+      'versionAssociationDecision',
+    );
+    assert.equal(
+      versionConfirmation.structuredContent.error.details.versions[0].recordId,
+      'ver-1',
+    );
 
     const missingDetailId = await client.callTool({
       name: DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.LIST_MY_PENDING_AI_PLAN_REVIEWS,

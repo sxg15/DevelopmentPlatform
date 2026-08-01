@@ -38,6 +38,30 @@ const MENTIONED_OPEN_IDS_SCHEMA = z.array(
   z.string().trim().min(1).max(200),
 ).max(20).default([])
   .describe('需要在留言中提及的飞书 Open ID；无提及时传空数组');
+const VERSION_ASSOCIATION_DECISION_SCHEMA = z.object({
+  operation: z.enum(['associate', 'unlink'])
+    .describe('associate 表示关联所选测试开发版本，unlink 表示取消所选已有版本关联'),
+  apply: z.boolean()
+    .describe('是否执行版本关联操作；false 表示仅更新状态并保持版本关联不变'),
+  versionRecordIds: z.array(RECORD_ID_SCHEMA).max(200).default([])
+    .describe('apply=true 时要关联或取消关联的版本记录ID'),
+}).superRefine((value, context) => {
+  if (value.apply && value.versionRecordIds.length === 0) {
+    context.addIssue({
+      code: 'custom',
+      path: ['versionRecordIds'],
+      message: 'apply=true 时至少选择一个版本',
+    });
+  }
+  if (!value.apply && value.versionRecordIds.length > 0) {
+    context.addIssue({
+      code: 'custom',
+      path: ['versionRecordIds'],
+      message: 'apply=false 时不能提交版本记录',
+    });
+  }
+}).optional()
+  .describe('仅在工具返回版本关联 confirmation_required 后提交，并复用原 clientMutationId');
 const AI_SOURCE_REFERENCE_SCHEMA = z.object({
   rootId: z.string().trim().min(1).max(100),
   relativePath: z.string().trim().min(1).max(500),
@@ -199,7 +223,7 @@ const TOOL_DEFINITIONS = Object.freeze([
   createToolDefinition({
     name: DEVELOPMENT_PLATFORM_MCP_TOOL_IDS.UPDATE_WORK_ITEM_STATUS,
     title: '更新工作项状态',
-    description: '由当前处理人更新需求、Bug 或反馈状态，并校验原状态。',
+    description: '由当前处理人更新需求、Bug 或反馈状态，并校验原状态；需求/Bug跨完成状态组时可能要求确认版本关联。',
     inputSchema: z.object({
       projectId: PROJECT_ID_SCHEMA,
       toolId: TOOL_ID_SCHEMA,
@@ -212,6 +236,7 @@ const TOOL_DEFINITIONS = Object.freeze([
         .describe('是否向提议人发送飞书状态变更通知，必须显式选择'),
       confirmWithoutRequiredAttachment: z.boolean().default(false)
         .describe('仅在工具返回 confirmation_required 后，由调用方确认无附件继续时设为 true'),
+      versionAssociationDecision: VERSION_ASSOCIATION_DECISION_SCHEMA,
       clientMutationId: CLIENT_MUTATION_ID_SCHEMA,
     }),
     readOnly: false,

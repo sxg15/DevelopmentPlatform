@@ -35,6 +35,8 @@ or validation commands change.
   uniqueness, association snapshots, previous-version validation, permissions, and
   overview projections.
 - `shared/workItemRealtimeUtils.js`: client/server realtime item helpers.
+- `shared/workItemVersionAssociationUtils.js`: completion-boundary detection,
+  version-association confirmations, and explicit association decisions.
 - `shared/personalSettingsUtils.js`: personal notification time normalization,
   scheduled reminder matching, pending-item filtering, sorting, and summaries.
 - `shared/clientErrorUtils.js`: runtime-neutral client error redaction, truncation,
@@ -262,7 +264,9 @@ rollback release.
   `expectedCurrentStatus` and an explicit proposer-notification choice. A required
   requirement attachment that is still missing returns `confirmation_required`;
   retry only after explicit confirmation with
-  `confirmWithoutRequiredAttachment=true`.
+  `confirmWithoutRequiredAttachment=true`. Requirement/Bug completion-boundary
+  updates may separately require `versionAssociationDecision`, with selected
+  version record IDs or an explicit choice to leave associations unchanged.
 - `submit_ai_plan_for_review` creates an MCP-sourced shared submission with
   `conversation_id=''`, preserves immutable revision chains, filters source
   references to configured project roots, and always queues the normal review
@@ -291,7 +295,16 @@ rollback release.
   this under the project-keyed queue and restore the previous record if the target
   write fails.
 - Version associations store snapshots of completed/closed requirements, Bugs, and
-  feedback. Existing snapshots remain valid after a work item is reopened.
+  feedback. Existing snapshots remain valid after a work item is reopened unless
+  the user explicitly removes selected associations during the status update.
+- Requirement and Bug status updates crossing the configured completed-status
+  boundary require an explicit version-association decision when relevant
+  versions exist. Entering the completed group may associate selected current
+  `测试开发` versions; leaving it may unlink selected existing associations.
+  Browser updates use a multi-select confirmation dialog, and MCP returns
+  `confirmation_required` with safe version snapshots. Association failures
+  preserve the status update and may be retried with the same mutation ID without
+  repeating status logs or notifications.
 - Version Management stores its normalized read payload in a user/project-isolated
   IndexedDB snapshot, renders cached data first, refreshes in the background, and
   updates the snapshot after successful mutations.

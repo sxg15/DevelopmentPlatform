@@ -542,13 +542,28 @@
   }
 
   .requirement-submission-attachment-actions,
-  .requirement-attachment-confirm-actions {
+  .requirement-attachment-confirm-actions,
+  .workitem-version-confirm-actions {
     align-items: stretch;
     flex-direction: column;
   }
 
   .requirement-submission-attachment-actions > button,
-  .requirement-attachment-confirm-actions button {
+  .requirement-attachment-confirm-actions button,
+  .workitem-version-confirm-actions button {
+    width: 100%;
+  }
+
+  .workitem-version-confirm-dialog {
+    max-height: calc(100vh - 24px);
+  }
+
+  .record-comment-status:has(.requirement-status-retry) {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .requirement-status-retry {
     width: 100%;
   }
 

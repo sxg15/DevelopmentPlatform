@@ -64,7 +64,14 @@ Treat shared definitions as the canonical frontend/backend contract.
 - Opening project overview must not create or copy work-item tables.
 - Version associations may add only requirements, Bugs, and feedback currently in a
   configured completed group. Store record ID, business ID, and title snapshots;
-  retain existing snapshots if the work item is later reopened.
+  retain existing snapshots if the work item is later reopened unless the user
+  explicitly removes selected associations.
+- Requirement and Bug status changes use the configured completed-status groups
+  as a boundary. Entering the group prompts for selected current `测试开发`
+  versions; leaving it prompts for selected existing associations. Browser and
+  MCP mutations share the confirmation contract, preserve the status when a later
+  association write fails, and reuse the same mutation ID to retry only the
+  association without repeating logs, realtime events, or notifications.
 - Project overview may display version data but must read existing version tables
   only. Version Management itself owns first-open provisioning.
 - Requirement and Bug detail pages may open a private Codex planning conversation.
@@ -123,8 +130,9 @@ Treat shared definitions as the canonical frontend/backend contract.
   notifications; conflicting reuse must fail. Hidden idempotency metadata stays
   in stored JSON/SQLite rows and is removed from client payloads.
 - MCP status updates remain assignee-only, require an expected current status, and
-  preserve the requirement attachment confirmation workflow. Mention and proposer
-  notifications are always explicit caller choices.
+  preserve the requirement attachment and version-association confirmation
+  workflows. Mention and proposer notifications are always explicit caller
+  choices.
 - MCP external AI plans have no private conversation. They join the submitter's
   `conversation_id=''` revision chain for that work item and notify the same
   current reviewers as web submissions.

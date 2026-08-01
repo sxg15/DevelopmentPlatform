@@ -2,8 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Bot,
   CircleHelp,
+  Link2,
   LoaderCircle,
   Sparkles,
+  Unlink2,
+  X,
 } from 'lucide-react';
 import {
   DEADLINE_FILTER_OPTIONS,
@@ -55,12 +58,17 @@ import {
   WORK_ITEM_TOOL_DEFINITIONS as WORK_ITEM_TOOL_CONFIGS,
 } from '../../../shared/workItemDefinitions.js';
 import {
+  WORK_ITEM_VERSION_ASSOCIATION_CONFIRMATION_TYPE,
+  WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS,
+} from '../../../shared/workItemVersionAssociationUtils.js';
+import {
   fetchProjects,
   fetchRelatedWorkItemCounts,
 } from '../../api/projects.js';
 import {
   appendRecordComment,
   changeWorkItemAssignees,
+  createWorkItemClientMutationId,
   createWorkItem,
   deleteRecordComment,
   deleteWorkItem,
@@ -3270,6 +3278,10 @@ function RequirementStatusUpdatePanel({
   const [notifyProposer, setNotifyProposer] = useState(true);
   const [status, setStatus] = useState({ type: 'idle', message: '' });
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
+  const [versionConfirmation, setVersionConfirmation] = useState(null);
+  const [associationRetry, setAssociationRetry] = useState(null);
+  const associationRetryRef = useRef(null);
+  const completedStatusUpdateRef = useRef('');
   const draftKey = createDraftKey(cacheUserKey, 'status', projectId, toolConfig.toolId, record.recordId);
 
   useLocalDraft(
@@ -3289,15 +3301,30 @@ function RequirementStatusUpdatePanel({
   );
 
   useEffect(() => {
+    const isOwnCompletedUpdate = completedStatusUpdateRef.current === currentStatus;
+    if (isOwnCompletedUpdate) {
+      completedStatusUpdateRef.current = '';
+    }
     const nextOptions = ensureStatusOptionExists(normalizeRequirementStatusOptionsForClient(statusOptions), currentStatus);
     setNewStatus(nextOptions.find((option) => option.name !== currentStatus)?.name || '');
     setMessage('');
     setNotifyProposer(true);
-    setStatus({ type: 'idle', message: '' });
+    if (!isOwnCompletedUpdate) {
+      setStatus({ type: 'idle', message: '' });
+    }
     setPendingConfirmation(null);
+    setVersionConfirmation(null);
+    if (associationRetryRef.current?.values?.newStatus !== currentStatus) {
+      associationRetryRef.current = null;
+      setAssociationRetry(null);
+    }
   }, [record.recordId, currentStatus, statusOptions]);
 
-  async function applyStatusUpdate(values, skipAttachmentCheck = false) {
+  async function applyStatusUpdate(
+    values,
+    skipAttachmentCheck = false,
+    allowDuplicateRetry = false,
+  ) {
     const trimmedStatus = String(values.newStatus || '').trim();
     const trimmedMessage = String(values.message || '').trim();
     if (!trimmedStatus || status.type === 'loading') {
@@ -3305,7 +3332,7 @@ function RequirementStatusUpdatePanel({
       return;
     }
 
-    if (trimmedStatus === currentStatus) {
+    if (trimmedStatus === currentStatus && !allowDuplicateRetry) {
       setStatus({ type: 'error', message: '处理状态没有变化' });
       return;
     }
@@ -3319,9 +3346,9 @@ function RequirementStatusUpdatePanel({
       })
     ) {
       setPendingConfirmation({
+        ...values,
         newStatus: trimmedStatus,
         message: trimmedMessage,
-        notifyProposer: values.notifyProposer,
       });
       return;
     }
@@ -3333,28 +3360,107 @@ function RequirementStatusUpdatePanel({
         newStatus: trimmedStatus,
         message: trimmedMessage,
         notifyProposer: values.notifyProposer,
+        expectedCurrentStatus: values.expectedCurrentStatus || currentStatus,
+        confirmWithoutRequiredAttachment: Boolean(values.confirmWithoutRequiredAttachment),
+        clientMutationId: values.clientMutationId,
+        versionAssociationDecision: values.versionAssociationDecision,
       });
       const updatedItem = payload.item || payload.requirement;
+      const versionAssociation = normalizeClientVersionAssociationResult(
+        payload.versionAssociation,
+      );
+      if (!versionAssociation.ok && values.versionAssociationDecision?.apply) {
+        const retry = {
+          values: {
+            ...values,
+            newStatus: trimmedStatus,
+            message: trimmedMessage,
+          },
+        };
+        associationRetryRef.current = retry;
+        setAssociationRetry(retry);
+      } else {
+        associationRetryRef.current = null;
+        setAssociationRetry(null);
+      }
       if (updatedItem) {
+        completedStatusUpdateRef.current = trimmedStatus;
         onUpdated?.(updatedItem);
       }
       void clearLocalDraft(draftKey);
 
       const failedNotifications = (payload.notificationResults || []).filter((item) => !item.ok);
+      if (!versionAssociation.ok) {
+        setStatus({
+          type: 'warning',
+          message: `处理状态已更新，但版本关联失败：${versionAssociation.message || '请重试'}`,
+        });
+        return;
+      }
       if (failedNotifications.length > 0) {
         setStatus({ type: 'warning', message: `处理状态已更新，${failedNotifications.length} 个通知发送失败` });
         return;
       }
 
-      setStatus({ type: 'success', message: '处理状态已更新' });
+      const changedVersionCount = versionAssociation.changedVersions.length;
+      const successMessage = changedVersionCount > 0
+        ? versionAssociation.operation === WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS.UNLINK
+          ? `处理状态已更新，已取消 ${changedVersionCount} 个版本关联`
+          : `处理状态已更新，已关联 ${changedVersionCount} 个版本`
+        : '处理状态已更新';
+      setStatus({ type: 'success', message: successMessage });
     } catch (error) {
+      const versionDetails = normalizeClientVersionAssociationConfirmation(
+        error?.payload?.result,
+      );
+      if (versionDetails) {
+        setVersionConfirmation({
+          ...versionDetails,
+          selectedVersionIds: [],
+          values: {
+            ...values,
+            newStatus: trimmedStatus,
+            message: trimmedMessage,
+          },
+        });
+        setStatus({ type: 'idle', message: '' });
+        return;
+      }
+      if (error?.payload?.result?.confirmField === 'confirmWithoutRequiredAttachment') {
+        setPendingConfirmation({
+          ...values,
+          newStatus: trimmedStatus,
+          message: trimmedMessage,
+        });
+        setStatus({ type: 'idle', message: '' });
+        return;
+      }
       setStatus({ type: 'error', message: formatErrorMessage(error) });
     }
   }
 
   function handleSubmit(event) {
     event.preventDefault();
-    void applyStatusUpdate({ newStatus, message, notifyProposer });
+    associationRetryRef.current = null;
+    setAssociationRetry(null);
+    void applyStatusUpdate({
+      newStatus,
+      message,
+      notifyProposer,
+      expectedCurrentStatus: currentStatus,
+      confirmWithoutRequiredAttachment: false,
+      clientMutationId: createWorkItemClientMutationId(),
+      versionAssociationDecision: null,
+    });
+  }
+
+  async function retryVersionAssociation() {
+    const retry = associationRetryRef.current;
+    if (!retry || status.type === 'loading') {
+      return;
+    }
+    setStatus({ type: 'loading', message: '正在重试版本关联' });
+    await applyStatusUpdate(retry.values, true, true);
   }
 
   return (
@@ -3409,7 +3515,21 @@ function RequirementStatusUpdatePanel({
               {status.type === 'loading' ? '更新中' : '更新'}
             </button>
           </div>
-          {status.message ? <p className={`record-comment-status record-comment-status-${status.type}`}>{status.message}</p> : null}
+          {status.message ? (
+            <div className={`record-comment-status record-comment-status-${status.type}`}>
+              <span>{status.message}</span>
+              {associationRetry ? (
+                <button
+                  type="button"
+                  className="requirement-status-retry"
+                  disabled={status.type === 'loading'}
+                  onClick={() => void retryVersionAssociation()}
+                >
+                  重试版本关联
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </form>
       </section>
       {pendingConfirmation ? (
@@ -3434,7 +3554,10 @@ function RequirementStatusUpdatePanel({
                 onClick={() => {
                   const values = pendingConfirmation;
                   setPendingConfirmation(null);
-                  void applyStatusUpdate(values, true);
+                  void applyStatusUpdate({
+                    ...values,
+                    confirmWithoutRequiredAttachment: true,
+                  }, true);
                 }}
               >
                 继续更新
@@ -3443,7 +3566,129 @@ function RequirementStatusUpdatePanel({
           </section>
         </div>
       ) : null}
+      {versionConfirmation ? (
+        <WorkItemVersionAssociationDialog
+          confirmation={versionConfirmation}
+          busy={status.type === 'loading'}
+          onCancel={() => setVersionConfirmation(null)}
+          onSelectionChange={(recordId, selected) => {
+            setVersionConfirmation((current) => {
+              if (!current) {
+                return current;
+              }
+              const next = new Set(current.selectedVersionIds);
+              if (selected) {
+                next.add(recordId);
+              } else {
+                next.delete(recordId);
+              }
+              return {
+                ...current,
+                selectedVersionIds: [...next],
+              };
+            });
+          }}
+          onSkip={() => {
+            const current = versionConfirmation;
+            setVersionConfirmation(null);
+            void applyStatusUpdate({
+              ...current.values,
+              versionAssociationDecision: {
+                operation: current.operation,
+                apply: false,
+                versionRecordIds: [],
+              },
+            }, true);
+          }}
+          onApply={() => {
+            const current = versionConfirmation;
+            setVersionConfirmation(null);
+            void applyStatusUpdate({
+              ...current.values,
+              versionAssociationDecision: {
+                operation: current.operation,
+                apply: true,
+                versionRecordIds: current.selectedVersionIds,
+              },
+            }, true);
+          }}
+        />
+      ) : null}
     </>
+  );
+}
+
+function WorkItemVersionAssociationDialog({
+  confirmation,
+  busy,
+  onCancel,
+  onSelectionChange,
+  onSkip,
+  onApply,
+}) {
+  const unlinking = confirmation.operation === WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS.UNLINK;
+  const Icon = unlinking ? Unlink2 : Link2;
+  const selected = new Set(confirmation.selectedVersionIds);
+
+  return (
+    <div className="workitem-submit-backdrop workitem-version-confirm-backdrop" role="presentation">
+      <section
+        className="workitem-version-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={unlinking ? '取消版本关联' : '关联测试开发版本'}
+      >
+        <header className="workitem-version-confirm-header">
+          <div>
+            <Icon aria-hidden="true" />
+            <h3>{unlinking ? '取消版本关联' : '关联测试开发版本'}</h3>
+          </div>
+          <button type="button" title="取消更新" aria-label="取消更新" disabled={busy} onClick={onCancel}>
+            <X aria-hidden="true" />
+          </button>
+        </header>
+        <p>
+          {unlinking
+            ? '该工作项将离开已完成状态。请选择需要取消的版本关联。'
+            : '该工作项将进入已完成状态。请选择需要关联的当前测试开发版本。'}
+        </p>
+        <div className="workitem-version-confirm-list" role="group" aria-label="可选版本">
+          {confirmation.versions.map((version) => (
+            <label
+              className={`workitem-version-confirm-option ${selected.has(version.recordId) ? 'is-selected' : ''}`}
+              key={version.recordId}
+            >
+              <input
+                type="checkbox"
+                checked={selected.has(version.recordId)}
+                disabled={busy}
+                onChange={(event) => onSelectionChange(version.recordId, event.target.checked)}
+              />
+              <span>
+                <strong>{version.versionNumber || '未命名版本'}</strong>
+                <small>{version.platform || '未设置平台'} · {version.status || '未设置状态'}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+        <div className="workitem-version-confirm-actions">
+          <button type="button" className="workitem-submit-secondary" disabled={busy} onClick={onCancel}>
+            取消更新
+          </button>
+          <button type="button" className="workitem-submit-secondary" disabled={busy} onClick={onSkip}>
+            {unlinking ? '保留关联并更新' : '仅更新状态'}
+          </button>
+          <button
+            type="button"
+            className="workitem-submit-primary"
+            disabled={busy || selected.size === 0}
+            onClick={onApply}
+          >
+            {unlinking ? '取消所选关联并更新' : '关联所选版本并更新'}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -4884,6 +5129,62 @@ function ensureStatusOptionExists(options, currentStatus) {
   }
 
   return [{ name: status, color: '' }, ...options];
+}
+
+function normalizeClientVersionAssociationConfirmation(value) {
+  if (
+    value?.confirmationType !== WORK_ITEM_VERSION_ASSOCIATION_CONFIRMATION_TYPE
+    || !Object.values(WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS).includes(value?.operation)
+  ) {
+    return null;
+  }
+
+  const versions = (Array.isArray(value.versions) ? value.versions : [])
+    .map((version) => {
+      const recordId = String(version?.recordId || '').trim();
+      if (!recordId) {
+        return null;
+      }
+      return {
+        recordId,
+        versionNumber: String(version?.versionNumber || '').trim(),
+        platform: String(version?.platform || '').trim(),
+        status: String(version?.status || '').trim(),
+      };
+    })
+    .filter(Boolean);
+  if (versions.length === 0) {
+    return null;
+  }
+
+  return {
+    operation: value.operation,
+    currentStatus: String(value.currentStatus || '').trim(),
+    requestedStatus: String(value.requestedStatus || '').trim(),
+    versions,
+  };
+}
+
+function normalizeClientVersionAssociationResult(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const operation = Object.values(WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS)
+    .includes(source.operation)
+    ? source.operation
+    : '';
+  return {
+    operation,
+    applied: Boolean(source.applied),
+    ok: source.ok !== false,
+    changedVersions: (Array.isArray(source.changedVersions) ? source.changedVersions : [])
+      .map((version) => ({
+        recordId: String(version?.recordId || '').trim(),
+        versionNumber: String(version?.versionNumber || '').trim(),
+        platform: String(version?.platform || '').trim(),
+        status: String(version?.status || '').trim(),
+      }))
+      .filter((version) => version.recordId),
+    message: String(source.message || '').trim(),
+  };
 }
 
 function filterSelectedMentionedUsers(selectedPeople, candidates) {
