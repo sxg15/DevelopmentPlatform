@@ -13,6 +13,7 @@ export function createPublicEntryGatewayService(options = {}) {
       || path.join(sourceRoot, 'config', 'config.json'),
   );
   const runProcess = options.runProcess || runChildProcess;
+  const appId = String(options.appId || '').trim();
   const context = resolveManagedGatewayContext({
     sourceRoot,
     configPath,
@@ -34,7 +35,7 @@ export function createPublicEntryGatewayService(options = {}) {
       validateSourcePackage(context.sourceGatewayDir);
       await stopExistingGateway(context, runProcess);
       replaceGatewayPackage(context);
-      await ensureGatewayState(context, runProcess);
+      await ensureGatewayState(context, runProcess, appId);
       await startGateway(context, runProcess);
       lastResult = {
         enabled: true,
@@ -177,7 +178,7 @@ function replaceGatewayPackage(context) {
   }
 }
 
-async function ensureGatewayState(context, runProcess) {
+async function ensureGatewayState(context, runProcess, appId) {
   fs.mkdirSync(path.dirname(context.privateKeyPath), { recursive: true });
   fs.copyFileSync(
     path.join(context.stableGatewayDir, 'server', 'known_hosts'),
@@ -204,10 +205,10 @@ async function ensureGatewayState(context, runProcess) {
       timeoutMs: 15_000,
     });
   }
-  writeGatewayConfig(context);
+  writeGatewayConfig(context, appId);
 }
 
-function writeGatewayConfig(context) {
+function writeGatewayConfig(context, appId) {
   let config;
   try {
     config = JSON.parse(fs.readFileSync(context.configPath, 'utf8'));
@@ -227,6 +228,10 @@ function writeGatewayConfig(context) {
     ...(config.localPlatform || {}),
     baseUrl: 'http://172.16.20.205:3000/',
     healthUrl: 'http://127.0.0.1:3000/api/health',
+  };
+  config.feishu = {
+    ...(config.feishu || {}),
+    appId,
   };
   config.ssh = {
     ...(config.ssh || {}),

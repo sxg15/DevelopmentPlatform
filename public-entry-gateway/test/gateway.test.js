@@ -21,6 +21,7 @@ const TOKEN = 'a'.repeat(48);
 test('gateway config keeps loopback listeners and resolves runtime paths', () => {
   const config = normalizeGatewayConfig({
     publicEntry: { relayToken: TOKEN },
+    feishu: { appId: 'cli_test' },
     ssh: {
       identityFile: 'ssh/id_ed25519',
       knownHostsFile: 'ssh/known_hosts',
@@ -29,6 +30,7 @@ test('gateway config keeps loopback listeners and resolves runtime paths', () =>
     configPath: 'C:\\gateway\\runtime-state\\config.json',
   });
   assert.equal(config.server.host, '127.0.0.1');
+  assert.equal(config.feishu.appId, 'cli_test');
   assert.match(config.ssh.identityFile, /runtime-state[\\/]ssh[\\/]id_ed25519$/);
   assert.throws(
     () => normalizeGatewayConfig({
@@ -200,6 +202,7 @@ test('HTTP agent returns redirect, forbidden and maintenance responses', async (
   const config = normalizeGatewayConfig({
     server: { port: 3199 },
     publicEntry: { relayToken: TOKEN },
+    feishu: { appId: 'cli_test' },
     ssh: {
       executable: process.execPath,
       identityFile: process.execPath,
@@ -235,6 +238,17 @@ test('HTTP agent returns redirect, forbidden and maintenance responses', async (
       redirect.headers.location,
       'http://172.16.20.205:3000/projects/50?tool=bugs',
     );
+
+    const feishuBridge = await requestAgent(config.server.port, '/projects/50?tool=bugs', {
+      'user-agent': 'Mozilla/5.0 Feishu/7.0',
+      'x-igp-relay-token': TOKEN,
+      'x-igp-client-ip': '47.100.74.169',
+    });
+    assert.equal(feishuBridge.statusCode, 200);
+    assert.match(feishuBridge.body, /requestAuthCode/);
+    assert.match(feishuBridge.body, /cli_test/);
+    assert.match(feishuBridge.body, /igpFeishuAuthCode/);
+    assert.match(feishuBridge.body, /172\.16\.20\.205:3000/);
 
     const forbidden = await requestAgent(config.server.port, '/', {
       'x-igp-relay-token': TOKEN,

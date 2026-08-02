@@ -72,6 +72,15 @@ export function handleEntryRequest(config, monitor, request, response) {
   });
 
   if (decision.status === ENTRY_STATUS.REDIRECT) {
+    if (config.feishu.appId && isFeishuClientRequest(request)) {
+      sendFeishuAuthBridge(
+        response,
+        config.feishu.appId,
+        decision.location,
+        request.method === 'HEAD',
+      );
+      return;
+    }
     response.statusCode = 302;
     response.setHeader('Location', decision.location);
     response.setHeader('Content-Type', 'text/plain; charset=utf-8');
@@ -91,6 +100,99 @@ export function handleEntryRequest(config, monitor, request, response) {
     request.method === 'HEAD',
     decision.statusCode === 503,
   );
+}
+
+function isFeishuClientRequest(request) {
+  const userAgent = String(request.headers['user-agent'] || '').toLowerCase();
+  return userAgent.includes('feishu') || userAgent.includes('lark');
+}
+
+function sendFeishuAuthBridge(response, appId, targetUrl, headOnly = false) {
+  const serializedAppId = serializeInlineScriptValue(appId);
+  const serializedTargetUrl = serializeInlineScriptValue(targetUrl);
+  const body = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>开发平台</title>
+<style>
+html,body{margin:0;min-height:100%;font-family:Arial,"Microsoft YaHei",sans-serif;background:#f5f7fa;color:#1f2329}
+body{display:grid;place-items:center}
+main{width:min(520px,calc(100% - 40px));text-align:center}
+h1{margin:0 0 12px;font-size:22px;font-weight:650}
+p{margin:0;color:#646a73;font-size:15px;line-height:1.7}
+</style>
+</head>
+<body>
+<main><h1>正在登录开发平台</h1><p id="status">正在连接飞书，请稍候。</p></main>
+<script src="https://lf-scm-cn.feishucdn.com/lark/op/h5-js-sdk-1.5.44.js"></script>
+<script>
+(() => {
+  const appId = ${serializedAppId};
+  const targetUrl = ${serializedTargetUrl};
+  const status = document.getElementById('status');
+  const deadline = Date.now() + 10000;
+  let requested = false;
+
+  function fail(error) {
+    const raw = error && (error.errString || error.errMsg || error.message);
+    status.textContent = raw
+      ? '飞书登录失败：' + String(raw).slice(0, 160)
+      : '飞书登录能力未就绪，请关闭当前窗口后重新打开。';
+  }
+
+  function finish(result) {
+    const code = result && (result.code || result.authCode || result.auth_code);
+    if (!code) {
+      fail({ message: '飞书没有返回授权码' });
+      return;
+    }
+    const destination = new URL(targetUrl);
+    destination.searchParams.set('igpFeishuAuthCode', code);
+    window.location.replace(destination.toString());
+  }
+
+  function tryLogin() {
+    if (requested) {
+      return;
+    }
+    if (window.tt && typeof window.tt.requestAuthCode === 'function') {
+      requested = true;
+      window.tt.requestAuthCode({
+        appId,
+        success: finish,
+        fail,
+        complete() {},
+      });
+      return;
+    }
+    if (Date.now() >= deadline) {
+      fail();
+      return;
+    }
+    window.setTimeout(tryLogin, 150);
+  }
+
+  if (window.h5sdk && typeof window.h5sdk.ready === 'function') {
+    window.h5sdk.ready(tryLogin);
+  }
+  tryLogin();
+})();
+</script>
+</body>
+</html>`;
+  response.statusCode = 200;
+  response.setHeader('Content-Type', 'text/html; charset=utf-8');
+  response.setHeader(
+    'Content-Security-Policy',
+    "default-src 'none'; script-src 'unsafe-inline' https://lf-scm-cn.feishucdn.com; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+  );
+  response.end(headOnly ? undefined : body);
+}
+
+function serializeInlineScriptValue(value) {
+  return JSON.stringify(String(value || '')).replaceAll('<', '\\u003c');
 }
 
 function applySecurityHeaders(response) {

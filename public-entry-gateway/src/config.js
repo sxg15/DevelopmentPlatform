@@ -15,6 +15,9 @@ const DEFAULTS = Object.freeze({
     baseUrl: 'http://172.16.20.205:3000/',
     healthUrl: 'http://127.0.0.1:3000/api/health',
   },
+  feishu: {
+    appId: '',
+  },
   accessControl: {
     additionalAllowedCidrs: [],
   },
@@ -92,6 +95,9 @@ export function normalizeGatewayConfig(rawConfig, { configPath = 'config.json' }
         DEFAULTS.localPlatform.healthUrl,
         'localPlatform.healthUrl',
       ),
+    },
+    feishu: {
+      appId: normalizeText(rawConfig?.feishu?.appId, DEFAULTS.feishu.appId),
     },
     accessControl: {
       additionalAllowedCidrs: normalizeTextList(

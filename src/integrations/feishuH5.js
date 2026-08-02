@@ -2,6 +2,18 @@ const FEISHU_H5_SDK_URL = 'https://lf-scm-cn.feishucdn.com/lark/op/h5-js-sdk-1.5
 const FEISHU_USER_SCOPES = [];
 const FEISHU_SDK_LOAD_TIMEOUT_MS = 8000;
 const FEISHU_AUTH_REQUEST_TIMEOUT_MS = 15_000;
+const PUBLIC_ENTRY_AUTH_CODE_PARAM = 'igpFeishuAuthCode';
+
+export function consumePublicEntryAuthCode() {
+  const url = new URL(window.location.href);
+  const code = String(url.searchParams.get(PUBLIC_ENTRY_AUTH_CODE_PARAM) || '').trim();
+  if (!code) {
+    return '';
+  }
+  url.searchParams.delete(PUBLIC_ENTRY_AUTH_CODE_PARAM);
+  window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  return code;
+}
 
 export async function waitForFeishuRuntime() {
   const isFeishuClient = isFeishuUserAgent();

@@ -66,6 +66,9 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - For code-only webpage login, prefer the available `tt.requestAuthCode` API.
   Use `tt.requestAccess` only when `requestAuthCode` is unavailable; do not invoke
   or retry `requestAccess` with an empty scope list when both APIs exist.
+- When the public-entry Gateway supplies `igpFeishuAuthCode`, consume it before
+  probing the existing session or invoking a LAN-page JSAPI, remove it from the
+  URL immediately, and exchange it through the existing authentication API.
 - Keep the settings dialog isolated from `App.jsx`; the app shell owns only open
   state, while loading and saving belong to the settings component and API client.
 - When authentication becomes ready, call the personal-settings ensure endpoint

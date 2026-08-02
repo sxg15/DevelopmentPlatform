@@ -1,6 +1,30 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getFeishuAuthCode } from '../src/integrations/feishuH5.js';
+import {
+  consumePublicEntryAuthCode,
+  getFeishuAuthCode,
+} from '../src/integrations/feishuH5.js';
+
+test('public entry authorization codes are consumed and removed from the URL', () => {
+  const originalWindow = globalThis.window;
+  let replacedUrl = '';
+  globalThis.window = {
+    location: {
+      href: 'http://172.16.20.205:3000/projects/50?tool=bugs&igpFeishuAuthCode=code-1#detail',
+    },
+    history: {
+      replaceState(_state, _title, url) {
+        replacedUrl = url;
+      },
+    },
+  };
+  try {
+    assert.equal(consumePublicEntryAuthCode(), 'code-1');
+    assert.equal(replacedUrl, '/projects/50?tool=bugs#detail');
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
 
 test('Feishu login prefers requestAuthCode when both login APIs are available', async () => {
   const originalWindow = globalThis.window;

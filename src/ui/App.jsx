@@ -16,6 +16,7 @@ import {
 import { fetchUpdates } from '../api/projects.js';
 import { ensurePersonalSettingsRecord } from '../api/personalSettings.js';
 import {
+  consumePublicEntryAuthCode,
   getFeishuAuthCode,
   waitForFeishuRuntime,
 } from '../integrations/feishuH5.js';
@@ -47,6 +48,16 @@ export function App() {
         }
 
         if (shouldHoldLoadingForDebug()) {
+          return;
+        }
+
+        const publicEntryAuthCode = consumePublicEntryAuthCode();
+        if (publicEntryAuthCode) {
+          const user = await exchangeCodeForUser(publicEntryAuthCode);
+          if (isActive) {
+            clearForceAuthQueryParam();
+            setAuthState({ status: 'ready', message: '', user });
+          }
           return;
         }
 

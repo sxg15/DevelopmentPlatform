@@ -435,6 +435,7 @@ const allowClientErrorReport = createClientErrorRateLimiter();
 const publicEntryGatewayService = createPublicEntryGatewayService({
   sourceRoot: rootDir,
   configPath: process.env.IGP_CONFIG_PATH,
+  appId,
 });
 
 app.use(express.json({ limit: '256kb' }));

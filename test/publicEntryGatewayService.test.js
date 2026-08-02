@@ -58,6 +58,7 @@ test('managed startup preserves target-owned state and returns only the public k
     sourceRoot: releaseRoot,
     configPath: path.join(managedRoot, 'state', 'config.json'),
     platform: 'win32',
+    appId: 'cli_test',
     runProcess: async (command, args) => {
       commands.push({ command, args });
       if (String(command).toLowerCase().endsWith('ssh-keygen.exe')) {
@@ -80,6 +81,7 @@ test('managed startup preserves target-owned state and returns only the public k
       'utf8',
     ));
     assert.equal(runtimeConfig.localPlatform.baseUrl, 'http://172.16.20.205:3000/');
+    assert.equal(runtimeConfig.feishu.appId, 'cli_test');
     assert.equal(runtimeConfig.publicEntry.relayToken, '');
     assert.equal(
       runtimeConfig.deployment.maintenanceFile,
