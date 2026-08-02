@@ -1,12 +1,12 @@
 {
   "name": "igp-development-platform",
-  "version": "0.1.135",
+  "version": "0.1.136",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "node server/index.js",
     "build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1",
-    "test": "node --test test/*.test.js",
+    "test": "node --test test/*.test.js && npm test --prefix public-entry-gateway",
     "verify": "npm run test && npm run build && npm run verify:upload-log && npm run verify:secret-exposure",
     "deploy-tool:install": "npm ci --prefix deployment-tool",
     "deploy-tool:test": "npm test --prefix deployment-tool",

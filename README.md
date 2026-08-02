@@ -23,7 +23,9 @@
 17. 留言提及人员和提交时处理人员不再搜索通讯录，候选人来自当前项目中有权使用当前工具的人员。
 18. 创建需求时可选择是否需要处理人提交附件，默认选择 `否`。选择 `是` 后，处理人可在详情页的“提交附件”操作中增删附件、记录留言并按需通知提出人；附件为空时更新处理状态会要求二次确认。
 19. `knowledgeBase.feedbackFieldNames` 用于配置反馈表字段名；提交反馈时服务端生成项目内 `F-0001` 编号，固定写入渠道“内部开发平台”和当前反馈时间，并将当前飞书身份、可选手机/邮箱及回访授权保存到 `联系信息数据` JSON。
-20. 在飞书开发者后台把网页应用主页地址配置为本机可访问地址，例如 `http://192.168.1.23:3000/`。
+20. 在飞书开发者后台把网页应用主页地址配置为固定公网入口
+    `http://47.100.74.169/`。入口只允许与后端设备公网出口 IP 相同的用户访问，
+    检查后端健康状态后再重定向到 `http://172.16.20.205:3000/`。
 21. 可选地在 `updates.manifestUrl` 填写 HTTPS 更新日志 JSON 地址。格式为 `schemaVersion`、`latestVersion` 和 `releases`，每条发布记录包含版本、发布时间和变更列表。
 22. `dashboard` 用于配置项目总览：`cacheTtlMs` 是服务端聚合缓存时间，`staleDays` 是“长期无进展”阈值，`dueSoonDays` 是“即将到期”阈值；`statusGroups` 可按需求、Bug、反馈配置待处理、处理中、已完成和阻塞状态名称。
 23. 项目总览只读取已存在的需求、Bug、反馈多维表格，不会因打开总览而创建或复制模板。页面默认显示项目全局数据，也可切换到“我的任务”，并通过实时事件或手动刷新更新。
@@ -53,6 +55,33 @@
 打包时，所有产物都会生成到根目录 `Publish` 文件夹。每次构建都会把 `config/config.json` 覆盖到 `Publish/config.json`。服务端会读取这个文件，但不会把 App Secret 返回给浏览器。
 `Publish` 根目录会生成 `StartWebBackend.bat` 和 `StopWebBackend.bat`，用于一键启动和停止网页后端服务。发布包不预装应用 `node_modules`；首次双击启动时会使用内置 Node/npm 执行锁定版本的生产依赖下载，并在命令行显示 npm 进度和 HTTP 获取状态。
 `ConfigureWebBackend.bat` 可在浏览器打开仅监听本机回环地址的可视化配置工具，`StopConfigureWebBackend.bat` 用于停止它；配置工具可在应用依赖尚未下载时运行，并且不会把已有密钥返回给浏览器。
+主发布包还内置 `public-entry-gateway/`。托管后端首次启动时会把它同步到目标端
+`managed-runtime/public-entry-gateway`，在目标端持久状态目录生成独立 SSH
+密钥并启动 Gateway Agent。后端收到升级停止信号时会写入维护状态，新版本监听
+成功后清除；因此公网入口在升级期间返回 `503`，不会重定向到尚未就绪的后端。
+
+## 公网入口
+
+`public-entry-gateway/` 是独立的 Node 工程，构建产物固定输出到其
+`Publish/`，并包含可双击运行的 `StartPublicEntryGateway.bat` 和
+`StopPublicEntryGateway.bat`。公网服务器只运行 Nginx 和 OpenSSH Server，
+通过监听 `127.0.0.1:18080` 的 SSH 反向隧道把入口请求送到局域网设备上的
+Gateway Agent，不运行开发平台业务或访问判断逻辑。
+
+Gateway Agent 会持续检查 `http://127.0.0.1:3000/api/health`，并通过公网入口
+查询后端设备当前出口 IP。只有请求来源 IP 与该出口 IP 相同，或属于
+`accessControl.additionalAllowedCidrs` 配置的 VPN 网段，并且后端连续健康时，
+才返回保留路径和查询参数的 `302` 局域网重定向。其他网络返回 `403`；后端升级、
+健康检查失败或反向隧道中断返回 `503`。
+公网 Linux 安装脚本会开放 firewalld/ufw 的 TCP 80，但云厂商安全组仍需单独
+允许该端口；安全组拦截时，请求不会到达服务器网卡。
+
+独立工程命令：
+
+```powershell
+npm --prefix public-entry-gateway test
+npm --prefix public-entry-gateway run build
+```
 
 ## 局域网部署调试工具
 

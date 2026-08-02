@@ -8,6 +8,8 @@ $publishServerDir = Join-Path $publishDir 'server'
 $publishRuntimeDir = Join-Path $publishDir 'runtime'
 $dependencyInstallerFile = Join-Path $rootDir 'scripts\ensure-publish-dependencies.ps1'
 $exampleConfigFile = Join-Path $rootDir 'config\config.example.json'
+$publicEntryGatewayDir = Join-Path $rootDir 'public-entry-gateway'
+$publicEntryGatewayPublishDir = Join-Path $publicEntryGatewayDir 'Publish'
 $resolvedPublishDir = [System.IO.Path]::GetFullPath($publishDir)
 $workspacePrefix = [System.IO.Path]::GetFullPath($rootDir).TrimEnd('\') + '\'
 
@@ -25,6 +27,14 @@ if (-not (Test-Path -LiteralPath $dependencyInstallerFile -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $exampleConfigFile -PathType Leaf)) {
     throw '缺少 config/config.example.json'
+}
+if (-not (Test-Path -LiteralPath (Join-Path $publicEntryGatewayDir 'package.json') -PathType Leaf)) {
+    throw '缺少 public-entry-gateway 工程'
+}
+
+& npm.cmd --prefix $publicEntryGatewayDir run build
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
 }
 
 $publishedController = Join-Path $publishDir 'server\runtime\backendProcessController.js'
@@ -72,6 +82,7 @@ Copy-Item -Path (Join-Path $rootDir 'server\*') -Destination $publishServerDir -
 Copy-Item -LiteralPath (Join-Path $rootDir 'shared') -Destination (Join-Path $publishDir 'shared') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $rootDir 'package.json') -Destination (Join-Path $publishDir 'package.json') -Force
 Copy-Item -LiteralPath (Join-Path $rootDir 'package-lock.json') -Destination (Join-Path $publishDir 'package-lock.json') -Force
+Copy-Item -LiteralPath $publicEntryGatewayPublishDir -Destination (Join-Path $publishDir 'public-entry-gateway') -Recurse -Force
 
 $nodeRuntime = & node -p "JSON.stringify({path:process.execPath,platform:process.platform,arch:process.arch,major:Number(process.versions.node.split('.')[0]),version:process.versions.node})" | ConvertFrom-Json
 if ($nodeRuntime.platform -ne 'win32' -or $nodeRuntime.arch -ne 'x64' -or $nodeRuntime.major -ne 24) {
@@ -117,7 +128,10 @@ foreach ($requiredFile in @(
     (Join-Path $publishServerDir 'config\stopConfigEditor.js'),
     (Join-Path $publishServerDir 'config\selectFolder.ps1'),
     (Join-Path $publishDir 'config-editor\index.html'),
-    (Join-Path $publishDir 'config.example.json')
+    (Join-Path $publishDir 'config.example.json'),
+    (Join-Path $publishDir 'public-entry-gateway\src\agent.js'),
+    (Join-Path $publishDir 'public-entry-gateway\runtime\node.exe'),
+    (Join-Path $publishDir 'public-entry-gateway\server\known_hosts')
 )) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         throw "便携发布缺少运行文件：$requiredFile"

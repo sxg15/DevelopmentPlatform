@@ -52,6 +52,9 @@ Read `AGENTS.md`, then locate the owning layer.
   `shared/feishuAssistantDefinitions.js`.
 - Daily reminder timing: `server/services/todoNotificationScheduler.js`;
   reminder orchestration and cards remain in `server/index.js`.
+- Managed public entry:
+  `server/services/publicEntryGatewayService.js` and the startup/shutdown hooks in
+  `server/index.js`.
 
 ## Rules
 
@@ -127,6 +130,13 @@ Read `AGENTS.md`, then locate the owning layer.
   while preserving existing development and portable-package path fallbacks.
 - When adding server modules, keep `scripts/build.ps1` copying the complete
   `server/` tree.
+- Keep the public-entry Agent outside replaceable managed releases. Preserve its
+  SSH key, runtime config, PID state, and logs under target-owned managed state;
+  expose only its public key and non-secret readiness metadata through the
+  bootstrap route.
+- Mark managed SIGTERM shutdown as public-entry maintenance before closing the
+  backend, and clear that state only after the new backend listener is ready.
+  Never replace a running Agent package after a failed verified stop.
 - Keep the portable package lightweight: bundle Node and npm, but install locked
   production dependencies on first launch through `EnsureDependencies.ps1`.
   Keep first-launch npm progress and network fetch status visible in the startup

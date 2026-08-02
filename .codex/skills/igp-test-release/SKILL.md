@@ -16,11 +16,15 @@ git diff --check
 ```
 
 `npm run verify` runs Node tests, the production package build, upload-log
-validation, and secret-exposure validation.
+validation, and secret-exposure validation. Root Node tests also invoke the
+independent `public-entry-gateway` test suite.
 
 Use `npm run build` after server module layout or packaging changes. Confirm the
 complete backend module tree exists under `Publish/server/`. Never display or
 commit `Publish/config.json`.
+Confirm the embedded Gateway package exists under
+`Publish/public-entry-gateway/`, while its standalone build remains under
+`public-entry-gateway/Publish/` with bundled Node and start/stop BAT files.
 
 After runtime-affecting changes, keep the developer-side LAN tool running and run:
 
@@ -115,6 +119,11 @@ the current or rollback release.
 - Same-user settings mutation serialization is covered by
   `test/serverRuntime.test.js`; non-blocking frontend initialization is covered by
   `test/frontendModuleBindings.test.js`.
+- Public-entry Agent IP/CIDR decisions, health freshness, reverse tunnel arguments,
+  maintenance handling, and HTTP responses are covered by
+  `public-entry-gateway/test/gateway.test.js`. Managed package replacement,
+  target-owned state, verified stops, and maintenance markers are covered by
+  `test/publicEntryGatewayService.test.js`.
 
 Add focused Node tests for pure behavior. Use browser verification for visible UI
 changes and local API smoke tests for route changes.

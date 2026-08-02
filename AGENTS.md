@@ -182,6 +182,9 @@ Shared modules must remain runtime-neutral and importable from Node tests.
   and failure notification retries.
 - `server/services/todoNotificationScheduler.js`: minute-aligned scheduled reminder
   execution.
+- `server/services/publicEntryGatewayService.js`: managed public-entry Agent package
+  replacement, target-owned SSH identity/config state, maintenance markers, and
+  public bootstrap material.
 
 Keep Feishu HTTP details in `server/integrations/`, process-local state in
 `server/runtime/`, config behavior in `server/config/`, and route orchestration in
@@ -203,6 +206,10 @@ when those variables are absent.
 - `deployment-tool/src/renderer/`: dense developer/target operator interfaces.
 - `scripts/deploy-debug.js`: loopback-only Codex automation client used by
   `npm run deploy:debug`.
+- `public-entry-gateway/`: independent Windows Agent package for backend health,
+  same-egress-IP access checks, LAN redirects, and the reverse SSH tunnel. Its
+  build output belongs under `public-entry-gateway/Publish/`; the main build embeds
+  that package for managed target provisioning.
 - Deployment-tool packages belong under `deployment-tool/Publish/`; never write
   them into the application's root `Publish/` directory.
 
@@ -474,6 +481,16 @@ rollback release.
   through the authenticated tool tunnel. Never add a LAN-bound shell.
 - Production packaging must copy the complete `server/` tree because the backend is
   modular.
+- Production packaging must also build and embed the complete public-entry Gateway
+  package. Managed startup copies it outside replaceable releases, preserves its
+  key/config/log state under `managed-runtime/public-entry-state`, and runs it
+  independently of the backend process.
+- The public relay server runs only Nginx and sshd. Bind the reverse forward to
+  relay loopback, restrict its SSH key to that listener, keep health/access
+  decisions on the LAN Agent, and redirect only to the configured LAN origin.
+- On managed backend SIGTERM, atomically mark the public entry as upgrading before
+  shutdown. Clear the marker only after the replacement backend is listening.
+  Failed verified Agent stops must block package replacement.
 - Portable packages include `ConfigureWebBackend.bat`,
   `StopConfigureWebBackend.bat`, a static configuration editor, and
   `config.example.json`. The configuration editor must run with the bundled Node
@@ -492,7 +509,8 @@ rollback release.
    direct HTTP calls.
 3. Keep changes scoped; do not alter unrelated user work in a dirty worktree.
 4. Add or update focused Node tests for pure utilities and workflow rules.
-5. Run `npm test` and `npx vite build` during implementation.
+5. Run `npm test` and `npx vite build` during implementation. Root tests must also
+   run the independent `public-entry-gateway` test suite.
 6. For UI changes, run the local server and verify desktop/mobile behavior in a real
    browser.
 7. After any runtime, UI, backend, shared-contract, configuration, or packaging

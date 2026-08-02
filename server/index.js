@@ -122,6 +122,7 @@ import {
 import { createTodoNotificationScheduler } from './services/todoNotificationScheduler.js';
 import { createVersionManagementService } from './services/versionManagementService.js';
 import { createTestTaskService } from './services/testTaskService.js';
+import { createPublicEntryGatewayService } from './services/publicEntryGatewayService.js';
 import { createAiRunContextService } from './services/aiRunContextService.js';
 import { createAiPlanningNotificationService } from './services/aiPlanningNotificationService.js';
 import { createFeishuAssistantService } from './services/feishuAssistantService.js';
@@ -431,6 +432,10 @@ feishuLongConnectionClient.setEventHandlers({
 
 const app = express();
 const allowClientErrorReport = createClientErrorRateLimiter();
+const publicEntryGatewayService = createPublicEntryGatewayService({
+  sourceRoot: rootDir,
+  configPath: process.env.IGP_CONFIG_PATH,
+});
 
 app.use(express.json({ limit: '256kb' }));
 app.use('/api', (_request, response, next) => {
@@ -480,6 +485,11 @@ app.get('/api/health', (_request, response) => {
     },
     feishuAssistant: feishuAssistantService.getHealth(),
   });
+});
+
+app.get('/api/public-entry/bootstrap', (_request, response) => {
+  response.setHeader('Cache-Control', 'no-store');
+  response.json(publicEntryGatewayService.getBootstrapState());
 });
 
 app.get('/api/config', (_request, response) => {
@@ -5828,6 +5838,16 @@ const httpServer = app.listen(port, host, () => {
   }
   feishuAssistantService.start();
   void migrateConfiguredWorkItemSchemas();
+  try {
+    publicEntryGatewayService.clearMaintenance();
+  } catch (error) {
+    console.error('[public-entry] 清除维护状态失败', formatLogError(error));
+  }
+  void publicEntryGatewayService.ensureStarted().then((result) => {
+    if (!result.ready && result.enabled) {
+      console.error(`[public-entry] ${result.message}`);
+    }
+  });
 });
 
 let shuttingDown = false;
@@ -5837,6 +5857,13 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
       return;
     }
     shuttingDown = true;
+    if (signal === 'SIGTERM') {
+      try {
+        publicEntryGatewayService.markMaintenance('upgrading');
+      } catch (error) {
+        console.error('[public-entry] 写入维护状态失败', formatLogError(error));
+      }
+    }
     todoNotificationScheduler.stop();
     aiPlanningNotificationService.stop();
     void Promise.allSettled([

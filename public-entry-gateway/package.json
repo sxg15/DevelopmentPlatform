@@ -1,0 +1,12 @@
+{
+  "name": "igp-public-entry-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/agent.js",
+    "test": "node --test test/*.test.js",
+    "build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1",
+    "verify": "npm test && npm run build"
+  }
+}

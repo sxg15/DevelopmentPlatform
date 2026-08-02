@@ -21,6 +21,9 @@ to the application package copied into `Publish`.
 ## Safety Rules
 
 - Run the target agent outside the managed release directories.
+- Run the public-entry Gateway Agent outside managed releases as well. The backend
+  provisions it into `managed-runtime/public-entry-gateway` and keeps identity,
+  configuration, PID state, and logs in `managed-runtime/public-entry-state`.
 - Never upload `config.json`, runtime logs, pairing tokens, or automation tokens.
 - Pin the target TLS certificate fingerprint after pairing. Keep target access
   tokens in Electron `safeStorage`; store only token hashes on the target.
@@ -43,6 +46,10 @@ to the application package copied into `Publish`.
   replace the loading view with an actionable error.
 - Prepare dependencies before stopping the running service. On failed activation,
   restore and restart the previous release.
+- Backend SIGTERM must publish the public-entry maintenance marker before shutdown;
+  the replacement backend clears it after listening. The independently running
+  Gateway then returns maintenance `503` throughout deployment instead of
+  redirecting to an unavailable LAN service.
 - Launch managed backend releases with the target-owned stable executable at
   `managed-runtime/runtime/node.exe`, never the version-specific
   `releases/<releaseId>/runtime/node.exe`. Synchronize the fixed executable from
