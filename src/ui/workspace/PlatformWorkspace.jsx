@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   Bot,
   Bug,
+  ChevronDown,
   CircleHelp,
   ClipboardList,
   ExternalLink,
@@ -64,6 +65,7 @@ import {
   FEEDBACK_LEGACY_ACTIVE_STATUSES,
   FEEDBACK_STATUSES,
   PROJECT_TOOL_DEFINITIONS as PROJECT_TOOLS,
+  PROJECT_TOOL_GROUP_DEFINITIONS as PROJECT_TOOL_GROUPS,
   REQUIREMENT_PRIORITIES,
   WORK_ITEM_TOOL_DEFINITIONS as WORK_ITEM_TOOL_CONFIGS,
 } from '../../../shared/workItemDefinitions.js';
@@ -97,10 +99,13 @@ import { AiPlanningWorkspace } from '../ai/AiPlanningWorkspace.jsx';
 import { TestTaskManagement } from '../test-tasks/TestTaskManagement.jsx';
 import { fetchAiProjectActivity } from '../../api/aiPlans.js';
 import {
+  getProjectToolGroupPendingCount,
+  getProjectToolNavigationSections,
   getProjectToolPendingCount,
   getProjectToolsForDisplay,
   isDevelopmentProjectTool,
   isProjectToolPendingCountTool,
+  normalizeCollapsedProjectToolGroupIds,
   normalizeRelatedWorkItemCounts,
 } from './projectToolDisplayUtils.js';
 import { getProjectToolIcon } from './projectToolIcons.js';
@@ -503,6 +508,9 @@ function ProjectWorkspace({
 }) {
   const [activeToolId, setActiveToolId] = useState(() => getInitialWorkspacePreferences(cacheUserKey, project).activeToolId);
   const [workItemStates, setWorkItemStates] = useState(() => createInitialWorkItemStates());
+  const [collapsedToolGroupIds, setCollapsedToolGroupIds] = useState(
+    () => new Set(getInitialWorkspacePreferences(cacheUserKey, project).collapsedToolGroupIds),
+  );
   const [collapsedPriorities, setCollapsedPriorities] = useState(() => new Set(getInitialWorkspacePreferences(cacheUserKey, project).collapsedPriorities));
   const [statusCollapseOverrides, setStatusCollapseOverrides] = useState(() => getInitialWorkspacePreferences(cacheUserKey, project).statusCollapseOverrides);
   const [workItemFilters, setWorkItemFilters] = useState(() => getInitialWorkspacePreferences(cacheUserKey, project).workItemFilters);
@@ -518,6 +526,7 @@ function ProjectWorkspace({
   const processedDirectKeyRef = useRef('');
   const processedRealtimeEventRef = useRef('');
   const visibleTools = getProjectToolsForDisplay(project, PROJECT_TOOLS);
+  const toolNavigation = getProjectToolNavigationSections(visibleTools, PROJECT_TOOL_GROUPS);
   const activeTool = visibleTools.find((tool) => tool.id === activeToolId) || visibleTools[0];
   const activeWorkItemConfig = activeToolId === 'testTasks'
     ? null
@@ -533,6 +542,7 @@ function ProjectWorkspace({
     const preferences = getInitialWorkspacePreferences(cacheUserKey, project);
     setActiveToolId(preferences.activeToolId);
     setWorkItemStates(createInitialWorkItemStates());
+    setCollapsedToolGroupIds(new Set(preferences.collapsedToolGroupIds));
     setCollapsedPriorities(new Set(preferences.collapsedPriorities));
     setStatusCollapseOverrides(preferences.statusCollapseOverrides);
     setWorkItemFilters(preferences.workItemFilters);
@@ -596,11 +606,36 @@ function ProjectWorkspace({
   useEffect(() => {
     writeLocalPreference(cacheUserKey, getWorkspacePreferenceName(project), {
       activeToolId,
+      collapsedToolGroupIds: [...collapsedToolGroupIds],
       collapsedPriorities: [...collapsedPriorities],
       statusCollapseOverrides,
       workItemFilters,
     });
-  }, [activeToolId, cacheUserKey, collapsedPriorities, project, statusCollapseOverrides, workItemFilters]);
+  }, [
+    activeToolId,
+    cacheUserKey,
+    collapsedPriorities,
+    collapsedToolGroupIds,
+    project,
+    statusCollapseOverrides,
+    workItemFilters,
+  ]);
+
+  useEffect(() => {
+    const activeGroupId = PROJECT_TOOLS.find((tool) => tool.id === activeToolId)?.groupId;
+    if (!activeGroupId) {
+      return;
+    }
+
+    setCollapsedToolGroupIds((current) => {
+      if (!current.has(activeGroupId)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.delete(activeGroupId);
+      return next;
+    });
+  }, [activeToolId, project.recordId]);
 
   useEffect(() => {
     if (!directTarget || directTarget.projectId !== String(project.projectId || '') || processedDirectKeyRef.current === directTarget.key) {
@@ -666,13 +701,40 @@ function ProjectWorkspace({
     }));
   }
 
+  function handleProjectToolGroupToggle(groupId) {
+    setCollapsedToolGroupIds((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
+    });
+  }
+
+  function activateProjectTool(toolId) {
+    const groupId = visibleTools.find((tool) => tool.id === toolId)?.groupId;
+    if (groupId) {
+      setCollapsedToolGroupIds((current) => {
+        if (!current.has(groupId)) {
+          return current;
+        }
+        const next = new Set(current);
+        next.delete(groupId);
+        return next;
+      });
+    }
+    setActiveToolId(toolId);
+  }
+
   async function handleToolClick(toolId) {
     const selectedTool = visibleTools.find((tool) => tool.id === toolId);
     if (!selectedTool || isDevelopmentProjectTool(selectedTool)) {
       return;
     }
 
-    setActiveToolId(toolId);
+    activateProjectTool(toolId);
     setHighlightCommentId('');
     onDirectNotice?.({ type: 'idle', message: '' });
 
@@ -696,7 +758,7 @@ function ProjectWorkspace({
       return;
     }
 
-    setActiveToolId(toolId);
+    activateProjectTool(toolId);
 
     const toolConfig = getWorkItemToolConfig(toolId);
     if (toolId === 'testTasks') {
@@ -867,7 +929,7 @@ function ProjectWorkspace({
         return;
       }
       setSelectedTestTaskId(String(item?.recordId || '').trim());
-      setActiveToolId('testTasks');
+      activateProjectTool('testTasks');
       return;
     }
     const toolConfig = getWorkItemToolConfig(item?.toolId);
@@ -876,7 +938,7 @@ function ProjectWorkspace({
       return;
     }
 
-    setActiveToolId(toolConfig.toolId);
+    activateProjectTool(toolConfig.toolId);
     await loadWorkItems(toolConfig, {
       recordId: item?.recordId,
       commentId: item?.commentId,
@@ -893,13 +955,13 @@ function ProjectWorkspace({
       onDirectNotice?.({ type: 'error', message: '没有权限查看关联工作项' });
       return;
     }
-    setActiveToolId(toolConfig.toolId);
+    activateProjectTool(toolConfig.toolId);
     await loadWorkItems(toolConfig, { recordId });
   }
 
   async function handleOverviewStatusOpen(toolId, statuses) {
     if (toolId === 'testTasks') {
-      setActiveToolId('testTasks');
+      activateProjectTool('testTasks');
       return;
     }
     const toolConfig = getWorkItemToolConfig(toolId);
@@ -915,7 +977,7 @@ function ProjectWorkspace({
         statuses: [...new Set((statuses || []).map((status) => String(status || '').trim()).filter(Boolean))],
       },
     }));
-    setActiveToolId(toolConfig.toolId);
+    activateProjectTool(toolConfig.toolId);
     await loadWorkItems(toolConfig);
   }
 
@@ -926,8 +988,64 @@ function ProjectWorkspace({
       return;
     }
     setSelectedVersionId(recordId);
-    setActiveToolId('versions');
+    activateProjectTool('versions');
     onDirectNotice?.({ type: 'idle', message: '' });
+  }
+
+  function getToolPendingState(tool) {
+    const count = tool.id === 'aiPlans'
+      ? aiActivity.pendingReviewCount
+      : getProjectToolPendingCount(relatedWorkItemCounts, tool.id);
+    const label = tool.id === 'aiPlans'
+      ? '待审核'
+      : tool.id === 'testTasks'
+        ? '待办'
+        : tool.id === 'feedback'
+          ? '待分类'
+          : '未处理';
+
+    return { count, label };
+  }
+
+  function renderProjectToolButton(tool) {
+    const ToolIcon = getProjectToolIcon(tool.iconKey);
+    const isDevelopmentTool = isDevelopmentProjectTool(tool);
+    const { count: pendingCount, label: pendingLabel } = getToolPendingState(tool);
+
+    return (
+      <button
+        key={tool.id}
+        type="button"
+        className={[
+          'project-tool-button',
+          `project-tool-button-${tool.id}`,
+          activeToolId === tool.id ? 'is-active' : '',
+          pendingCount > 0 ? 'has-pending-count' : '',
+          isDevelopmentTool ? 'is-development' : '',
+        ].filter(Boolean).join(' ')}
+        aria-label={
+          isDevelopmentTool
+            ? `${tool.label}，${tool.statusText}`
+            : pendingCount > 0
+              ? `${tool.label}，${pendingCount}${pendingLabel}`
+              : tool.label
+        }
+        aria-pressed={activeToolId === tool.id}
+        disabled={isDevelopmentTool}
+        onClick={isDevelopmentTool ? undefined : () => handleToolClick(tool.id)}
+      >
+        <ToolIcon className="project-tool-icon" aria-hidden="true" />
+        <span className="project-tool-copy">
+          <span className="project-tool-label">{tool.label}</span>
+          {isDevelopmentTool ? (
+            <span className="project-tool-development-status">（{tool.statusText}）</span>
+          ) : null}
+        </span>
+        {pendingCount > 0 ? (
+          <span className="project-tool-pending-badge">{pendingCount}{pendingLabel}</span>
+        ) : null}
+      </button>
+    );
   }
 
   return (
@@ -945,52 +1063,49 @@ function ProjectWorkspace({
           </div>
 
           <nav className="project-tool-nav" aria-label="项目功能">
-            {visibleTools.map((tool) => {
-              const ToolIcon = getProjectToolIcon(tool.iconKey);
-              const isDevelopmentTool = isDevelopmentProjectTool(tool);
-              const pendingCount = tool.id === 'aiPlans'
-                ? aiActivity.pendingReviewCount
-                : getProjectToolPendingCount(relatedWorkItemCounts, tool.id);
-              const pendingLabel = tool.id === 'aiPlans'
-                ? '待审核'
-                : tool.id === 'testTasks'
-                  ? '待办'
-                  : tool.id === 'feedback'
-                    ? '待分类'
-                    : '未处理';
+            {toolNavigation.ungroupedTools.map(renderProjectToolButton)}
+            {toolNavigation.groups.map((group) => {
+              const isCollapsed = collapsedToolGroupIds.has(group.id);
+              const hasActiveTool = group.tools.some((tool) => tool.id === activeToolId);
+              const pendingCount = getProjectToolGroupPendingCount(
+                group.tools,
+                (tool) => getToolPendingState(tool).count,
+              );
+              const contentId = `project-tool-group-${group.id}`;
+
               return (
-                <button
-                  key={tool.id}
-                  type="button"
-                  className={[
-                    'project-tool-button',
-                    `project-tool-button-${tool.id}`,
-                    activeToolId === tool.id ? 'is-active' : '',
-                    pendingCount > 0 ? 'has-pending-count' : '',
-                    isDevelopmentTool ? 'is-development' : '',
-                  ].filter(Boolean).join(' ')}
-                  aria-label={
-                    isDevelopmentTool
-                      ? `${tool.label}，${tool.statusText}`
-                      : pendingCount > 0
-                        ? `${tool.label}，${pendingCount}${pendingLabel}`
-                        : tool.label
-                  }
-                  aria-pressed={activeToolId === tool.id}
-                  disabled={isDevelopmentTool}
-                  onClick={isDevelopmentTool ? undefined : () => handleToolClick(tool.id)}
+                <section
+                  key={group.id}
+                  className={`project-tool-group ${hasActiveTool ? 'has-active-tool' : ''}`}
                 >
-                  <ToolIcon className="project-tool-icon" aria-hidden="true" />
-                  <span className="project-tool-copy">
-                    <span className="project-tool-label">{tool.label}</span>
-                    {isDevelopmentTool ? (
-                      <span className="project-tool-development-status">（{tool.statusText}）</span>
+                  <button
+                    type="button"
+                    className="project-tool-group-toggle"
+                    aria-expanded={!isCollapsed}
+                    aria-controls={contentId}
+                    aria-label={`${group.label}${pendingCount > 0 ? `，${pendingCount}项待办` : ''}`}
+                    onClick={() => handleProjectToolGroupToggle(group.id)}
+                  >
+                    <ChevronDown
+                      className={`project-tool-group-chevron ${isCollapsed ? 'is-collapsed' : ''}`}
+                      aria-hidden="true"
+                    />
+                    <span className="project-tool-group-label">{group.label}</span>
+                    {pendingCount > 0 ? (
+                      <span className="project-tool-group-pending-badge">{pendingCount}待办</span>
                     ) : null}
-                  </span>
-                  {pendingCount > 0 ? (
-                    <span className="project-tool-pending-badge">{pendingCount}{pendingLabel}</span>
-                  ) : null}
-                </button>
+                  </button>
+                  <div
+                    id={contentId}
+                    className={`project-tool-group-content ${isCollapsed ? 'is-collapsed' : ''}`}
+                    aria-hidden={isCollapsed}
+                    inert={isCollapsed ? true : undefined}
+                  >
+                    <div className="project-tool-group-items">
+                      {group.tools.map(renderProjectToolButton)}
+                    </div>
+                  </div>
+                </section>
               );
             })}
           </nav>
@@ -1058,7 +1173,7 @@ function ProjectWorkspace({
                           focus: aiTarget.focus || '',
                         }
                       : null);
-                    setActiveToolId(toolId);
+                    activateProjectTool(toolId);
                     void loadWorkItems(toolConfig, { recordId });
                   }
                 }}
@@ -5155,6 +5270,10 @@ function getInitialWorkspacePreferences(cacheUserKey, project) {
 
   return {
     activeToolId: defaultToolId,
+    collapsedToolGroupIds: normalizeCollapsedProjectToolGroupIds(
+      stored.collapsedToolGroupIds,
+      PROJECT_TOOL_GROUPS,
+    ),
     collapsedPriorities: Array.isArray(stored.collapsedPriorities)
       ? stored.collapsedPriorities.filter((item) => typeof item === 'string')
       : [],

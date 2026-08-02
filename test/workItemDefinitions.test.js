@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   FEEDBACK_STATUSES,
   PROJECT_TOOL_DEFINITIONS,
+  PROJECT_TOOL_GROUP_DEFINITIONS,
   REQUIREMENT_PRIORITIES,
   WORK_ITEM_ACCEPTANCE_STATUS,
   WORK_ITEM_TOOL_DEFINITIONS,
@@ -35,6 +36,33 @@ test('project tools keep overview first and use unique identifiers', () => {
     assert.equal(tool.statusText, '开发中');
   }
   assert.ok(getProjectToolIcon('unknown-icon'));
+});
+
+test('project tools use the canonical navigation groups', () => {
+  assert.deepEqual(
+    PROJECT_TOOL_GROUP_DEFINITIONS.map((group) => [group.id, group.label]),
+    [
+      ['projectManagement', '项目管理'],
+      ['aiWorkflow', 'AI工作流'],
+      ['workItems', '工作事项'],
+      ['qualityDelivery', '质量交付'],
+    ],
+  );
+  assert.equal(PROJECT_TOOL_DEFINITIONS.find((tool) => tool.id === 'overview').groupId, undefined);
+  assert.deepEqual(
+    Object.fromEntries(PROJECT_TOOL_DEFINITIONS.map((tool) => [tool.id, tool.groupId || ''])),
+    {
+      overview: '',
+      versions: 'projectManagement',
+      aiPlans: 'aiWorkflow',
+      requirements: 'workItems',
+      bugs: 'workItems',
+      testTasks: 'qualityDelivery',
+      feedback: 'workItems',
+      builds: 'qualityDelivery',
+      review: 'qualityDelivery',
+    },
+  );
 });
 
 test('work item definitions provide stable route and item metadata', () => {

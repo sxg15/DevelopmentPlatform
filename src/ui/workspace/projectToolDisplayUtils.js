@@ -46,6 +46,48 @@ export function getProjectToolsForDisplay(project, definitions) {
   return normalizedTools;
 }
 
+export function getProjectToolNavigationSections(tools, groupDefinitions) {
+  const visibleTools = Array.isArray(tools) ? tools.filter(Boolean) : [];
+  const groups = (Array.isArray(groupDefinitions) ? groupDefinitions : [])
+    .filter((group) => group?.id && group?.label)
+    .map((group) => ({
+      ...group,
+      tools: visibleTools.filter((tool) => tool?.groupId === group.id),
+    }))
+    .filter((group) => group.tools.length > 0);
+  const knownGroupIds = new Set(groups.map((group) => group.id));
+
+  return {
+    ungroupedTools: visibleTools.filter((tool) => !tool?.groupId || !knownGroupIds.has(tool.groupId)),
+    groups,
+  };
+}
+
+export function normalizeCollapsedProjectToolGroupIds(value, groupDefinitions) {
+  const validGroupIds = new Set(
+    (Array.isArray(groupDefinitions) ? groupDefinitions : [])
+      .map((group) => String(group?.id || '').trim())
+      .filter(Boolean),
+  );
+
+  return [...new Set(
+    (Array.isArray(value) ? value : [])
+      .map((groupId) => String(groupId || '').trim())
+      .filter((groupId) => validGroupIds.has(groupId)),
+  )];
+}
+
+export function getProjectToolGroupPendingCount(tools, getPendingCount) {
+  if (!Array.isArray(tools) || typeof getPendingCount !== 'function') {
+    return 0;
+  }
+
+  return tools.reduce(
+    (total, tool) => total + normalizeCount(getPendingCount(tool)),
+    0,
+  );
+}
+
 export function isDevelopmentProjectTool(tool) {
   return tool?.disabled === true && Boolean(String(tool?.statusText || '').trim());
 }

@@ -219,8 +219,18 @@ test('version management renders a local snapshot before refreshing it', () => {
 
 test('project tool navigation renders icons and pending work item badges', () => {
   const source = fs.readFileSync('src/ui/workspace/PlatformWorkspace.jsx', 'utf8');
+  const baseStyles = fs.readFileSync('src/styles/base.css', 'utf8');
+  const responsiveStyles = fs.readFileSync('src/styles/responsive.css', 'utf8');
 
   assert.match(source, /getProjectToolIcon\(tool\.iconKey\)/);
+  assert.match(source, /getProjectToolNavigationSections\(visibleTools,\s*PROJECT_TOOL_GROUPS\)/);
+  assert.match(source, /collapsedToolGroupIds/);
+  assert.match(source, /function activateProjectTool\(toolId\)[\s\S]*next\.delete\(groupId\)[\s\S]*setActiveToolId\(toolId\)/);
+  assert.match(source, /openDirectTarget\(target\)[\s\S]*activateProjectTool\(toolId\)/);
+  assert.match(source, /aria-expanded=\{!isCollapsed\}/);
+  assert.match(source, /inert=\{isCollapsed \? true : undefined\}/);
+  assert.match(source, /project-tool-group-pending-badge/);
+  assert.match(source, /\{pendingCount\}待办/);
   assert.match(source, /project-tool-pending-badge/);
   assert.match(source, /isProjectToolPendingCountTool\(normalizedToolId\)/);
   assert.match(source, /disabled=\{isDevelopmentTool\}/);
@@ -228,6 +238,18 @@ test('project tool navigation renders icons and pending work item badges', () =>
   assert.match(source, /（\{tool\.statusText\}）/);
   assert.match(source, /tool\.id === 'testTasks'[\s\S]*\? '待办'[\s\S]*: '未处理'/);
   assert.match(source, /\{pendingCount\}\{pendingLabel\}/);
+  assert.match(
+    baseStyles,
+    /\.project-tool-group-content\s*\{[^}]*grid-template-rows:\s*1fr;[^}]*transition:/s,
+  );
+  assert.match(
+    baseStyles,
+    /\.project-tool-group-content\.is-collapsed\s*\{[^}]*grid-template-rows:\s*0fr;/s,
+  );
+  assert.match(
+    responsiveStyles,
+    /@media \(max-width:\s*760px\)[\s\S]*\.project-tool-group-items\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/s,
+  );
 });
 
 test('workspace removes a deleted realtime work item from state and local cache', () => {

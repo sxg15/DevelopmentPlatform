@@ -763,7 +763,110 @@ button:focus-visible {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+}
+
+.project-tool-group {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.project-tool-group-toggle {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 36px;
+  gap: 7px;
+  padding: 0 8px;
+  color: #647770;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(183, 201, 195, 0.68);
+  text-align: left;
+  appearance: none;
+  transition:
+    color 150ms ease,
+    border-color 150ms ease;
+}
+
+.project-tool-group-toggle:hover,
+.project-tool-group.has-active-tool > .project-tool-group-toggle {
+  color: #0f766e;
+  border-bottom-color: #8fc5bb;
+}
+
+.project-tool-group-chevron {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  stroke-width: 2.3;
+  transform: rotate(0deg);
+  transition: transform 160ms ease;
+}
+
+.project-tool-group-chevron.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+.project-tool-group-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-tool-group-pending-badge {
+  display: inline-flex;
+  min-height: 18px;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 0 6px;
+  color: #ffffff;
+  background: #dc2626;
+  border: 1px solid #b91c1c;
+  border-radius: 999px;
+  box-shadow: 0 2px 7px rgba(185, 28, 28, 0.18);
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.project-tool-group-content {
+  display: grid;
+  min-width: 0;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    grid-template-rows 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 140ms ease,
+    visibility 0s linear;
+}
+
+.project-tool-group-content.is-collapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    grid-template-rows 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 120ms ease,
+    visibility 0s linear 180ms;
+}
+
+.project-tool-group-items {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+  padding: 4px 0 4px 8px;
 }
 
 .project-tool-button {

@@ -9,18 +9,26 @@ export const FEEDBACK_STATUSES = Object.freeze({
 export const FEEDBACK_LEGACY_ACTIVE_STATUSES = Object.freeze(['待处理', '处理中']);
 export const FEEDBACK_LEGACY_COMPLETED_STATUSES = Object.freeze(['已完成', '已搁置', '已拒绝', '关闭']);
 
+export const PROJECT_TOOL_GROUP_DEFINITIONS = Object.freeze([
+  Object.freeze({ id: 'projectManagement', label: '项目管理' }),
+  Object.freeze({ id: 'aiWorkflow', label: 'AI工作流' }),
+  Object.freeze({ id: 'workItems', label: '工作事项' }),
+  Object.freeze({ id: 'qualityDelivery', label: '质量交付' }),
+]);
+
 export const PROJECT_TOOL_DEFINITIONS = Object.freeze([
   { id: 'overview', label: '项目总览', iconKey: 'LayoutDashboard' },
-  { id: 'versions', label: '版本管理', iconKey: 'Tags' },
-  { id: 'aiPlans', label: 'AI方案', iconKey: 'FileText' },
-  { id: 'requirements', label: '需求列表', iconKey: 'ClipboardList' },
-  { id: 'bugs', label: 'Bug列表', iconKey: 'Bug' },
-  { id: 'testTasks', label: '测试任务', iconKey: 'ListChecks' },
-  { id: 'feedback', label: '反馈列表', iconKey: 'MessageSquare' },
+  { id: 'versions', label: '版本管理', iconKey: 'Tags', groupId: 'projectManagement' },
+  { id: 'aiPlans', label: 'AI方案', iconKey: 'FileText', groupId: 'aiWorkflow' },
+  { id: 'requirements', label: '需求列表', iconKey: 'ClipboardList', groupId: 'workItems' },
+  { id: 'bugs', label: 'Bug列表', iconKey: 'Bug', groupId: 'workItems' },
+  { id: 'testTasks', label: '测试任务', iconKey: 'ListChecks', groupId: 'qualityDelivery' },
+  { id: 'feedback', label: '反馈列表', iconKey: 'MessageSquare', groupId: 'workItems' },
   {
     id: 'builds',
     label: '打包列表',
     iconKey: 'PackageCheck',
+    groupId: 'qualityDelivery',
     disabled: true,
     statusText: '开发中',
   },
@@ -28,6 +36,7 @@ export const PROJECT_TOOL_DEFINITIONS = Object.freeze([
     id: 'review',
     label: '内容审查',
     iconKey: 'ScanSearch',
+    groupId: 'qualityDelivery',
     disabled: true,
     statusText: '开发中',
   },

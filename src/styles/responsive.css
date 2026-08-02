@@ -89,8 +89,13 @@
   }
 
   .project-tool-nav {
+    display: flex;
+  }
+
+  .project-tool-group-items {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding-left: 0;
   }
 
   .project-detail-panel {
@@ -628,6 +633,10 @@
   }
 
   .project-tool-nav {
+    display: flex;
+  }
+
+  .project-tool-group-items {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -979,6 +988,9 @@
   .requirement-ai-status svg,
   .project-button,
   .project-tool-button,
+  .project-tool-group-toggle,
+  .project-tool-group-chevron,
+  .project-tool-group-content,
   .project-overview .is-spinning {
     animation: none;
     transition: none;

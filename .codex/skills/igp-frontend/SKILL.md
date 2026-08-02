@@ -130,6 +130,10 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - Preserve local snapshot and draft keys when changing workspace state.
 - Render every project tool with its required shared `iconKey`; keep a generic
   Lucide fallback for stale cached tool definitions.
+- Render project tools through the shared secondary navigation groups. Keep
+  Overview ungrouped, preserve group ordering, aggregate pending counts on
+  collapsed headers, persist collapsed group IDs per user/project, and
+  automatically reveal the group targeted by tool or direct-detail navigation.
 - Always append the shared `builds` and `review` definitions as disabled project
   navigation placeholders, display their `（开发中）` status, and block both
   native button activation and the tool-selection handler.
