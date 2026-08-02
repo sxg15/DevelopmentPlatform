@@ -62,8 +62,15 @@ body.global-page-interaction-lock {
   color: #ffffff;
   background: rgb(0 0 0 / 68%);
   cursor: wait;
+  opacity: 0;
   outline: none;
   touch-action: none;
+  transition: opacity 180ms ease-out;
+  will-change: opacity;
+}
+
+.global-operation-backdrop.is-visible {
+  opacity: 1;
 }
 
 .global-operation-indicator {
@@ -77,6 +84,17 @@ body.global-page-interaction-lock {
   border: 1px solid rgb(255 255 255 / 18%);
   border-radius: 8px;
   box-shadow: 0 20px 60px rgb(0 0 0 / 36%);
+  opacity: 0;
+  transform: translateY(10px) scale(0.96);
+  transition:
+    opacity 180ms ease-out,
+    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: opacity, transform;
+}
+
+.global-operation-backdrop.is-visible .global-operation-indicator {
+  opacity: 1;
+  transform: translateY(0) scale(1);
 }
 
 .global-operation-indicator > svg {
@@ -114,8 +132,13 @@ body.global-page-interaction-lock {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .global-operation-backdrop,
+  .global-operation-indicator {
+    transition-duration: 1ms;
+  }
+
   .global-operation-indicator > svg {
-    animation-duration: 1800ms;
+    animation: none;
   }
 }
 

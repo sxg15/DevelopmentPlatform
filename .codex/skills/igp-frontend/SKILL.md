@@ -50,6 +50,10 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
   interaction until completion or timeout. Background diagnostics and silent
   initialization may opt out explicitly; reads, polling, and SSE must not
   repeatedly lock the interface.
+- Keep the global operation overlay mounted through its short exit transition so
+  the backdrop and indicator animate both in and out. Hold the page interaction
+  lock until unmount, cancel pending frames/timers on rapid operation changes, and
+  reduce transitions to near-zero under `prefers-reduced-motion`.
 - Treat authenticated business API `401` responses and stable Feishu
   authorization-expiration codes as a sticky global reauthorization state.
   Initial `/api/me` probes and authentication endpoints must opt out. The refresh

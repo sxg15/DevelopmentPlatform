@@ -143,11 +143,20 @@ test('global operation overlay blocks the application above every existing dialo
   assert.match(mainSource, /<GlobalOperationOverlay\s*\/>/);
   assert.match(overlaySource, /createPortal\([\s\S]*document\.body/);
   assert.match(overlaySource, /acquirePageInteractionLock/);
+  assert.match(overlaySource, /OVERLAY_EXIT_DURATION_MS\s*=\s*180/);
+  assert.match(overlaySource, /requestAnimationFrame/);
+  assert.match(overlaySource, /setShouldRender\(false\)/);
+  assert.match(overlaySource, /isVisible \? 'is-visible' : 'is-exiting'/);
   assert.match(pageLockSource, /setAttribute\('inert',\s*''\)/);
   assert.match(overlaySource, /<strong>操作中<\/strong>/);
   assert.match(
     baseStyles,
     /\.global-operation-backdrop\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*2147483646;[^}]*background:\s*rgb\(0 0 0 \/ 68%\);/s,
+  );
+  assert.match(baseStyles, /\.global-operation-backdrop\.is-visible\s*\{[^}]*opacity:\s*1;/s);
+  assert.match(
+    baseStyles,
+    /\.global-operation-indicator\s*\{[^}]*transform:\s*translateY\(10px\) scale\(0\.96\);[^}]*transition:/s,
   );
 });
 
