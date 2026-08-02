@@ -55,12 +55,14 @@ export class FeishuOAuthStateStore {
 export function buildFeishuAuthorizationUrl({
   appId,
   redirectUri,
+  scope,
   state,
 }) {
   const url = new URL(FEISHU_AUTHORIZE_URL);
   url.searchParams.set('client_id', String(appId));
   url.searchParams.set('redirect_uri', String(redirectUri));
   url.searchParams.set('response_type', 'code');
+  url.searchParams.set('scope', String(scope));
   url.searchParams.set('state', String(state));
   return url.toString();
 }

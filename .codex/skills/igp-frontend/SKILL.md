@@ -71,6 +71,9 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
   URL immediately, and exchange it through the existing authentication API.
 - The public-entry Gateway obtains that code through the Feishu OAuth redirect,
   so a LAN page reached from the Gateway must not start another JSAPI login.
+  Preserve the `igpFeishuOAuth=1` marker until the authentication request is
+  created so the backend can include the registered redirect URI only for this
+  OAuth code, then remove both values from the browser URL.
 - Keep the settings dialog isolated from `App.jsx`; the app shell owns only open
   state, while loading and saving belong to the settings component and API client.
 - When authentication becomes ready, call the personal-settings ensure endpoint

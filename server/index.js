@@ -122,7 +122,10 @@ import {
 import { createTodoNotificationScheduler } from './services/todoNotificationScheduler.js';
 import { createVersionManagementService } from './services/versionManagementService.js';
 import { createTestTaskService } from './services/testTaskService.js';
-import { createPublicEntryGatewayService } from './services/publicEntryGatewayService.js';
+import {
+  createPublicEntryGatewayService,
+  PUBLIC_ENTRY_URL,
+} from './services/publicEntryGatewayService.js';
 import { createAiRunContextService } from './services/aiRunContextService.js';
 import { createAiPlanningNotificationService } from './services/aiPlanningNotificationService.js';
 import { createFeishuAssistantService } from './services/feishuAssistantService.js';
@@ -5789,7 +5792,9 @@ app.post('/api/auth/feishu', async (request, response) => {
       return;
     }
 
-    const accessToken = await exchangeCodeForAccessToken(code);
+    const accessToken = await exchangeCodeForAccessToken(code, {
+      redirectUri: request.body?.publicEntryOAuth === true ? PUBLIC_ENTRY_URL : '',
+    });
     const user = await fetchFeishuUser(accessToken);
     const token = await getTenantAccessToken();
     await ensureUserHasPlatformAccess(token, user);

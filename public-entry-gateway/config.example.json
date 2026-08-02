@@ -13,7 +13,8 @@
     "healthUrl": "http://127.0.0.1:3000/api/health"
   },
   "feishu": {
-    "appId": ""
+    "appId": "",
+    "oauthScope": "contact:user.base:readonly"
   },
   "accessControl": {
     "additionalAllowedCidrs": []

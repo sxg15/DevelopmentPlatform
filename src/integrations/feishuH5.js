@@ -3,16 +3,29 @@ const FEISHU_USER_SCOPES = [];
 const FEISHU_SDK_LOAD_TIMEOUT_MS = 8000;
 const FEISHU_AUTH_REQUEST_TIMEOUT_MS = 15_000;
 const PUBLIC_ENTRY_AUTH_CODE_PARAM = 'igpFeishuAuthCode';
+const PUBLIC_ENTRY_OAUTH_PARAM = 'igpFeishuOAuth';
 
 export function consumePublicEntryAuthCode() {
+  return consumePublicEntryAuthorization().code;
+}
+
+export function consumePublicEntryAuthorization() {
   const url = new URL(window.location.href);
   const code = String(url.searchParams.get(PUBLIC_ENTRY_AUTH_CODE_PARAM) || '').trim();
   if (!code) {
-    return '';
+    return {
+      code: '',
+      publicEntryOAuth: false,
+    };
   }
+  const publicEntryOAuth = url.searchParams.get(PUBLIC_ENTRY_OAUTH_PARAM) === '1';
   url.searchParams.delete(PUBLIC_ENTRY_AUTH_CODE_PARAM);
+  url.searchParams.delete(PUBLIC_ENTRY_OAUTH_PARAM);
   window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
-  return code;
+  return {
+    code,
+    publicEntryOAuth,
+  };
 }
 
 export async function waitForFeishuRuntime() {

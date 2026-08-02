@@ -491,11 +491,15 @@ rollback release.
 - Feishu client requests must complete code-only login on the registered public
   entry URL before navigating to the LAN origin. Use the standard Feishu OAuth
   authorization-code redirect instead of depending on H5 JSAPI availability.
+  Include the configured `contact:user.base:readonly` scope in the authorization
+  request.
   OAuth states must be one-time, process-local, bounded, and expiring, and the
   callback may restore only the previously validated LAN target.
   Pass only the public app ID and a one-time authorization code, consume and remove
   that code immediately on the LAN page, and keep ordinary browsers on the direct
-  302 path.
+  302 path. Include the identical public redirect URI in the token exchange only
+  for codes issued by this public-entry OAuth flow; keep existing H5 JSAPI code
+  exchange behavior unchanged.
 - On managed backend SIGTERM, atomically mark the public entry as upgrading before
   shutdown. Clear the marker only after the replacement backend is listening.
   Failed verified Agent stops must block package replacement.

@@ -117,6 +117,7 @@ export async function handleEntryRequest(config, monitor, request, response, opt
       }
       const destination = new URL(targetUrl);
       destination.searchParams.set('igpFeishuAuthCode', oauthCallback.code);
+      destination.searchParams.set('igpFeishuOAuth', '1');
       sendRedirect(
         response,
         destination.toString(),
@@ -132,6 +133,7 @@ export async function handleEntryRequest(config, monitor, request, response, opt
       const authorizationUrl = buildFeishuAuthorizationUrl({
         appId: config.feishu.appId,
         redirectUri: buildOAuthRedirectUri(config.publicEntry.baseUrl),
+        scope: config.feishu.oauthScope,
         state,
       });
       sendRedirect(

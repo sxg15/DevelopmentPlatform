@@ -1,20 +1,21 @@
 import { runtimeConfig } from '../config/runtimeConfig.js';
+import { buildFeishuOAuthTokenPayload } from './feishuOAuthUtils.js';
 
 const TOKEN_REFRESH_BUFFER_MS = 60 * 1000;
 let tenantTokenCache = null;
 
-export async function exchangeCodeForAccessToken(code) {
+export async function exchangeCodeForAccessToken(code, options = {}) {
   const response = await fetch('https://open.feishu.cn/open-apis/authen/v2/oauth/token', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
     },
-    body: JSON.stringify({
-      grant_type: 'authorization_code',
-      client_id: runtimeConfig.feishu.appId,
-      client_secret: runtimeConfig.feishu.appSecret,
+    body: JSON.stringify(buildFeishuOAuthTokenPayload({
+      appId: runtimeConfig.feishu.appId,
+      appSecret: runtimeConfig.feishu.appSecret,
       code,
-    }),
+      redirectUri: options.redirectUri,
+    })),
   });
 
   const payload = await readJson(response);

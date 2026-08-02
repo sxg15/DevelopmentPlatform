@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 
 const GATEWAY_DIRECTORY_NAME = 'public-entry-gateway';
 const GATEWAY_STATE_DIRECTORY_NAME = 'public-entry-state';
+export const PUBLIC_ENTRY_URL = 'http://47.100.74.169/';
 
 export function createPublicEntryGatewayService(options = {}) {
   const sourceRoot = path.resolve(options.sourceRoot || process.cwd());
@@ -23,7 +24,7 @@ export function createPublicEntryGatewayService(options = {}) {
     enabled: Boolean(context),
     ready: false,
     publicKey: '',
-    publicEntryUrl: 'http://47.100.74.169/',
+    publicEntryUrl: PUBLIC_ENTRY_URL,
     message: context ? '公网入口 Agent 尚未初始化' : '当前不是 Windows 托管部署',
   };
 
@@ -41,7 +42,7 @@ export function createPublicEntryGatewayService(options = {}) {
         enabled: true,
         ready: true,
         publicKey: readPublicKey(context.publicKeyPath),
-        publicEntryUrl: 'http://47.100.74.169/',
+        publicEntryUrl: PUBLIC_ENTRY_URL,
         localBaseUrl: 'http://172.16.20.205:3000/',
         message: '公网入口 Agent 已启动',
       };
@@ -50,7 +51,7 @@ export function createPublicEntryGatewayService(options = {}) {
         enabled: true,
         ready: false,
         publicKey: safeReadPublicKey(context.publicKeyPath),
-        publicEntryUrl: 'http://47.100.74.169/',
+        publicEntryUrl: PUBLIC_ENTRY_URL,
         message: error instanceof Error ? error.message : String(error),
       };
     }
@@ -220,7 +221,7 @@ function writeGatewayConfig(context, appId) {
   }
   config.publicEntry = {
     ...(config.publicEntry || {}),
-    baseUrl: 'http://47.100.74.169/',
+    baseUrl: PUBLIC_ENTRY_URL,
     clientIpProbeUrl: 'http://47.100.74.169/__igp/client-ip',
     relayToken: '',
   };
@@ -232,6 +233,7 @@ function writeGatewayConfig(context, appId) {
   config.feishu = {
     ...(config.feishu || {}),
     appId,
+    oauthScope: 'contact:user.base:readonly',
   };
   config.ssh = {
     ...(config.ssh || {}),

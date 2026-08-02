@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   consumePublicEntryAuthCode,
+  consumePublicEntryAuthorization,
   getFeishuAuthCode,
 } from '../src/integrations/feishuH5.js';
 
@@ -21,6 +22,30 @@ test('public entry authorization codes are consumed and removed from the URL', (
   try {
     assert.equal(consumePublicEntryAuthCode(), 'code-1');
     assert.equal(replacedUrl, '/projects/50?tool=bugs#detail');
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test('public entry OAuth metadata is consumed with the authorization code', () => {
+  const originalWindow = globalThis.window;
+  let replacedUrl = '';
+  globalThis.window = {
+    location: {
+      href: 'http://172.16.20.205:3000/?igpFeishuAuthCode=code-2&igpFeishuOAuth=1',
+    },
+    history: {
+      replaceState(_state, _title, url) {
+        replacedUrl = url;
+      },
+    },
+  };
+  try {
+    assert.deepEqual(consumePublicEntryAuthorization(), {
+      code: 'code-2',
+      publicEntryOAuth: true,
+    });
+    assert.equal(replacedUrl, '/');
   } finally {
     globalThis.window = originalWindow;
   }

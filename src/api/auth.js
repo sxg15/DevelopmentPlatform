@@ -18,14 +18,17 @@ export function fetchAppConfig() {
   return requestJson('/api/config');
 }
 
-export async function exchangeCodeForUser(code) {
+export async function exchangeCodeForUser(code, options = {}) {
   const payload = await requestJson('/api/auth/feishu', {
     method: 'POST',
     detectAuthenticationExpiration: false,
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({
+      code,
+      publicEntryOAuth: options.publicEntryOAuth === true,
+    }),
   });
   return payload.user;
 }

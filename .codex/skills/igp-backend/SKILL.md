@@ -140,9 +140,13 @@ Read `AGENTS.md`, then locate the owning layer.
 - Complete public-entry Feishu login through the standard authorization-code
   redirect instead of H5 JSAPI. Keep OAuth states one-time, process-local, bounded,
   and expiring; restore only the previously validated LAN target after callback.
+  Include the configured `contact:user.base:readonly` scope in the authorization
+  URL.
 - Use `publicEntry.baseUrl` without query or hash as the OAuth redirect URI. The
   Feishu developer console must allow that exact URL. Keep app secrets and token
-  exchange on the existing LAN backend.
+  exchange on the existing LAN backend. Include that same redirect URI in token
+  exchange only for codes marked as coming from the public-entry OAuth flow;
+  preserve the existing H5 JSAPI exchange payload.
 - Mark managed SIGTERM shutdown as public-entry maintenance before closing the
   backend, and clear that state only after the new backend listener is ready.
   Never replace a running Agent package after a failed verified stop.

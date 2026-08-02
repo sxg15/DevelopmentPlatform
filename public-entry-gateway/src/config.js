@@ -17,6 +17,7 @@ const DEFAULTS = Object.freeze({
   },
   feishu: {
     appId: '',
+    oauthScope: 'contact:user.base:readonly',
   },
   accessControl: {
     additionalAllowedCidrs: [],
@@ -98,6 +99,10 @@ export function normalizeGatewayConfig(rawConfig, { configPath = 'config.json' }
     },
     feishu: {
       appId: normalizeText(rawConfig?.feishu?.appId, DEFAULTS.feishu.appId),
+      oauthScope: normalizeText(
+        rawConfig?.feishu?.oauthScope,
+        DEFAULTS.feishu.oauthScope,
+      ),
     },
     accessControl: {
       additionalAllowedCidrs: normalizeTextList(

@@ -174,6 +174,7 @@ test('Feishu OAuth states are one-time, bounded and expiring', () => {
   const authorizationUrl = new URL(buildFeishuAuthorizationUrl({
     appId: 'cli_test',
     redirectUri: 'http://47.100.74.169/',
+    scope: 'contact:user.base:readonly',
     state: 'state-token',
   }));
   assert.equal(authorizationUrl.origin, 'https://accounts.feishu.cn');
@@ -181,6 +182,7 @@ test('Feishu OAuth states are one-time, bounded and expiring', () => {
   assert.equal(authorizationUrl.searchParams.get('client_id'), 'cli_test');
   assert.equal(authorizationUrl.searchParams.get('redirect_uri'), 'http://47.100.74.169/');
   assert.equal(authorizationUrl.searchParams.get('response_type'), 'code');
+  assert.equal(authorizationUrl.searchParams.get('scope'), 'contact:user.base:readonly');
   assert.equal(authorizationUrl.searchParams.get('state'), 'state-token');
 });
 
@@ -288,6 +290,10 @@ test('HTTP agent returns redirect, forbidden and maintenance responses', async (
       authorizationUrl.searchParams.get('redirect_uri'),
       'http://47.100.74.169/',
     );
+    assert.equal(
+      authorizationUrl.searchParams.get('scope'),
+      'contact:user.base:readonly',
+    );
     const oauthState = authorizationUrl.searchParams.get('state');
     assert.ok(oauthState);
 
@@ -303,7 +309,7 @@ test('HTTP agent returns redirect, forbidden and maintenance responses', async (
     assert.equal(oauthCallback.statusCode, 302);
     assert.equal(
       oauthCallback.headers.location,
-      'http://172.16.20.205:3000/projects/50?tool=bugs&igpFeishuAuthCode=auth-code',
+      'http://172.16.20.205:3000/projects/50?tool=bugs&igpFeishuAuthCode=auth-code&igpFeishuOAuth=1',
     );
 
     const replayedCallback = await requestAgent(
