@@ -165,6 +165,7 @@ test('related project counts only include the current assignee waiting for each 
     { itemStatus: '待处理', assignees: [{ openId: 'ou-other' }], proposers: [{ openId: 'ou-current' }] },
     { itemStatus: '未处理', assignees: [{ openId: 'ou-current' }] },
     { itemStatus: '修复中', assignees: [{ openId: 'ou-current' }] },
+    { itemStatus: '待分类', assignees: [{ openId: 'ou-current' }] },
   ];
 
   assert.equal(countWaitingAssignedWorkItems('requirements', items, user), 1);

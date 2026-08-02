@@ -16,6 +16,7 @@ import {
   FolderOpen,
   Gauge,
   KeyRound,
+  ListChecks,
   LoaderCircle,
   Network,
   Plus,
@@ -60,6 +61,7 @@ const WORK_ITEM_FIELD_GROUPS = [
       ['attachments', '附件'],
       ['requiresSubmissionAttachment', '需要提交附件'],
       ['submittedAttachments', '提交附件'],
+      ['relatedFeedback', '关联反馈'],
       ['comments', '留言'],
       ['statusChangeLog', '状态变动记录'],
     ],
@@ -81,8 +83,30 @@ const WORK_ITEM_FIELD_GROUPS = [
       ['proposedAt', '发现时间'],
       ['expectedDays', '期望时限'],
       ['attachments', '附件'],
+      ['relatedFeedback', '关联反馈'],
       ['comments', '留言'],
       ['statusChangeLog', '状态变动记录'],
+    ],
+  },
+  {
+    id: 'testTasks',
+    label: '测试任务',
+    icon: ListChecks,
+    basePath: 'knowledgeBase.testTasksFieldNames',
+    fields: [
+      ['taskId', '任务 ID'],
+      ['itemId', '工作项 ID'],
+      ['title', '任务名称'],
+      ['content', '任务内容'],
+      ['createdAt', '创建时间'],
+      ['creator', '创建人'],
+      ['testers', '测试人员'],
+      ['status', '处理状态'],
+      ['statusChangeLog', '状态变动记录'],
+      ['comments', '留言'],
+      ['results', '测试结果记录'],
+      ['attachments', '附件'],
+      ['relatedFeedback', '关联反馈'],
     ],
   },
   {
@@ -103,6 +127,7 @@ const WORK_ITEM_FIELD_GROUPS = [
       ['expectedDays', '期望时限'],
       ['contactInfo', '联系信息数据'],
       ['attachments', '附件'],
+      ['relatedItem', '关联项'],
       ['comments', '留言'],
       ['statusChangeLog', '状态变动记录'],
     ],
@@ -112,6 +137,7 @@ const WORK_ITEM_FIELD_GROUPS = [
 const STATUS_GROUPS = [
   ['requirements', '需求'],
   ['bugs', 'Bug'],
+  ['testTasks', '测试任务'],
   ['feedback', '反馈'],
 ];
 
@@ -637,7 +663,15 @@ function BitableSection({ config, errors, onChange }) {
           <NumberField label="事件去重数量上限" path="bitable.cache.maxEventIds" value={config.bitable.cache.maxEventIds} error={errors['bitable.cache.maxEventIds']} onChange={onChange} min={1} />
         </FieldGrid>
       </ConfigPanel>
-
+      <ConfigPanel title="测试任务" icon={ListChecks}>
+        <FieldGrid>
+          <TextField label="父节点名称" path="knowledgeBase.testTasksParentName" value={config.knowledgeBase.testTasksParentName} onChange={onChange} />
+          <TextField label="模板名称" path="knowledgeBase.testTasksTemplateName" value={config.knowledgeBase.testTasksTemplateName} onChange={onChange} />
+          <TextField label="模板 Wiki 节点 Token" path="knowledgeBase.testTasksTemplateAppToken" value={config.knowledgeBase.testTasksTemplateAppToken} onChange={onChange} wide />
+          <TextField label="ID 前缀" path="knowledgeBase.testTasksIdPrefix" value={config.knowledgeBase.testTasksIdPrefix} onChange={onChange} />
+          <NumberField label="ID 位数" path="knowledgeBase.testTasksIdDigits" value={config.knowledgeBase.testTasksIdDigits} onChange={onChange} min={1} />
+        </FieldGrid>
+      </ConfigPanel>
       <ConfigPanel title="项目基础信息" icon={Database}>
         <ResourceFields basePath="bitable.projectBase" config={config} errors={errors} onChange={onChange} includeView />
         <FieldMappingGrid
@@ -660,6 +694,7 @@ function BitableSection({ config, errors, onChange }) {
           fields={[
             ['projectId', '项目 ID'],
             ['developmentSuperAdmins', '研发超级管理员'],
+            ['testAdministrators', '测试管理员'],
           ]}
           config={config}
           errors={errors}
@@ -689,6 +724,7 @@ function BitableSection({ config, errors, onChange }) {
             ['bugs', 'Bug 列表'],
             ['builds', '打包列表'],
             ['review', '内容审查'],
+            ['testTasks', '测试任务'],
             ['feedback', '反馈列表'],
           ]}
           config={config}

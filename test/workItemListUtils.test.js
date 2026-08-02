@@ -45,7 +45,7 @@ test('each tool uses its own default expanded statuses', () => {
   assert.equal(isStatusGroupDefaultCollapsed('bugs', '未处理'), false);
   assert.equal(isStatusGroupDefaultCollapsed('bugs', '待验收'), false);
   assert.equal(isStatusGroupDefaultCollapsed('bugs', '已修复'), true);
-  assert.equal(isStatusGroupDefaultCollapsed('feedback', '待处理'), false);
+  assert.equal(isStatusGroupDefaultCollapsed('feedback', '待分类'), false);
   assert.equal(isStatusGroupDefaultCollapsed('feedback', '已拒绝'), true);
 });
 
@@ -110,5 +110,5 @@ test('status sorting follows each list workflow', () => {
   assert.ok(compareWorkItemStatus('bugs', '修复中', '已修复') < 0);
   assert.ok(compareWorkItemStatus('bugs', '修复中', '待验收') < 0);
   assert.ok(compareWorkItemStatus('bugs', '待验收', '已修复') < 0);
-  assert.ok(compareWorkItemStatus('feedback', '处理中', '已完成') < 0);
+  assert.ok(compareWorkItemStatus('feedback', '待分类', '已转需求') < 0);
 });

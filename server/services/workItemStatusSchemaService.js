@@ -1,4 +1,5 @@
 import {
+  FEEDBACK_STATUSES,
   getWorkItemAcceptanceStatus,
   getWorkItemProcessingStatuses,
 } from '../../shared/workItemDefinitions.js';
@@ -31,8 +32,8 @@ export function createWorkItemStatusSchemaService(dependencies = {}) {
   const verifiedContexts = new Set();
 
   async function ensureStatusOptions(token, context, toolConfig) {
-    const acceptanceStatus = getWorkItemAcceptanceStatus(toolConfig?.toolId);
-    if (!acceptanceStatus) {
+    const requiredStatuses = getRequiredStatusOptions(toolConfig);
+    if (requiredStatuses.length === 0) {
       return {
         updated: false,
         fields: await fetchCachedFields(token, context.appToken, context.tableId),
@@ -56,7 +57,7 @@ export function createWorkItemStatusSchemaService(dependencies = {}) {
       }
 
       const fields = await fetchFields(token, context.appToken, context.tableId);
-      const update = buildAcceptanceStatusFieldUpdate(fields, toolConfig);
+      const update = buildWorkItemStatusFieldUpdate(fields, toolConfig);
       if (!update) {
         invalidateFields(context.appToken, context.tableId);
         verifiedContexts.add(key);
@@ -71,8 +72,11 @@ export function createWorkItemStatusSchemaService(dependencies = {}) {
         update.body,
       );
       const refreshedFields = await fetchFields(token, context.appToken, context.tableId);
-      if (!hasStatusOption(refreshedFields, toolConfig.fieldNames.status, acceptanceStatus)) {
-        throw new Error(`${toolConfig.itemLabel}表“${toolConfig.fieldNames.status}”未成功增加“${acceptanceStatus}”选项`);
+      const missingStatus = requiredStatuses.find(
+        (status) => !hasStatusOption(refreshedFields, toolConfig.fieldNames.status, status),
+      );
+      if (missingStatus) {
+        throw new Error(`${toolConfig.itemLabel}表“${toolConfig.fieldNames.status}”未成功增加“${missingStatus}”选项`);
       }
 
       invalidateFields(context.appToken, context.tableId);
@@ -91,7 +95,7 @@ export function createWorkItemStatusSchemaService(dependencies = {}) {
     };
 
     for (const toolConfig of toolConfigs || []) {
-      if (!getWorkItemAcceptanceStatus(toolConfig?.toolId)) {
+      if (getRequiredStatusOptions(toolConfig).length === 0) {
         continue;
       }
 
@@ -151,6 +155,14 @@ export function buildAcceptanceStatusFieldUpdate(fields, toolConfig) {
   if (!acceptanceStatus) {
     return null;
   }
+  return buildWorkItemStatusFieldUpdate(fields, toolConfig);
+}
+
+export function buildWorkItemStatusFieldUpdate(fields, toolConfig) {
+  const requiredStatuses = getRequiredStatusOptions(toolConfig);
+  if (requiredStatuses.length === 0) {
+    return null;
+  }
 
   const statusFieldName = String(toolConfig?.fieldNames?.status || '').trim();
   const statusField = (fields || []).find((field) => getFieldName(field) === statusFieldName);
@@ -162,17 +174,34 @@ export function buildAcceptanceStatusFieldUpdate(fields, toolConfig) {
   }
 
   const options = getFieldOptions(statusField);
-  if (options.some((option) => getOptionName(option) === acceptanceStatus)) {
+  const missingStatuses = requiredStatuses.filter(
+    (status) => !options.some((option) => getOptionName(option) === status),
+  );
+  if (missingStatuses.length === 0) {
     return null;
   }
 
   const nextOptions = options.map(cloneJsonSafe);
-  const primaryProcessingStatus = getWorkItemProcessingStatuses(toolConfig.toolId)[0] || '';
-  const anchorIndex = nextOptions.findIndex((option) => getOptionName(option) === primaryProcessingStatus);
-  nextOptions.splice(anchorIndex >= 0 ? anchorIndex + 1 : nextOptions.length, 0, {
-    name: acceptanceStatus,
-    color: WORK_ITEM_ACCEPTANCE_OPTION_COLOR_ID,
-  });
+  if (toolConfig?.toolId === 'feedback') {
+    for (const status of missingStatuses) {
+      const option = {
+        name: status,
+        color: getFeedbackStatusColor(status),
+      };
+      if (status === FEEDBACK_STATUSES.waiting) {
+        nextOptions.unshift(option);
+      } else {
+        nextOptions.push(option);
+      }
+    }
+  } else {
+    const primaryProcessingStatus = getWorkItemProcessingStatuses(toolConfig.toolId)[0] || '';
+    const anchorIndex = nextOptions.findIndex((option) => getOptionName(option) === primaryProcessingStatus);
+    nextOptions.splice(anchorIndex >= 0 ? anchorIndex + 1 : nextOptions.length, 0, {
+      name: requiredStatuses[0],
+      color: WORK_ITEM_ACCEPTANCE_OPTION_COLOR_ID,
+    });
+  }
 
   const fieldId = String(statusField.field_id || statusField.fieldId || '').trim();
   if (!fieldId) {
@@ -192,6 +221,28 @@ export function buildAcceptanceStatusFieldUpdate(fields, toolConfig) {
       property,
     },
   };
+}
+
+function getRequiredStatusOptions(toolConfig) {
+  const toolId = String(toolConfig?.toolId || '').trim();
+  if (toolId === 'feedback') {
+    return Object.values(FEEDBACK_STATUSES);
+  }
+  const acceptanceStatus = getWorkItemAcceptanceStatus(toolId);
+  return acceptanceStatus ? [acceptanceStatus] : [];
+}
+
+function getFeedbackStatusColor(status) {
+  if (status === FEEDBACK_STATUSES.waiting) {
+    return 3;
+  }
+  if (status === FEEDBACK_STATUSES.convertedToRequirement) {
+    return 7;
+  }
+  if (status === FEEDBACK_STATUSES.convertedToBug) {
+    return 9;
+  }
+  return 4;
 }
 
 export async function resolveWorkItemTableContext(token, node, toolConfig) {

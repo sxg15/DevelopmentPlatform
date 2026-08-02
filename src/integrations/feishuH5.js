@@ -1,5 +1,7 @@
 const FEISHU_H5_SDK_URL = 'https://lf-scm-cn.feishucdn.com/lark/op/h5-js-sdk-1.5.44.js';
 const FEISHU_USER_SCOPES = [];
+const FEISHU_SDK_LOAD_TIMEOUT_MS = 8000;
+const FEISHU_AUTH_REQUEST_TIMEOUT_MS = 15_000;
 
 export async function waitForFeishuRuntime() {
   const isFeishuClient = isFeishuUserAgent();
@@ -67,12 +69,22 @@ function ensureH5SdkScript() {
   }
 
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timeoutId);
+      resolve();
+    };
     const script = document.createElement('script');
+    const timeoutId = window.setTimeout(finish, FEISHU_SDK_LOAD_TIMEOUT_MS);
     script.src = FEISHU_H5_SDK_URL;
     script.async = true;
     script.dataset.feishuH5Sdk = 'true';
-    script.onload = () => resolve();
-    script.onerror = () => resolve();
+    script.onload = finish;
+    script.onerror = finish;
     document.head.appendChild(script);
   });
 }
@@ -80,22 +92,29 @@ function ensureH5SdkScript() {
 function waitForH5SdkReady() {
   const maxWaitMs = 8000;
   const checkEveryMs = 150;
-  const startedAt = Date.now();
 
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (available) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timeoutId);
+      resolve(available);
+    };
+    const timeoutId = window.setTimeout(() => finish(false), maxWaitMs);
     const check = () => {
-      if (typeof window.h5sdk?.ready === 'function') {
-        window.h5sdk.ready(() => resolve(true));
+      if (settled) {
         return;
       }
-
       if (typeof window.tt?.requestAccess === 'function' || typeof window.tt?.requestAuthCode === 'function') {
-        resolve(true);
+        finish(true);
         return;
       }
 
-      if (Date.now() - startedAt >= maxWaitMs) {
-        resolve(false);
+      if (typeof window.h5sdk?.ready === 'function') {
+        window.h5sdk.ready(() => finish(true));
         return;
       }
 
@@ -112,9 +131,14 @@ function requestAccessCode(requestAccess, appId, scopeList = []) {
     const finish = (callback) => (value) => {
       if (!settled) {
         settled = true;
+        window.clearTimeout(timeoutId);
         callback(value);
       }
     };
+    const timeoutId = window.setTimeout(
+      finish(() => reject(new Error('飞书授权超时，请重新打开应用后重试'))),
+      FEISHU_AUTH_REQUEST_TIMEOUT_MS,
+    );
 
     try {
       requestAccess({
@@ -132,7 +156,7 @@ function requestAccessCode(requestAccess, appId, scopeList = []) {
         complete: () => {},
       });
     } catch (error) {
-      reject(error);
+      finish(reject)(error);
     }
   });
 }
@@ -143,9 +167,14 @@ function requestAuthCode(requestAuthCodeApi, appId) {
     const finish = (callback) => (value) => {
       if (!settled) {
         settled = true;
+        window.clearTimeout(timeoutId);
         callback(value);
       }
     };
+    const timeoutId = window.setTimeout(
+      finish(() => reject(new Error('飞书授权超时，请重新打开应用后重试'))),
+      FEISHU_AUTH_REQUEST_TIMEOUT_MS,
+    );
 
     try {
       requestAuthCodeApi({
@@ -162,7 +191,7 @@ function requestAuthCode(requestAuthCodeApi, appId) {
         complete: () => {},
       });
     } catch (error) {
-      reject(error);
+      finish(reject)(error);
     }
   });
 }

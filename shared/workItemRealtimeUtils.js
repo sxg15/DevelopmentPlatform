@@ -1,5 +1,7 @@
+import { getWorkItemWaitingStatus } from './workItemDefinitions.js';
+
 export function getWaitingWorkItemStatus(toolId) {
-  return String(toolId || '').trim() === 'bugs' ? '未处理' : '待处理';
+  return getWorkItemWaitingStatus(toolId);
 }
 
 export function getWorkItemRecordId(item) {

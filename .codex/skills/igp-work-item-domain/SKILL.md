@@ -1,6 +1,6 @@
 ---
 name: igp-work-item-domain
-description: Maintain IGP requirement, Bug, and feedback domain contracts across shared definitions, frontend workflows, backend services, Bitable fields, assignment permissions, comments, status changes, attachments, notifications, and project overview aggregation. Use whenever a request changes work-item fields, roles, statuses, submission or detail behavior, cards, or cross-frontend/backend rules.
+description: Maintain IGP requirement, Bug, test-task, and feedback domain contracts across shared definitions, frontend workflows, backend services, Bitable fields, assignment permissions, comments, status changes, attachments, notifications, and project overview aggregation. Use whenever a request changes work-item fields, roles, statuses, submission or detail behavior, cards, or cross-frontend/backend rules.
 ---
 
 # IGP Work Item Domain
@@ -11,6 +11,7 @@ Read `AGENTS.md` and these files before changing workflow behavior:
 
 - `shared/workItemDefinitions.js`
 - `shared/workItemAssignmentUtils.js`
+- `shared/testTaskUtils.js`
 - `shared/requirementSubmissionAttachmentUtils.js`
 - `shared/workItemRealtimeUtils.js`
 - `shared/projectOverviewUtils.js`
@@ -22,8 +23,23 @@ Treat shared definitions as the canonical frontend/backend contract.
 
 ## Invariants
 
-- Tool IDs are `requirements`, `bugs`, and `feedback`; route segments and field
-  names come from shared tool definitions plus normalized runtime config.
+- Tool IDs are `requirements`, `bugs`, `testTasks`, and `feedback`; route segments
+  and field names come from shared tool definitions plus normalized runtime config.
+- `testTasks` uses a dedicated service, API, UI, and stylesheet. Its tool matrix
+  field is `测试任务`; project `测试管理员` receive direct access, and tester
+  candidates are project `测试` plus `测试管理员`.
+- Test-task content and result fields are versioned JSON. Content items use unique
+  six-character IDs; result items preserve the matching ID, conclusion, optional
+  feedback draft author, attachments, and submitted feedback identity. Normalize
+  Feishu rich-text fragments before parsing either JSON document.
+- The test-task state flow is `待测试 -> 测试中 -> 已完成`. Only test
+  administrators may start, adjust testers, edit results/drafts, or complete;
+  starting requires at least one candidate tester and completing requires every
+  conclusion.
+- Test-task completion creates unfinished feedback drafts idempotently, with the
+  draft author as proposer and original task creator as handler. Persist each
+  successful feedback association before continuing; any failure leaves the task
+  `测试中` and returns retry details.
 - Only requirements and Bugs support explicit "不知道该由谁处理".
 - An explicitly unassigned requirement/Bug notifies the project's
   `研发超级管理员` for manual assignment.
@@ -42,20 +58,39 @@ Treat shared definitions as the canonical frontend/backend contract.
   current stored data does not prove those historical values.
 - Empty assignees in detail views must remain visibly warned.
 - Feedback contact data remains normalized JSON in `联系信息数据`.
-- Daily pending reminders include assigned requirements, Bugs, and feedback whose
-  current status is not in that tool's configured completed group. Blocked,
-  stalled, and unset statuses remain pending.
+- Feedback uses `待分类 -> 已转需求 / 已转Bug / 已回复`. Migrate only legacy
+  unfinished `待处理` and `处理中` records to `待分类`; keep legacy completed
+  statuses as historical completed values.
+- Current feedback assignees, project development super-admins, and global
+  super-admins may classify. A feedback may have only one immutable converted
+  requirement or Bug. Store versioned JSON in feedback `关联项` and target
+  `关联反馈`, preserve the feedback proposers on the target, and fail closed on
+  malformed association data.
+- Feedback conversion uses the full target submission contract, including
+  assignment validation, explicit unassigned routing, requirement attachment
+  settings, selected source attachments, and new uploads. Notify target assignees
+  or development super-admins only; do not notify the feedback proposer merely
+  because the conversion completed.
+- Reply-only resolution requires an internal Feishu proposer and nonempty reply.
+  Persist the reply as a feedback comment and set `已回复` before sending its card;
+  notification failure does not roll back the mutation.
+- Daily pending reminders include requirements, Bugs, test tasks, and feedback
+  whose current status is not in that tool's configured completed group. Test
+  administrators receive all active test tasks; selected testers receive assigned
+  `测试中` tasks. Blocked, stalled, and unset statuses remain pending.
 - Requirements and Bugs include `待验收` as an active processing status. Keep it
   in processing totals and pending reminders, exclude it from completed version
   associations, and ensure the option exists on templates and historical tables.
 - Reminder collection must honor the user's project and tool permissions, treat
   missing work-item tables as empty, and continue when one project/tool read
   fails.
-- Reminder cards show a three-tool count summary and at most ten urgency-sorted
+- Reminder cards show a four-tool count summary and at most ten urgency-sorted
   direct-detail links.
-- Project tool badges count assigned initial-waiting items across requirements,
-  Bugs, and feedback. Use `待处理` for requirements/feedback and `未处理` for Bugs,
-  hide zero counts, and refresh the values after realtime work-item events.
+- Project tool badges count actionable items across requirements, Bugs, test tasks,
+  and feedback. Use `待处理` for requirements, `未处理` for Bugs, and `待分类`
+  for feedback;
+  test administrators count `待测试`/`测试中`, selected testers count assigned
+  `测试中`, zero counts stay hidden, and realtime events refresh the values.
 - Opening the authenticated app silently creates a missing personal-settings
   record with notifications disabled. Record creation must not delay or fail the
   normal workspace startup path.
@@ -140,6 +175,8 @@ Treat shared definitions as the canonical frontend/backend contract.
   confirmation card. It must collect a project, title, actionable description,
   and either stable mentioned assignees or an explicit unassigned-routing choice;
   no name-only assignee matching is permitted.
+- Test tasks are intentionally excluded from MCP, version associations, AI
+  planning, and Feishu private-chat creation.
 
 ## Change Sequence
 
@@ -147,7 +184,7 @@ Treat shared definitions as the canonical frontend/backend contract.
 2. Update backend normalization, validation, persistence, and notifications.
 3. Update frontend form, list, detail, and API behavior.
 4. Add focused tests under `test/` for every changed invariant.
-5. Verify all three tools, including permission differences and missing optional
+5. Verify all four tools, including permission differences and missing optional
    fields.
 
 ## Validate

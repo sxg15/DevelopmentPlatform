@@ -3,8 +3,10 @@ import test from 'node:test';
 import {
   WORK_ITEM_ACCEPTANCE_OPTION_COLOR_ID,
   buildAcceptanceStatusFieldUpdate,
+  buildWorkItemStatusFieldUpdate,
   createWorkItemStatusSchemaService,
 } from '../server/services/workItemStatusSchemaService.js';
+import { FEEDBACK_STATUSES } from '../shared/workItemDefinitions.js';
 
 const REQUIREMENT_CONFIG = {
   toolId: 'requirements',
@@ -23,6 +25,17 @@ const BUG_CONFIG = {
   parentName: 'Bug列表',
   notLinkedText: 'Bug列表没有关联多维表格',
   noTableText: 'Bug列表没有可读取的数据表',
+  fieldNames: {
+    status: '处理状态',
+  },
+};
+
+const FEEDBACK_CONFIG = {
+  toolId: 'feedback',
+  itemLabel: '反馈',
+  parentName: '反馈列表',
+  notLinkedText: '反馈列表没有关联多维表格',
+  noTableText: '反馈列表没有可读取的数据表',
   fieldNames: {
     status: '处理状态',
   },
@@ -97,6 +110,27 @@ test('concurrent status ensures update one table only once', async () => {
   assert.equal(updateCount, 1);
   assert.equal(results.filter((result) => result.updated).length, 1);
   assert.equal(remoteFields[0].property.options.some((option) => option.name === '待验收'), true);
+});
+
+test('feedback status schema inserts the explicit classification workflow', () => {
+  const update = buildWorkItemStatusFieldUpdate([
+    createStatusField([
+      { id: 'legacy-waiting', name: '待处理', color: 1 },
+      { id: 'legacy-complete', name: '已完成', color: 4 },
+    ]),
+  ], FEEDBACK_CONFIG);
+
+  assert.deepEqual(
+    update.body.property.options.map((option) => option.name),
+    [
+      FEEDBACK_STATUSES.waiting,
+      '待处理',
+      '已完成',
+      FEEDBACK_STATUSES.convertedToRequirement,
+      FEEDBACK_STATUSES.convertedToBug,
+      FEEDBACK_STATUSES.replied,
+    ],
+  );
 });
 
 test('migration updates templates and project tables while continuing after one failure', async () => {

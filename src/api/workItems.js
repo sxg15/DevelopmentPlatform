@@ -122,6 +122,43 @@ export function createWorkItemClientMutationId() {
   return `work-item-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
+export function resolveFeedback(projectId, recordId, payload) {
+  const formData = new FormData();
+  formData.set('resolutionType', payload.resolutionType || '');
+  formData.set('clientMutationId', payload.clientMutationId || '');
+  formData.set('title', payload.title || '');
+  formData.set('description', payload.description || '');
+  formData.set('priority', payload.priority || '');
+  formData.set(
+    'expectedDays',
+    payload.expectedDays === null || payload.expectedDays === undefined
+      ? ''
+      : String(payload.expectedDays),
+  );
+  formData.set('assignees', JSON.stringify(payload.assignees || []));
+  formData.set(
+    'needsAssigneeAssignment',
+    payload.needsAssigneeAssignment ? 'true' : 'false',
+  );
+  formData.set(
+    'requiresSubmissionAttachment',
+    payload.requiresSubmissionAttachment ? 'true' : 'false',
+  );
+  formData.set(
+    'sourceAttachmentTokens',
+    JSON.stringify(payload.sourceAttachmentTokens || []),
+  );
+  formData.set('replyContent', payload.replyContent || '');
+  for (const file of payload.attachments || []) {
+    formData.append('attachments', file);
+  }
+
+  return requestJson(
+    `/api/projects/${encodeURIComponent(projectId)}/feedback/${encodeURIComponent(recordId)}/resolve`,
+    { method: 'POST', body: formData },
+  );
+}
+
 export function changeWorkItemAssignees(toolConfig, projectId, recordId, payload) {
   return requestJson(
     `/api/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(toolConfig.routeSegment)}/${encodeURIComponent(recordId)}/assignees`,

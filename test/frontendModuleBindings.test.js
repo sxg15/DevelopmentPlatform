@@ -10,12 +10,19 @@ const FRONTEND_MODULES = [
   'src/api/aiConversations.js',
   'src/api/aiPlans.js',
   'src/api/clientErrors.js',
+  'src/api/authenticationState.js',
+  'src/api/testTasks.js',
   'src/ui/App.jsx',
   'src/ui/AppErrorBoundary.jsx',
+  'src/ui/GlobalOperationOverlay.jsx',
+  'src/ui/SessionExpiredOverlay.jsx',
+  'src/ui/authNavigation.js',
+  'src/ui/pageInteractionLock.js',
   'src/ui/ai/AiPlanLibrary.jsx',
   'src/ui/ai/AiPlanningWorkspace.jsx',
   'src/ui/ProjectOverview.jsx',
   'src/ui/projectOverviewDisplayUtils.js',
+  'src/ui/test-tasks/TestTaskManagement.jsx',
   'src/ui/versions/VersionManagement.jsx',
   'src/ui/versions/versionManagementDisplayUtils.js',
   'src/ui/workspace/PlatformWorkspace.jsx',
@@ -28,6 +35,7 @@ const FRONTEND_MODULES = [
   'src/ui/work-items/workItemTimelineUtils.js',
   'src/ui/settings/PersonalSettingsDialog.jsx',
   'src/ui/settings/mcpConfigUtils.js',
+  'src/integrations/feishuH5.js',
 ];
 const BROWSER_GLOBALS = new Set([
   'Array',
@@ -126,6 +134,50 @@ test('app initializes personal settings without awaiting workspace startup', () 
   assert.doesNotMatch(source, /await\s+ensurePersonalSettingsRecord\(\)/);
 });
 
+test('global operation overlay blocks the application above every existing dialog layer', () => {
+  const mainSource = fs.readFileSync('src/main.jsx', 'utf8');
+  const overlaySource = fs.readFileSync('src/ui/GlobalOperationOverlay.jsx', 'utf8');
+  const pageLockSource = fs.readFileSync('src/ui/pageInteractionLock.js', 'utf8');
+  const baseStyles = fs.readFileSync('src/styles/base.css', 'utf8');
+
+  assert.match(mainSource, /<GlobalOperationOverlay\s*\/>/);
+  assert.match(overlaySource, /createPortal\([\s\S]*document\.body/);
+  assert.match(overlaySource, /acquirePageInteractionLock/);
+  assert.match(pageLockSource, /setAttribute\('inert',\s*''\)/);
+  assert.match(overlaySource, /<strong>操作中<\/strong>/);
+  assert.match(
+    baseStyles,
+    /\.global-operation-backdrop\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*2147483646;[^}]*background:\s*rgb\(0 0 0 \/ 68%\);/s,
+  );
+});
+
+test('expired sessions render an uncloseable top-level Feishu reauthorization prompt', () => {
+  const mainSource = fs.readFileSync('src/main.jsx', 'utf8');
+  const overlaySource = fs.readFileSync('src/ui/SessionExpiredOverlay.jsx', 'utf8');
+  const navigationSource = fs.readFileSync('src/ui/authNavigation.js', 'utf8');
+  const baseStyles = fs.readFileSync('src/styles/base.css', 'utf8');
+
+  assert.match(mainSource, /<SessionExpiredOverlay\s*\/>/);
+  assert.match(overlaySource, /<h2 id="session-expired-title">登录信息已失效<\/h2>/);
+  assert.match(overlaySource, /刷新并重新登录/);
+  assert.match(overlaySource, /acquirePageInteractionLock/);
+  assert.doesNotMatch(overlaySource, /onClose|onMouseDown|Escape/);
+  assert.match(navigationSource, /searchParams\.set\('forceAuth',\s*'1'\)/);
+  assert.match(navigationSource, /window\.location\.replace/);
+  assert.match(
+    baseStyles,
+    /\.session-expired-backdrop\s*\{[^}]*position:\s*fixed;[^}]*z-index:\s*2147483647;[^}]*background:\s*rgb\(0 0 0 \/ 74%\);/s,
+  );
+});
+
+test('Feishu SDK loading and authorization callbacks have bounded waits', () => {
+  const source = fs.readFileSync('src/integrations/feishuH5.js', 'utf8');
+
+  assert.match(source, /FEISHU_SDK_LOAD_TIMEOUT_MS\s*=\s*8000/);
+  assert.match(source, /FEISHU_AUTH_REQUEST_TIMEOUT_MS\s*=\s*15_000/);
+  assert.match(source, /飞书授权超时，请重新打开应用后重试/);
+});
+
 test('personal settings exposes token generation and copyable MCP client configs', () => {
   const apiSource = fs.readFileSync('src/api/personalSettings.js', 'utf8');
   const dialogSource = fs.readFileSync('src/ui/settings/PersonalSettingsDialog.jsx', 'utf8');
@@ -162,7 +214,7 @@ test('project tool navigation renders icons and pending work item badges', () =>
   assert.match(source, /getProjectToolIcon\(tool\.iconKey\)/);
   assert.match(source, /project-tool-pending-badge/);
   assert.match(source, /isProjectToolPendingCountTool\(normalizedToolId\)/);
-  assert.match(source, /tool\.id === 'aiPlans' \? '待审核' : '未处理'/);
+  assert.match(source, /tool\.id === 'testTasks'[\s\S]*\? '待办'[\s\S]*: '未处理'/);
   assert.match(source, /\{pendingCount\}\{pendingLabel\}/);
 });
 
@@ -212,6 +264,39 @@ test('work item status updates bind version association confirmation and idempot
   assert.match(serverSource, /inspectWorkItemAssociations/);
   assert.match(serverSource, /applyStatusVersionAssociationDecision/);
   assert.match(mcpSource, /VERSION_ASSOCIATION_DECISION_SCHEMA/);
+});
+
+test('feedback resolution binds classification, traceability, and idempotent conversion', () => {
+  const workspaceSource = fs.readFileSync('src/ui/workspace/PlatformWorkspace.jsx', 'utf8');
+  const apiSource = fs.readFileSync('src/api/workItems.js', 'utf8');
+  const serverSource = fs.readFileSync('server/index.js', 'utf8');
+
+  assert.match(apiSource, /\/feedback\/\$\{encodeURIComponent\(recordId\)\}\/resolve/);
+  assert.match(workspaceSource, /function FeedbackResolutionDialog/);
+  assert.match(workspaceSource, /toolConfig\.toolId !== 'feedback'/);
+  assert.match(workspaceSource, /record\.relatedItemParseError/);
+  assert.match(workspaceSource, /record\.relatedFeedbackParseError/);
+  assert.match(serverSource, /app\.post\('\/api\/projects\/:projectId\/feedback\/:recordId\/resolve'/);
+  assert.match(serverSource, /buildFeedbackResolutionSourceMutationId/);
+  assert.match(serverSource, /findWorkItemBySourceMutationId\([\s\S]*sourceMutationId,[\s\S]*fingerprint/);
+  assert.match(serverSource, /\[feedbackConfig\.fieldNames\.relatedItem\]/);
+  assert.match(serverSource, /relatedFeedback:\s*reverseLink/);
+  assert.match(serverSource, /submitter:\s*proposers\[0\]/);
+});
+
+test('work item version association dialog escapes the sticky detail sidebar stacking context', () => {
+  const workspaceSource = fs.readFileSync('src/ui/workspace/PlatformWorkspace.jsx', 'utf8');
+  const dialogStart = workspaceSource.indexOf('function WorkItemVersionAssociationDialog');
+  const attachmentsStart = workspaceSource.indexOf('function RequirementSubmissionAttachmentsPanel');
+  const dialogSource = workspaceSource.slice(dialogStart, attachmentsStart);
+
+  assert.ok(dialogStart >= 0);
+  assert.ok(attachmentsStart > dialogStart);
+  assert.match(workspaceSource, /import\s*\{\s*createPortal\s*\}\s*from\s*['"]react-dom['"]/);
+  assert.match(
+    dialogSource,
+    /return createPortal\([\s\S]*workitem-version-confirm-backdrop[\s\S]*document\.body,\s*\);/,
+  );
 });
 
 test('AI planning separates private conversations from shared submissions', () => {

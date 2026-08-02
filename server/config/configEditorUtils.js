@@ -78,6 +78,12 @@ export function validateConfigDocument(config, options = {}) {
     'knowledgeBase.feedbackIdDigits',
     '反馈 ID 位数',
   );
+  validatePositiveInteger(
+    errors,
+    config?.knowledgeBase?.testTasksIdDigits,
+    'knowledgeBase.testTasksIdDigits',
+    '测试任务 ID 位数',
+  );
   validatePositiveInteger(errors, config?.dashboard?.cacheTtlMs, 'dashboard.cacheTtlMs', '概览缓存时间');
   validatePositiveInteger(errors, config?.dashboard?.staleDays, 'dashboard.staleDays', '无进展天数');
   validatePositiveInteger(errors, config?.dashboard?.dueSoonDays, 'dashboard.dueSoonDays', '即将到期天数');
@@ -337,7 +343,7 @@ function validateStatusGroups(errors, statusGroups) {
     return;
   }
 
-  for (const toolId of ['requirements', 'bugs', 'feedback']) {
+  for (const toolId of ['requirements', 'bugs', 'testTasks', 'feedback']) {
     for (const groupId of ['waiting', 'processing', 'completed', 'blocked']) {
       if (!Array.isArray(statusGroups?.[toolId]?.[groupId])) {
         errors.push({

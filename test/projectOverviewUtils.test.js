@@ -86,6 +86,25 @@ test('acceptance status remains processing even when legacy config omits or misc
   assert.equal(config.statusGroups.bugs.blocked.includes('待验收'), false);
 });
 
+test('feedback classification statuses override legacy dashboard groups', () => {
+  const config = normalizeProjectOverviewConfig({
+    statusGroups: {
+      feedback: {
+        waiting: ['待处理'],
+        processing: ['处理中'],
+        completed: ['已完成'],
+        blocked: ['已拒绝'],
+      },
+    },
+  });
+
+  assert.equal(config.statusGroups.feedback.waiting.includes('待分类'), true);
+  assert.equal(config.statusGroups.feedback.completed.includes('已转需求'), true);
+  assert.equal(config.statusGroups.feedback.completed.includes('已转Bug'), true);
+  assert.equal(config.statusGroups.feedback.completed.includes('已回复'), true);
+  assert.equal(config.statusGroups.feedback.completed.includes('已拒绝'), true);
+});
+
 test('project overview identifies attachment, stale, deadline and priority risks', () => {
   const toolItems = {
     requirements: [

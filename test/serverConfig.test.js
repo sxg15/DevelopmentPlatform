@@ -39,10 +39,17 @@ test('server config normalization preserves workflow field defaults', () => {
     config.knowledgeBase.requirementsFieldNames.submittedAttachments,
     '提交附件',
   );
+  assert.equal(config.knowledgeBase.requirementsFieldNames.relatedFeedback, '关联反馈');
+  assert.equal(config.knowledgeBase.bugsFieldNames.relatedFeedback, '关联反馈');
+  assert.equal(config.knowledgeBase.feedbackFieldNames.relatedItem, '关联项');
   assert.equal(
     config.bitable.projectPermission.fieldNames.developmentSuperAdmins,
     DEFAULT_DEVELOPMENT_SUPER_ADMIN_FIELD,
   );
+  assert.equal(config.bitable.projectPermission.fieldNames.testAdministrators, '测试管理员');
+  assert.equal(config.bitable.toolPermission.fieldNames.tools.testTasks, '测试任务');
+  assert.equal(config.knowledgeBase.testTasksTemplateAppToken, 'SGvgwousMiRvjGkHQf7cwDwJnab');
+  assert.equal(config.knowledgeBase.testTasksFieldNames.results, '测试结果记录');
   assert.equal(config.bitable.personalSettings.wikiNodeToken, 'PDcJwzNTIiJHzNkcM0Gc3Cy1nRd');
   assert.equal(config.bitable.personalSettings.defaultTime, '11:00');
   assert.equal(

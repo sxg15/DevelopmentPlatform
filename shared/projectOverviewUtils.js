@@ -1,4 +1,7 @@
 import {
+  FEEDBACK_LEGACY_ACTIVE_STATUSES,
+  FEEDBACK_LEGACY_COMPLETED_STATUSES,
+  FEEDBACK_STATUSES,
   getWorkItemAcceptanceStatus,
   getWorkItemProcessingStatuses,
 } from './workItemDefinitions.js';
@@ -6,7 +9,7 @@ import {
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export const PROJECT_OVERVIEW_TOOL_ORDER = ['requirements', 'bugs', 'feedback'];
+export const PROJECT_OVERVIEW_TOOL_ORDER = ['requirements', 'bugs', 'testTasks', 'feedback'];
 export const PROJECT_OVERVIEW_PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4'];
 
 export const DEFAULT_PROJECT_OVERVIEW_CONFIG = {
@@ -26,11 +29,22 @@ export const DEFAULT_PROJECT_OVERVIEW_CONFIG = {
       completed: ['已修复', '关闭'],
       blocked: ['无法复现', '已搁置'],
     },
+    testTasks: {
+      waiting: ['待测试'],
+      processing: ['测试中'],
+      completed: ['已完成'],
+      blocked: [],
+    },
     feedback: {
-      waiting: ['待处理'],
-      processing: ['处理中'],
-      completed: ['已完成', '关闭'],
-      blocked: ['已搁置', '已拒绝'],
+      waiting: [FEEDBACK_STATUSES.waiting],
+      processing: [],
+      completed: [
+        FEEDBACK_STATUSES.convertedToRequirement,
+        FEEDBACK_STATUSES.convertedToBug,
+        FEEDBACK_STATUSES.replied,
+        ...FEEDBACK_LEGACY_COMPLETED_STATUSES,
+      ],
+      blocked: [],
     },
   },
 };
@@ -38,6 +52,7 @@ export const DEFAULT_PROJECT_OVERVIEW_CONFIG = {
 const TOOL_LABELS = {
   requirements: '需求',
   bugs: 'Bug',
+  testTasks: '测试任务',
   feedback: '反馈',
 };
 
@@ -93,7 +108,11 @@ export function buildProjectOverviewData({
     const groups = normalizedConfig.statusGroups[toolId];
     const sourceItems = Array.isArray(toolItems[toolId]) ? toolItems[toolId] : [];
     for (const item of sourceItems) {
-      if (normalizedScope === 'mine' && !hasMatchingUser(item?.assignees, currentUserKeys)) {
+      if (
+        normalizedScope === 'mine'
+        && item?.isMine !== true
+        && !hasMatchingUser(item?.assignees, currentUserKeys)
+      ) {
         continue;
       }
       preparedItems.push(prepareOverviewItem(toolId, item, groups, normalizedConfig, now));
@@ -105,7 +124,7 @@ export function buildProjectOverviewData({
   const priorityDistribution = PROJECT_OVERVIEW_PRIORITIES.map((priority) => ({
     priority,
     count: preparedItems.filter(
-      (item) => item.active && item.toolId !== 'feedback' && item.priority === priority,
+      (item) => item.active && !['feedback', 'testTasks'].includes(item.toolId) && item.priority === priority,
     ).length,
   }));
   const trend = buildTrend(preparedItems, normalizedTrendDays, now);
@@ -166,7 +185,7 @@ function prepareOverviewItem(toolId, item, groups, config, now) {
     toolId,
     toolLabel: TOOL_LABELS[toolId] || toolId,
     recordId: String(item?.recordId || '').trim(),
-    itemId: String(item?.itemId || item?.feedbackId || item?.requirementId || '').trim(),
+    itemId: String(item?.itemId || item?.taskId || item?.feedbackId || item?.requirementId || '').trim(),
     title: String(item?.title || `未命名${TOOL_LABELS[toolId] || '工作项'}`).trim(),
     status,
     category,
@@ -207,7 +226,11 @@ function buildSummary(items, config, now) {
     processing: items.filter((item) => item.category === 'processing').length,
     overdue: items.filter((item) => item.overdue).length,
     dueSoon: items.filter((item) => item.dueSoon).length,
-    unassigned: items.filter((item) => item.active && item.assignees.length === 0).length,
+    unassigned: items.filter((item) => (
+      item.active
+      && item.assignees.length === 0
+      && !(item.toolId === 'testTasks' && item.category === 'waiting')
+    )).length,
     completedThisWeek: completedThisWeekIds.size,
     highPriority: items.filter(
       (item) => item.active && ['P0', 'P1'].includes(item.priority),
@@ -325,7 +348,11 @@ function buildRisks(items) {
       let score = 0;
       const highPriority = ['P0', 'P1'].includes(item.priority);
 
-      if (item.active && item.assignees.length === 0) {
+      if (
+        item.active
+        && item.assignees.length === 0
+        && !(item.toolId === 'testTasks' && item.category === 'waiting')
+      ) {
         riskKinds.push('unassigned');
         score = Math.max(score, 100);
       }
@@ -476,6 +503,34 @@ function normalizeStatusGroups(value, fallback, toolId) {
     key,
     normalizeStringArray(value?.[key], fallback[key]),
   ]));
+  if (toolId === 'feedback') {
+    const explicitStatuses = [
+      FEEDBACK_STATUSES.waiting,
+      FEEDBACK_STATUSES.convertedToRequirement,
+      FEEDBACK_STATUSES.convertedToBug,
+      FEEDBACK_STATUSES.replied,
+    ];
+    for (const key of ['waiting', 'processing', 'completed', 'blocked']) {
+      groups[key] = groups[key].filter((status) => !explicitStatuses.includes(status));
+    }
+    groups.waiting = [...new Set([
+      FEEDBACK_STATUSES.waiting,
+      FEEDBACK_LEGACY_ACTIVE_STATUSES[0],
+      ...groups.waiting,
+    ])];
+    groups.processing = [...new Set([
+      FEEDBACK_LEGACY_ACTIVE_STATUSES[1],
+      ...groups.processing,
+    ])];
+    groups.completed = [...new Set([
+      FEEDBACK_STATUSES.convertedToRequirement,
+      FEEDBACK_STATUSES.convertedToBug,
+      FEEDBACK_STATUSES.replied,
+      ...FEEDBACK_LEGACY_COMPLETED_STATUSES,
+      ...groups.completed,
+    ])];
+    return groups;
+  }
   const acceptanceStatus = getWorkItemAcceptanceStatus(toolId);
   if (!acceptanceStatus) {
     return groups;

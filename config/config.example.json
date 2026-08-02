@@ -84,11 +84,17 @@
         "completed": ["已修复", "关闭"],
         "blocked": ["无法复现", "已搁置"]
       },
+      "testTasks": {
+        "waiting": ["待测试"],
+        "processing": ["测试中"],
+        "completed": ["已完成"],
+        "blocked": []
+      },
       "feedback": {
-        "waiting": ["待处理"],
-        "processing": ["处理中"],
-        "completed": ["已完成", "关闭"],
-        "blocked": ["已搁置", "已拒绝"]
+        "waiting": ["待分类"],
+        "processing": [],
+        "completed": ["已转需求", "已转Bug", "已回复", "已完成", "已搁置", "已拒绝", "关闭"],
+        "blocked": []
       }
     }
   },
@@ -113,6 +119,7 @@
       "attachments": "附件",
       "requiresSubmissionAttachment": "需要提交附件",
       "submittedAttachments": "提交附件",
+      "relatedFeedback": "关联反馈",
       "comments": "留言",
       "statusChangeLog": "处理状态变动记录"
     },
@@ -133,6 +140,7 @@
       "proposedAt": "发现时间",
       "expectedDays": "期望时限",
       "attachments": "附件",
+      "relatedFeedback": "关联反馈",
       "comments": "留言",
       "statusChangeLog": "处理状态变动记录"
     },
@@ -154,8 +162,29 @@
       "expectedDays": "期望时限",
       "contactInfo": "联系信息数据",
       "attachments": "附件",
+      "relatedItem": "关联项",
       "comments": "留言",
       "statusChangeLog": "处理状态变动记录"
+    },
+    "testTasksParentName": "测试任务",
+    "testTasksTemplateName": "模板",
+    "testTasksTemplateAppToken": "SGvgwousMiRvjGkHQf7cwDwJnab",
+    "testTasksIdPrefix": "T-",
+    "testTasksIdDigits": 4,
+    "testTasksFieldNames": {
+      "taskId": "任务ID",
+      "itemId": "任务ID",
+      "title": "任务名称",
+      "content": "任务内容",
+      "createdAt": "创建时间",
+      "creator": "创建人",
+      "testers": "测试人员",
+      "status": "处理状态",
+      "statusChangeLog": "处理状态变动记录",
+      "comments": "留言",
+      "results": "测试结果记录",
+      "attachments": "附件",
+      "relatedFeedback": "关联反馈"
     }
   },
   "debug": {
@@ -189,6 +218,7 @@
       "fieldNames": {
         "projectId": "项目ID",
         "developmentSuperAdmins": "研发超级管理员",
+        "testAdministrators": "测试管理员",
         "permissionUsers": [
           "超级管理员",
           "研发超级管理员",
@@ -210,6 +240,7 @@
           "bugs": "Bug列表",
           "builds": "打包列表",
           "review": "内容审查",
+          "testTasks": "测试任务",
           "feedback": "反馈列表"
         }
       }

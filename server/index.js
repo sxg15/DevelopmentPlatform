@@ -36,10 +36,28 @@ import {
   buildProjectOverviewData,
 } from '../shared/projectOverviewUtils.js';
 import {
+  FEEDBACK_LEGACY_COMPLETED_STATUSES,
+  FEEDBACK_STATUSES,
   PROJECT_TOOL_DEFINITIONS,
   REQUIREMENT_PRIORITIES,
   getWorkItemToolDefinition,
 } from '../shared/workItemDefinitions.js';
+import {
+  FEEDBACK_RESOLUTION_TYPES,
+  createFeedbackRelatedItemDocument,
+  createRelatedFeedbackDocument,
+  getFeedbackResolutionStatus,
+  normalizeFeedbackRelatedItemDocument,
+  normalizeRelatedFeedbackDocument,
+  serializeFeedbackResolutionDocument,
+} from '../shared/feedbackResolutionUtils.js';
+import {
+  TEST_TASK_STATUSES,
+  buildDefaultTestFeedbackTitle,
+  buildTestTaskPermissions,
+  normalizeTestTaskContentDocument,
+  normalizeTestTaskResultsDocument,
+} from '../shared/testTaskUtils.js';
 import {
   VERSION_ASSOCIATION_TOOL_IDS,
   VERSION_MANAGEMENT_TOOL_ID,
@@ -53,6 +71,7 @@ import {
   getWorkItemCompletionTransition,
   normalizeWorkItemVersionAssociationDecision,
 } from '../shared/workItemVersionAssociationUtils.js';
+import { normalizeAuthenticationErrorResponse } from '../shared/authenticationErrorUtils.js';
 import {
   blockDirectConfigAccess,
   clientDir,
@@ -102,6 +121,7 @@ import {
 } from './services/personalSettingsService.js';
 import { createTodoNotificationScheduler } from './services/todoNotificationScheduler.js';
 import { createVersionManagementService } from './services/versionManagementService.js';
+import { createTestTaskService } from './services/testTaskService.js';
 import { createAiRunContextService } from './services/aiRunContextService.js';
 import { createAiPlanningNotificationService } from './services/aiPlanningNotificationService.js';
 import { createFeishuAssistantService } from './services/feishuAssistantService.js';
@@ -123,6 +143,10 @@ import {
   migrateWorkItemStatusOptions,
   resolveWorkItemTableContext,
 } from './services/workItemStatusSchemaService.js';
+import {
+  ensureWorkItemRelationSchema,
+  migrateWorkItemRelationSchemas,
+} from './services/workItemRelationSchemaService.js';
 import {
   exchangeCodeForAccessToken,
   fetchFeishuJson,
@@ -178,7 +202,7 @@ const PROJECT_DATA_CACHE_TTL_MS = 60 * 1000;
 const STRUCTURE_CACHE_TTL_MS = 5 * 60 * 1000;
 const LONG_STRUCTURE_CACHE_TTL_MS = 10 * 60 * 1000;
 const SUPER_ADMIN_DEPARTMENT = '超级管理员';
-const WORK_ITEM_TOOL_IDS = new Set(['requirements', 'bugs', 'feedback']);
+const WORK_ITEM_TOOL_IDS = new Set(['requirements', 'bugs', 'testTasks', 'feedback']);
 const PERMISSION_TOOL_DEFINITIONS = PROJECT_TOOL_DEFINITIONS.filter(
   (tool) => !['overview', VERSION_MANAGEMENT_TOOL_ID, AI_PLAN_TOOL_ID].includes(tool.id),
 );
@@ -253,6 +277,26 @@ const aiPlanningRepository = new AiPlanningRepository(aiDataPaths.database);
 const aiPlanMutationQueue = createKeyedTaskQueue();
 const workItemMutationQueue = createKeyedTaskQueue();
 const workItemTableMutationQueue = createKeyedTaskQueue();
+const testTaskMutationQueue = createKeyedTaskQueue();
+const testTaskService = createTestTaskService({
+  config: {
+    idPrefix: runtimeConfig.knowledgeBase.testTasksIdPrefix,
+    idDigits: runtimeConfig.knowledgeBase.testTasksIdDigits,
+    fieldNames: runtimeConfig.knowledgeBase.testTasksFieldNames,
+  },
+  resolveContext: resolveTestTaskServiceContext,
+  bitable: {
+    createRecord: createBitableRecord,
+    deleteRecord: deleteBitableRecord,
+    fetchRecord: fetchBitableRecord,
+    fetchRecords: fetchBitableRecords,
+    updateRecord: updateBitableRecordFields,
+  },
+  queue: testTaskMutationQueue,
+  notify: notifyTestTaskRecipients,
+  publish: publishWorkItemUpdated,
+  createFeedback: createFeedbackFromTestTaskDraft,
+});
 const aiPlanningRealtimeHub = createAiPlanningRealtimeHub();
 const aiPlanningScheduler = createBoundedTaskScheduler({
   maxConcurrent: runtimeConfig.aiPlanning.codex.maxConcurrentRuns,
@@ -389,6 +433,17 @@ const app = express();
 const allowClientErrorReport = createClientErrorRateLimiter();
 
 app.use(express.json({ limit: '256kb' }));
+app.use('/api', (_request, response, next) => {
+  const sendJson = response.json.bind(response);
+  response.json = (payload) => {
+    const normalized = normalizeAuthenticationErrorResponse(response.statusCode, payload);
+    if (normalized.status !== response.statusCode) {
+      response.status(normalized.status);
+    }
+    return sendJson(normalized.payload);
+  };
+  next();
+});
 app.use(blockDirectConfigAccess);
 registerDevelopmentPlatformMcp(app, {
   serverVersion: currentAppVersion,
@@ -755,6 +810,8 @@ app.post('/api/projects/:projectId/feedback/ensure', async (request, response) =
   await handleWorkItemEnsure(request, response, 'feedback');
 });
 
+app.post('/api/projects/:projectId/test-tasks/ensure', handleTestTaskEnsure);
+
 app.post('/api/projects/:projectId/requirements', async (request, response) => {
   await handleWorkItemCreate(request, response, 'requirements');
 });
@@ -766,6 +823,15 @@ app.post('/api/projects/:projectId/bugs', async (request, response) => {
 app.post('/api/projects/:projectId/feedback', async (request, response) => {
   await handleWorkItemCreate(request, response, 'feedback');
 });
+
+app.post('/api/projects/:projectId/test-tasks', handleTestTaskCreate);
+app.get('/api/projects/:projectId/test-tasks/:recordId', handleTestTaskRead);
+app.put('/api/projects/:projectId/test-tasks/:recordId', handleTestTaskUpdate);
+app.post('/api/projects/:projectId/test-tasks/:recordId/start', handleTestTaskStart);
+app.put('/api/projects/:projectId/test-tasks/:recordId/testers', handleTestTaskTestersUpdate);
+app.put('/api/projects/:projectId/test-tasks/:recordId/results', handleTestTaskResultsUpdate);
+app.post('/api/projects/:projectId/test-tasks/:recordId/complete', handleTestTaskComplete);
+app.delete('/api/projects/:projectId/test-tasks/:recordId', handleTestTaskDelete);
 
 app.put('/api/projects/:projectId/requirements/:recordId', async (request, response) => {
   await handleWorkItemUpdate(request, response, 'requirements');
@@ -803,6 +869,10 @@ app.get('/api/projects/:projectId/feedback/attachments/:fileToken', async (reque
   await handleWorkItemAttachment(request, response, 'feedback');
 });
 
+app.get('/api/projects/:projectId/test-tasks/attachments/:fileToken', async (request, response) => {
+  await handleWorkItemAttachment(request, response, 'testTasks');
+});
+
 app.post('/api/projects/:projectId/requirements/:recordId/submission-attachments', async (request, response) => {
   await handleRequirementSubmissionAttachmentsUpdate(request, response);
 });
@@ -819,6 +889,10 @@ app.post('/api/projects/:projectId/feedback/:recordId/comments', async (request,
   await handleWorkItemCommentCreate(request, response, 'feedback');
 });
 
+app.post('/api/projects/:projectId/test-tasks/:recordId/comments', async (request, response) => {
+  await handleWorkItemCommentCreate(request, response, 'testTasks');
+});
+
 app.delete('/api/projects/:projectId/requirements/:recordId/comments/:commentId', async (request, response) => {
   await handleWorkItemCommentDelete(request, response, 'requirements');
 });
@@ -831,6 +905,10 @@ app.delete('/api/projects/:projectId/feedback/:recordId/comments/:commentId', as
   await handleWorkItemCommentDelete(request, response, 'feedback');
 });
 
+app.delete('/api/projects/:projectId/test-tasks/:recordId/comments/:commentId', async (request, response) => {
+  await handleWorkItemCommentDelete(request, response, 'testTasks');
+});
+
 app.post('/api/projects/:projectId/requirements/:recordId/status', async (request, response) => {
   await handleWorkItemStatusUpdate(request, response, 'requirements');
 });
@@ -841,6 +919,10 @@ app.post('/api/projects/:projectId/bugs/:recordId/status', async (request, respo
 
 app.post('/api/projects/:projectId/feedback/:recordId/status', async (request, response) => {
   await handleWorkItemStatusUpdate(request, response, 'feedback');
+});
+
+app.post('/api/projects/:projectId/feedback/:recordId/resolve', async (request, response) => {
+  await handleFeedbackResolve(request, response);
 });
 
 app.post('/api/projects/:projectId/requirements/:recordId/assignees', async (request, response) => {
@@ -2134,6 +2216,236 @@ function createHttpError(message, statusCode) {
   return error;
 }
 
+async function handleTestTaskEnsure(request, response) {
+  await runTestTaskRequest(request, response, async (context) => {
+    const result = await testTaskService.list({ ...context, ensure: true });
+    response.json(result);
+  }, '准备测试任务失败');
+}
+
+async function handleTestTaskRead(request, response) {
+  await runTestTaskRequest(request, response, async (context) => {
+    const task = await testTaskService.read({
+      ...context,
+      recordId: String(request.params.recordId || '').trim(),
+    });
+    response.json({ task });
+  }, '读取测试任务失败');
+}
+
+async function handleTestTaskCreate(request, response) {
+  await runTestTaskRequest(request, response, async (context) => {
+    const payload = request.body || {};
+    const result = await testTaskService.create({
+      ...context,
+      title: payload.title,
+      items: payload.items,
+      clientMutationId: payload.clientMutationId,
+    });
+    const list = await testTaskService.list({ ...context, ensure: false });
+    response.json({ ...list, ...result });
+  }, '创建测试任务失败');
+}
+
+async function handleTestTaskUpdate(request, response) {
+  await runTestTaskRequest(request, response, async (context) => {
+    const payload = request.body || {};
+    const result = await testTaskService.updateContent({
+      ...context,
+      recordId: String(request.params.recordId || '').trim(),
+      title: payload.title,
+      items: payload.items,
+      expectedRevision: payload.expectedRevision,
+      clientMutationId: payload.clientMutationId,
+    });
+    response.json(result);
+  }, '更新测试任务失败');
+}
+
+async function handleTestTaskStart(request, response) {
+  await runTestTaskRequest(request, response, async (context) => {
+    const payload = request.body || {};
+    const result = await testTaskService.start({
+      ...context,
+      recordId: String(request.params.recordId || '').trim(),
+      testers: payload.testers,
+      clientMutationId: payload.clientMutationId,
+    });
+    response.json(result);
+  }, '开始测试失败');
+}
+
+async function handleTestTaskTestersUpdate(request, response) {
+  await runTestTaskRequest(request, response, async (context) => {
+    const payload = request.body || {};
+    const result = await testTaskService.updateTesters({
+      ...context,
+      recordId: String(request.params.recordId || '').trim(),
+      testers: payload.testers,
+      reason: payload.reason,
+      clientMutationId: payload.clientMutationId,
+    });
+    response.json(result);
+  }, '调整测试人员失败');
+}
+
+async function handleTestTaskResultsUpdate(request, response) {
+  await runTestTaskRequest(request, response, async (context) => {
+    const recordId = String(request.params.recordId || '').trim();
+    const payload = await readWorkItemUpdatePayload(request);
+    const results = parseJsonArrayValue(payload.fields?.results);
+    await attachTestTaskFeedbackFiles({
+      ...context,
+      recordId,
+      results,
+      files: payload.files,
+    });
+    const result = await testTaskService.saveResults({
+      ...context,
+      recordId,
+      results,
+      expectedRevision: payload.fields?.expectedRevision,
+      clientMutationId: payload.fields?.clientMutationId,
+    });
+    response.json(result);
+  }, '保存测试结果失败');
+}
+
+async function handleTestTaskComplete(request, response) {
+  await runTestTaskRequest(request, response, async (context) => {
+    const payload = request.body || {};
+    const result = await testTaskService.complete({
+      ...context,
+      recordId: String(request.params.recordId || '').trim(),
+      expectedRevision: payload.expectedRevision,
+      clientMutationId: payload.clientMutationId,
+    });
+    response.json(result);
+  }, '完成测试任务失败');
+}
+
+async function handleTestTaskDelete(request, response) {
+  await runTestTaskRequest(request, response, async (context) => {
+    const result = await testTaskService.remove({
+      ...context,
+      recordId: String(request.params.recordId || '').trim(),
+    });
+    response.json(result);
+  }, '删除测试任务失败');
+}
+
+async function runTestTaskRequest(request, response, action, fallbackMessage) {
+  try {
+    validateProjectBaseConfig();
+    validateProjectPermissionConfig();
+    validateToolPermissionConfig();
+    validateKnowledgeBaseConfig();
+    if (!appId || !appSecret) {
+      throw createHttpError('缺少飞书应用配置', 500);
+    }
+    const session = getSession(request);
+    if (!session) {
+      throw createHttpError('请先登录飞书', 401);
+    }
+    const projectId = String(request.params.projectId || '').trim();
+    if (!projectId) {
+      throw createHttpError('缺少项目ID', 400);
+    }
+    const token = await getTenantAccessToken();
+    const { project, projectAccess } = await getAuthorizedProjectAccess(
+      token,
+      projectId,
+      session.user,
+      'testTasks',
+    );
+    await action({
+      token,
+      project,
+      user: session.user,
+      access: projectAccess,
+      request,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : fallbackMessage;
+    response.status(Number(error?.statusCode) || (
+      message.includes('权限') || message.includes('只有') ? 403
+        : message.includes('不存在') || message.includes('找不到') ? 404
+          : message.includes('已被其他人') ? 409
+            : message.includes('缺少飞书') ? 500
+              : message.includes('不能为空')
+                || message.includes('请选择')
+                || message.includes('格式')
+                || message.includes('不能超过')
+                || message.includes('尚未填写')
+                || message.includes('未配置测试管理员')
+                ? 400
+                : 502
+    )).json({
+      message,
+      ...(error?.publicDetails || {}),
+    });
+  }
+}
+
+async function attachTestTaskFeedbackFiles({
+  token,
+  project,
+  user,
+  access,
+  recordId,
+  results,
+  files,
+}) {
+  if (!Array.isArray(files) || files.length === 0) {
+    return;
+  }
+  if (!access?.isTestAdmin) {
+    throw createHttpError('只有测试管理员可以上传测试反馈附件', 403);
+  }
+  const context = await resolveTestTaskServiceContext({
+    token,
+    project,
+    user,
+    ensure: false,
+  });
+  const record = await fetchBitableRecord(
+    token,
+    context.appToken,
+    context.tableId,
+    recordId,
+    { consistency: 'fresh' },
+  );
+  const fieldName = runtimeConfig.knowledgeBase.testTasksFieldNames.attachments;
+  const existing = normalizeBitableAttachmentListValue(record?.fields?.[fieldName]);
+  const uploaded = [];
+  for (const file of files) {
+    const match = /^feedbackAttachment:([A-Z0-9]+)$/.exec(String(file.fieldName || ''));
+    if (!match) {
+      throw createHttpError('测试反馈附件字段格式错误', 400);
+    }
+    const resultItem = results.find((item) => String(item?.itemId || '') === match[1]);
+    if (!resultItem?.feedbackDraft) {
+      throw createHttpError(`测试子任务 ${match[1]} 没有反馈草稿`, 400);
+    }
+    const attachment = await uploadBitableAttachment(
+      token,
+      context.appToken,
+      context.tableId,
+      file,
+    );
+    uploaded.push(attachment);
+    resultItem.feedbackDraft.attachments = [
+      ...(Array.isArray(resultItem.feedbackDraft.attachments)
+        ? resultItem.feedbackDraft.attachments
+        : []),
+      attachment,
+    ];
+  }
+  await updateBitableRecordFields(token, context.appToken, context.tableId, recordId, {
+    [fieldName]: [...existing, ...uploaded].map(toBitableAttachmentValue).filter(Boolean),
+  });
+}
+
 async function handleWorkItemEnsure(request, response, toolId) {
   const toolConfig = getWorkItemToolConfig(toolId);
   try {
@@ -3164,13 +3476,11 @@ async function createWorkItemForAssistant({
   await ensureProjectWorkItemBitable(token, project, user, toolConfig);
   const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
   const { appToken, tableId } = await getCachedWorkItemTableContext(token, node, toolConfig);
-  let fields = await ensureCachedBitableTextField(
+  const fields = await ensureWorkItemRuntimeSchema(
     token,
-    appToken,
-    tableId,
-    toolConfig.fieldNames.comments,
+    { appToken, tableId },
+    toolConfig,
   );
-  ({ fields } = await ensureWorkItemStatusOptions(token, { appToken, tableId }, toolConfig));
   validateWorkItemTableSchema(fields, toolConfig);
 
   const result = await workItemTableMutationQueue.run(
@@ -3253,15 +3563,30 @@ async function createWorkItemForAssistant({
   };
 }
 
-function findWorkItemBySourceMutationId(records, commentsFieldName, sourceMutationId) {
+function findWorkItemBySourceMutationId(
+  records,
+  commentsFieldName,
+  sourceMutationId,
+  expectedFingerprint = '',
+) {
   const mutationId = String(sourceMutationId || '').trim();
   if (!mutationId) {
     return null;
   }
-  return (Array.isArray(records) ? records : []).find((record) => {
+  const matched = (Array.isArray(records) ? records : []).find((record) => {
     const document = parseCommentsDocument(record?.fields?.[commentsFieldName], false);
     return document.internal?.sourceMutationIds?.includes(mutationId);
   }) || null;
+  if (matched && expectedFingerprint) {
+    const document = parseCommentsDocument(matched?.fields?.[commentsFieldName], false);
+    const storedFingerprint = String(
+      document.internal?.sourceMutationFingerprints?.[mutationId] || '',
+    ).trim();
+    if (storedFingerprint && storedFingerprint !== expectedFingerprint) {
+      throw createHttpError('clientMutationId 已用于不同的反馈处理', 409);
+    }
+  }
+  return matched;
 }
 
 async function handleWorkItemCreate(request, response, toolId) {
@@ -3342,13 +3667,11 @@ async function handleWorkItemCreate(request, response, toolId) {
     await ensureProjectWorkItemBitable(token, project, session.user, toolConfig);
     const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
     const { appToken, tableId } = await getCachedWorkItemTableContext(token, node, toolConfig);
-    let fields = await ensureCachedBitableTextField(
+    let fields = await ensureWorkItemRuntimeSchema(
       token,
-      appToken,
-      tableId,
-      toolConfig.fieldNames.comments,
+      { appToken, tableId },
+      toolConfig,
     );
-    ({ fields } = await ensureWorkItemStatusOptions(token, { appToken, tableId }, toolConfig));
     validateWorkItemTableSchema(fields, toolConfig);
 
     const uploadedAttachments = attachments.length > 0
@@ -3443,6 +3766,699 @@ async function handleWorkItemCreate(request, response, toolId) {
     const status = message.includes('缺少') ? 500 : message.includes('权限') ? 403 : message.includes('不存在') ? 404 : 502;
     response.status(status).json({ message });
   }
+}
+
+async function handleFeedbackResolve(request, response) {
+  const feedbackConfig = getWorkItemToolConfig('feedback');
+  try {
+    validateProjectBaseConfig();
+    validateProjectPermissionConfig();
+    validateToolPermissionConfig();
+    validateKnowledgeBaseConfig();
+
+    if (!appId || !appSecret) {
+      response.status(500).json({ message: '缺少飞书应用配置' });
+      return;
+    }
+
+    const session = getSession(request);
+    if (!session) {
+      response.status(401).json({ message: '请先登录飞书' });
+      return;
+    }
+
+    const projectId = String(request.params.projectId || '').trim();
+    const recordId = String(request.params.recordId || '').trim();
+    if (!projectId || !recordId) {
+      response.status(400).json({ message: '缺少反馈信息' });
+      return;
+    }
+
+    const submitPayload = await readWorkItemCreatePayload(request);
+    const resolutionType = String(submitPayload.fields?.resolutionType || '').trim();
+    const clientMutationId = String(submitPayload.fields?.clientMutationId || '').trim().slice(0, 100);
+    if (!Object.values(FEEDBACK_RESOLUTION_TYPES).includes(resolutionType)) {
+      response.status(400).json({ message: '反馈处理类型无效' });
+      return;
+    }
+    if (!clientMutationId) {
+      response.status(400).json({ message: '缺少 clientMutationId' });
+      return;
+    }
+
+    const token = await getTenantAccessToken();
+    const { project, projectAccess } = await getAuthorizedProjectAccess(
+      token,
+      projectId,
+      session.user,
+      '',
+    );
+    if (
+      !projectAccess.allowedToolIds.has('feedback')
+      && !projectAccess.isDevelopmentSuperAdmin
+      && !projectAccess.isSuperAdmin
+    ) {
+      response.status(403).json({ message: '没有反馈工具权限' });
+      return;
+    }
+    if (
+      resolutionType !== FEEDBACK_RESOLUTION_TYPES.reply
+      && !projectAccess.allowedToolIds.has(resolutionType)
+    ) {
+      response.status(403).json({ message: '没有目标工作项工具权限' });
+      return;
+    }
+
+    const result = await workItemMutationQueue.run(
+      buildWorkItemMutationKey(project.projectId, 'feedback', recordId),
+      async () => executeFeedbackResolution({
+        token,
+        project,
+        projectAccess,
+        user: session.user,
+        request,
+        feedbackConfig,
+        feedbackRecordId: recordId,
+        resolutionType,
+        clientMutationId,
+        fields: submitPayload.fields || {},
+        files: submitPayload.files || [],
+      }),
+    );
+    response.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '处理反馈失败';
+    const status = Number(error?.statusCode) || (
+      message.includes('缺少') ? 500
+        : message.includes('权限') || message.includes('只有') ? 403
+          : message.includes('不存在') ? 404
+            : message.includes('JSON') || message.includes('格式异常') ? 409
+              : message.includes('不能为空')
+                || message.includes('不能超过')
+                || message.includes('无效')
+                || message.includes('请选择')
+                || message.includes('已经')
+                || message.includes('只能')
+                ? 400
+                : 502
+    );
+    response.status(status).json({ message });
+  }
+}
+
+async function executeFeedbackResolution({
+  token,
+  project,
+  projectAccess,
+  user,
+  request,
+  feedbackConfig,
+  feedbackRecordId,
+  resolutionType,
+  clientMutationId,
+  fields,
+  files,
+}) {
+  const feedbackNode = await findProjectWorkItemNode(token, project.projectId, feedbackConfig);
+  const feedbackContext = await fetchWorkItemTableContext(token, feedbackNode, feedbackConfig);
+  const feedbackFields = await ensureWorkItemRuntimeSchema(token, feedbackContext, feedbackConfig);
+  validateWorkItemTableSchema(feedbackFields, feedbackConfig);
+  await ensureBitableTextField(
+    token,
+    feedbackContext.appToken,
+    feedbackContext.tableId,
+    feedbackConfig.fieldNames.statusChangeLog,
+  );
+
+  const feedbackRecord = await fetchWorkItemRecordById(
+    token,
+    feedbackContext.appToken,
+    feedbackContext.tableId,
+    feedbackRecordId,
+    feedbackConfig,
+    { consistency: 'fresh' },
+  );
+  const source = feedbackRecord.fields || {};
+  const assignees = normalizeUserListValue(source[feedbackConfig.fieldNames.assignees]);
+  const canResolve = projectAccess.isSuperAdmin
+    || projectAccess.isDevelopmentSuperAdmin
+    || assignees.some((assignee) => isSameUser(assignee, user));
+  if (!canResolve) {
+    throw createHttpError('只有当前处理人、研发超级管理员或超级管理员可以处理反馈', 403);
+  }
+
+  const currentStatus = normalizeTextValue(source[feedbackConfig.fieldNames.status]) || '未设置状态';
+  const relatedItem = normalizeFeedbackRelatedItemDocument(
+    source[feedbackConfig.fieldNames.relatedItem],
+  );
+  if (relatedItem.error) {
+    throw createHttpError(`关联项格式异常：${relatedItem.error}`, 409);
+  }
+  const commentsDocument = parseCommentsDocument(
+    source[feedbackConfig.fieldNames.comments],
+    true,
+  );
+  const statusDocument = parseStatusChangeLogDocument(
+    source[feedbackConfig.fieldNames.statusChangeLog],
+    true,
+  );
+  const fingerprint = createMutationFingerprint({
+    projectId: project.projectId,
+    feedbackRecordId,
+    resolutionType,
+    title: String(fields.title || '').trim(),
+    description: String(fields.description || '').trim(),
+    priority: String(fields.priority || '').trim(),
+    expectedDays: normalizeNumberValue(fields.expectedDays),
+    assignees: normalizeMentionedUsers(fields.assignees || []),
+    needsAssigneeAssignment: parseBooleanValue(fields.needsAssigneeAssignment),
+    requiresSubmissionAttachment: parseBooleanValue(fields.requiresSubmissionAttachment),
+    sourceAttachmentTokens: parseStringArrayValue(
+      parseJsonArrayValue(fields.sourceAttachmentTokens),
+    ).sort(),
+    replyContent: String(fields.replyContent || '').trim(),
+    files: (files || []).map((file) => ({
+      name: file.name,
+      mimeType: file.mimeType,
+      size: file.size,
+    })),
+  });
+  const existingChange = findIdempotentMutation({
+    items: statusDocument.items,
+    clientMutationId,
+    mutationFingerprint: fingerprint,
+    belongsToActor: (change) => isSameUser({
+      openId: change.operatorOpenId,
+      name: change.operatorName,
+    }, user),
+    conflictMessage: 'clientMutationId 已用于不同的反馈处理',
+  });
+  if (existingChange) {
+    return buildExistingFeedbackResolutionResult({
+      token,
+      project,
+      user,
+      feedbackRecord,
+      feedbackConfig,
+      relatedItem,
+    });
+  }
+
+  if (relatedItem.recordId) {
+    throw createHttpError('反馈已经关联需求或Bug，不能重复转换', 400);
+  }
+  if (
+    currentStatus !== FEEDBACK_STATUSES.waiting
+    && !['待处理', '处理中'].includes(currentStatus)
+  ) {
+    throw createHttpError(`反馈已经处理，当前状态为“${currentStatus}”`, 400);
+  }
+
+  const proposers = normalizeUserListValue(source[feedbackConfig.fieldNames.proposer]);
+  if (resolutionType === FEEDBACK_RESOLUTION_TYPES.reply) {
+    return executeFeedbackReply({
+      token,
+      project,
+      user,
+      request,
+      feedbackConfig,
+      feedbackContext,
+      feedbackRecord,
+      currentStatus,
+      proposers,
+      commentsDocument,
+      statusDocument,
+      clientMutationId,
+      fingerprint,
+      replyContent: String(fields.replyContent || '').trim(),
+    });
+  }
+
+  return executeFeedbackConversion({
+    token,
+    project,
+    projectAccess,
+    user,
+    request,
+    feedbackConfig,
+    feedbackContext,
+    feedbackRecord,
+    currentStatus,
+    proposers,
+    statusDocument,
+    clientMutationId,
+    fingerprint,
+    resolutionType,
+    fields,
+    files,
+  });
+}
+
+async function executeFeedbackReply({
+  token,
+  project,
+  user,
+  request,
+  feedbackConfig,
+  feedbackContext,
+  feedbackRecord,
+  currentStatus,
+  proposers,
+  commentsDocument,
+  statusDocument,
+  clientMutationId,
+  fingerprint,
+  replyContent,
+}) {
+  if (!replyContent) {
+    throw createHttpError('回复内容不能为空', 400);
+  }
+  if (replyContent.length > 2000) {
+    throw createHttpError('回复内容不能超过2000字', 400);
+  }
+  const contactInfo = parseFeedbackContactInfo(
+    feedbackRecord.fields?.[feedbackConfig.fieldNames.contactInfo],
+  );
+  const recipients = normalizeMentionedUsers(proposers).filter((person) => person.openId);
+  if (!contactInfo.valid || !contactInfo.isFeishuUser || !contactInfo.feishuUserId || recipients.length === 0) {
+    throw createHttpError('只有具有有效飞书提出人的内部反馈可以仅回复', 400);
+  }
+
+  const nextStatus = getFeedbackResolutionStatus(FEEDBACK_RESOLUTION_TYPES.reply);
+  const comment = buildRecordComment(user, replyContent, [], {
+    clientMutationId,
+    mutationFingerprint: fingerprint,
+  });
+  const statusChange = buildStatusChangeLogItem(
+    user,
+    currentStatus,
+    nextStatus,
+    '已回复反馈提出人',
+    {
+      clientMutationId,
+      mutationFingerprint: fingerprint,
+      notifyProposer: true,
+    },
+  );
+  const nextComments = {
+    version: 1,
+    items: [...commentsDocument.items, comment],
+  };
+  const nextStatusDocument = {
+    version: 1,
+    items: [...statusDocument.items, statusChange],
+  };
+  await updateBitableRecordFields(
+    token,
+    feedbackContext.appToken,
+    feedbackContext.tableId,
+    String(feedbackRecord.record_id || feedbackRecord.recordId || ''),
+    {
+      [feedbackConfig.fieldNames.status]: nextStatus,
+      [feedbackConfig.fieldNames.comments]: JSON.stringify(nextComments),
+      [feedbackConfig.fieldNames.statusChangeLog]: JSON.stringify(nextStatusDocument),
+    },
+  );
+  const updatedRecord = await fetchWorkItemRecordById(
+    token,
+    feedbackContext.appToken,
+    feedbackContext.tableId,
+    String(feedbackRecord.record_id || feedbackRecord.recordId || ''),
+    feedbackConfig,
+    { consistency: 'fresh' },
+  );
+  const feedback = normalizeWorkItemRecords([updatedRecord], user, feedbackConfig)[0] || null;
+  publishWorkItemUpdated({
+    projectId: project.projectId,
+    toolId: 'feedback',
+    recordId: feedback?.recordId || '',
+  });
+  const notificationResults = await notifyFeedbackReplyRecipients(token, recipients, {
+    project,
+    feedback,
+    replyContent,
+    operator: user,
+    request,
+    toolConfig: feedbackConfig,
+  });
+  return {
+    feedback,
+    item: null,
+    resolution: {
+      type: FEEDBACK_RESOLUTION_TYPES.reply,
+      status: nextStatus,
+    },
+    notificationResults,
+    duplicate: false,
+  };
+}
+
+async function executeFeedbackConversion({
+  token,
+  project,
+  projectAccess,
+  user,
+  request,
+  feedbackConfig,
+  feedbackContext,
+  feedbackRecord,
+  currentStatus,
+  proposers,
+  statusDocument,
+  clientMutationId,
+  fingerprint,
+  resolutionType,
+  fields,
+  files,
+}) {
+  if (proposers.length === 0) {
+    throw createHttpError('源反馈没有有效提出人，无法转换', 400);
+  }
+  const targetConfig = getWorkItemToolConfig(resolutionType);
+  const title = String(fields.title || '').trim();
+  const description = String(fields.description || '').trim();
+  const priority = String(fields.priority || '').trim();
+  const expectedDays = normalizeNumberValue(fields.expectedDays);
+  const requestedAssignees = normalizeMentionedUsers(fields.assignees || []);
+  const needsAssigneeAssignment = parseBooleanValue(fields.needsAssigneeAssignment);
+  const requiresSubmissionAttachment = resolutionType === FEEDBACK_RESOLUTION_TYPES.requirements
+    && parseBooleanValue(fields.requiresSubmissionAttachment);
+  const sourceAttachmentTokens = parseStringArrayValue(
+    parseJsonArrayValue(fields.sourceAttachmentTokens),
+  );
+  if (!title) {
+    throw createHttpError(`${targetConfig.itemLabel}标题不能为空`, 400);
+  }
+  if (title.length > 200) {
+    throw createHttpError(`${targetConfig.itemLabel}标题不能超过200字`, 400);
+  }
+  if (description.length > 5000) {
+    throw createHttpError(`${targetConfig.itemLabel}描述不能超过5000字`, 400);
+  }
+  if (expectedDays !== null && expectedDays < 0) {
+    throw createHttpError('期望时限不能小于0', 400);
+  }
+  const assignmentError = validateWorkItemAssignmentChoice({
+    toolId: resolutionType,
+    assignees: requestedAssignees,
+    needsAssigneeAssignment,
+  });
+  if (assignmentError) {
+    throw createHttpError(assignmentError, 400);
+  }
+  if (needsAssigneeAssignment && projectAccess.developmentSuperAdmins.length === 0) {
+    throw createHttpError('项目权限表未配置研发超级管理员，暂时无法提交未指定处理人的工作项', 400);
+  }
+  const allowedAssignees = filterMentionedUsersByCandidates(
+    requestedAssignees,
+    projectAccess.mentionableUsersByTool[resolutionType] || [],
+  );
+  if (allowedAssignees.length !== requestedAssignees.length) {
+    throw createHttpError('处理人员不在可选范围内', 400);
+  }
+
+  await ensureProjectWorkItemBitable(token, project, user, targetConfig);
+  const targetNode = await findProjectWorkItemNode(token, project.projectId, targetConfig);
+  const targetContext = await getCachedWorkItemTableContext(token, targetNode, targetConfig);
+  let targetFields = await ensureWorkItemRuntimeSchema(token, targetContext, targetConfig);
+  validateWorkItemTableSchema(targetFields, targetConfig);
+  const copiedAttachments = await copyFeedbackAttachmentsToWorkItem({
+    token,
+    feedbackRecord,
+    feedbackConfig,
+    feedbackTableId: feedbackContext.tableId,
+    targetAppToken: targetContext.appToken,
+    targetTableId: targetContext.tableId,
+    sourceAttachmentTokens,
+  });
+  const newFiles = (files || []).filter((file) => file.fieldName === 'attachments');
+  if (copiedAttachments.length + newFiles.length > MAX_SUBMIT_ATTACHMENT_COUNT) {
+    throw createHttpError(`一次最多上传 ${MAX_SUBMIT_ATTACHMENT_COUNT} 个附件`, 400);
+  }
+  const uploadedAttachments = newFiles.length > 0
+    ? await uploadWorkItemSubmitAttachments(
+        token,
+        targetContext.appToken,
+        targetContext.tableId,
+        targetFields,
+        targetConfig,
+        newFiles,
+      )
+    : [];
+  if (uploadedAttachments.length > 0) {
+    targetFields = await fetchCachedBitableFields(
+      token,
+      targetContext.appToken,
+      targetContext.tableId,
+    );
+  }
+
+  const linkedAt = Date.now();
+  const feedbackItem = normalizeWorkItemRecords([feedbackRecord], user, feedbackConfig)[0];
+  const reverseLink = createRelatedFeedbackDocument({
+    recordId: feedbackItem.recordId,
+    feedbackId: feedbackItem.feedbackId,
+    title: feedbackItem.title,
+    proposers,
+    linkedAt,
+    linkedBy: user,
+  });
+  const sourceMutationId = buildFeedbackResolutionSourceMutationId({
+    projectId: project.projectId,
+    feedbackRecordId: feedbackItem.recordId,
+    clientMutationId,
+  });
+  const targetResult = await workItemTableMutationQueue.run(
+    buildWorkItemTableMutationKey(project.projectId, resolutionType),
+    async () => {
+      const records = await fetchBitableRecords(token, {
+        appToken: targetContext.appToken,
+        tableId: targetContext.tableId,
+        viewId: '',
+        fieldNames: {},
+      }, { consistency: 'fresh' });
+      const existing = findWorkItemBySourceMutationId(
+        records,
+        targetConfig.fieldNames.comments,
+        sourceMutationId,
+        fingerprint,
+      );
+      if (existing) {
+        return { record: existing, created: false };
+      }
+      const record = await createWorkItemRecord(token, {
+        appToken: targetContext.appToken,
+        tableId: targetContext.tableId,
+        records,
+        fields: targetFields,
+        toolConfig: targetConfig,
+        user,
+        payload: {
+          title,
+          description,
+          priority,
+          proposers,
+          assignees: allowedAssignees,
+          requiresSubmissionAttachment,
+          expectedDays,
+          contactInfo: null,
+          attachments: [...copiedAttachments, ...uploadedAttachments],
+          relatedFeedback: reverseLink,
+          sourceMutationId,
+          sourceMutationFingerprint: fingerprint,
+        },
+      });
+      return { record, created: true };
+    },
+  );
+  const targetItem = normalizeWorkItemRecords([targetResult.record], user, targetConfig)[0];
+  if (!targetItem) {
+    throw new Error(`创建${targetConfig.itemLabel}后无法读取记录`);
+  }
+
+  const nextStatus = getFeedbackResolutionStatus(resolutionType);
+  const statusChange = buildStatusChangeLogItem(
+    user,
+    currentStatus,
+    nextStatus,
+    `已转为${targetConfig.itemLabel} ${targetItem.itemId || ''}`.trim(),
+    {
+      clientMutationId,
+      mutationFingerprint: fingerprint,
+      notifyProposer: false,
+    },
+  );
+  const nextStatusDocument = {
+    version: 1,
+    items: [...statusDocument.items, statusChange],
+  };
+  const effectiveLinkedAt = targetItem.relatedFeedback?.linkedAt || linkedAt;
+  const relatedItemDocument = createFeedbackRelatedItemDocument({
+    type: resolutionType,
+    recordId: targetItem.recordId,
+    itemId: targetItem.itemId,
+    title: targetItem.title,
+    linkedAt: effectiveLinkedAt,
+    linkedBy: user,
+  });
+  await updateBitableRecordFields(
+    token,
+    feedbackContext.appToken,
+    feedbackContext.tableId,
+    feedbackItem.recordId,
+    {
+      [feedbackConfig.fieldNames.status]: nextStatus,
+      [feedbackConfig.fieldNames.relatedItem]: serializeFeedbackResolutionDocument(
+        relatedItemDocument,
+      ),
+      [feedbackConfig.fieldNames.statusChangeLog]: JSON.stringify(nextStatusDocument),
+    },
+  );
+  const updatedFeedbackRecord = await fetchWorkItemRecordById(
+    token,
+    feedbackContext.appToken,
+    feedbackContext.tableId,
+    feedbackItem.recordId,
+    feedbackConfig,
+    { consistency: 'fresh' },
+  );
+  const feedback = normalizeWorkItemRecords([updatedFeedbackRecord], user, feedbackConfig)[0] || null;
+  publishWorkItemUpdated({
+    projectId: project.projectId,
+    toolId: resolutionType,
+    recordId: targetItem.recordId,
+  });
+  publishWorkItemUpdated({
+    projectId: project.projectId,
+    toolId: 'feedback',
+    recordId: feedbackItem.recordId,
+  });
+  const recipients = needsAssigneeAssignment
+    ? projectAccess.developmentSuperAdmins
+    : allowedAssignees;
+  const notificationResults = await notifyWorkItemCreationRecipients(token, recipients, {
+    project,
+    item: targetItem,
+    submitter: proposers[0],
+    request,
+    toolConfig: targetConfig,
+    needsAssigneeAssignment,
+  });
+  return {
+    feedback,
+    item: targetItem,
+    resolution: {
+      type: resolutionType,
+      status: nextStatus,
+      relatedItem: relatedItemDocument,
+    },
+    notificationResults,
+    assignmentEscalated: needsAssigneeAssignment,
+    duplicate: false,
+  };
+}
+
+function buildFeedbackResolutionSourceMutationId({
+  projectId,
+  feedbackRecordId,
+  clientMutationId,
+}) {
+  const digest = crypto.createHash('sha256').update([
+    projectId,
+    feedbackRecordId,
+    clientMutationId,
+  ].join('|')).digest('hex').slice(0, 40);
+  return `feedback-resolution:${digest}`;
+}
+
+async function buildExistingFeedbackResolutionResult({
+  token,
+  project,
+  user,
+  feedbackRecord,
+  feedbackConfig,
+  relatedItem,
+}) {
+  const feedback = normalizeWorkItemRecords([feedbackRecord], user, feedbackConfig)[0] || null;
+  let item = null;
+  if (relatedItem.recordId && ['requirements', 'bugs'].includes(relatedItem.type)) {
+    try {
+      const targetConfig = getWorkItemToolConfig(relatedItem.type);
+      const targetNode = await findProjectWorkItemNode(token, project.projectId, targetConfig);
+      const targetContext = await fetchWorkItemTableContext(token, targetNode, targetConfig);
+      const targetRecord = await fetchWorkItemRecordById(
+        token,
+        targetContext.appToken,
+        targetContext.tableId,
+        relatedItem.recordId,
+        targetConfig,
+        { consistency: 'fresh' },
+      );
+      item = normalizeWorkItemRecords([targetRecord], user, targetConfig)[0] || null;
+    } catch {
+      item = null;
+    }
+  }
+  return {
+    feedback,
+    item,
+    resolution: {
+      type: relatedItem.type || (
+        feedback?.itemStatus === FEEDBACK_STATUSES.replied
+          ? FEEDBACK_RESOLUTION_TYPES.reply
+          : ''
+      ),
+      status: feedback?.itemStatus || '',
+      relatedItem: relatedItem.recordId ? relatedItem : null,
+    },
+    notificationResults: [],
+    duplicate: true,
+  };
+}
+
+async function copyFeedbackAttachmentsToWorkItem({
+  token,
+  feedbackRecord,
+  feedbackConfig,
+  feedbackTableId,
+  targetAppToken,
+  targetTableId,
+  sourceAttachmentTokens,
+}) {
+  const available = normalizeBitableAttachmentListValue(
+    feedbackRecord.fields?.[feedbackConfig.fieldNames.attachments],
+  );
+  const availableByToken = new Map(
+    available.map((attachment) => [attachment.fileToken, attachment]),
+  );
+  const selectedTokens = [...new Set(sourceAttachmentTokens)];
+  if (selectedTokens.some((fileToken) => !availableByToken.has(fileToken))) {
+    throw createHttpError('选择的源附件不属于当前反馈', 400);
+  }
+  const uploaded = [];
+  for (const fileToken of selectedTokens) {
+    const sourceAttachment = availableByToken.get(fileToken);
+    const downloadUrl = await getMediaDownloadUrl(token, fileToken, feedbackTableId);
+    if (!downloadUrl) {
+      throw new Error(`反馈附件不可下载：${sourceAttachment.name || fileToken}`);
+    }
+    const fileResponse = await fetch(downloadUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!fileResponse.ok) {
+      throw new Error(`下载反馈附件失败：${sourceAttachment.name || fileToken}`);
+    }
+    const buffer = await readFetchBodyWithLimit(fileResponse, MAX_SUBMIT_ATTACHMENT_BYTES);
+    uploaded.push(await uploadBitableAttachment(token, targetAppToken, targetTableId, {
+      name: sourceAttachment.name || fileToken,
+      mimeType: sourceAttachment.mimeType
+        || fileResponse.headers.get('content-type')
+        || 'application/octet-stream',
+      size: buffer.length,
+      buffer,
+    }));
+  }
+  return uploaded;
 }
 
 async function handleWorkItemUpdate(request, response, toolId) {
@@ -4259,6 +5275,9 @@ async function executeWorkItemStatusMutation({
   request = null,
 }) {
   const toolConfig = getWorkItemToolConfig(toolId);
+  if (toolId === 'feedback') {
+    throw createHttpError('反馈处理状态只能通过反馈分类操作更新', 400);
+  }
   return workItemMutationQueue.run(
     buildWorkItemMutationKey(projectId, toolId, recordId),
     async () => {
@@ -4808,7 +5827,7 @@ const httpServer = app.listen(port, host, () => {
     void feishuLongConnectionClient.start();
   }
   feishuAssistantService.start();
-  void migrateConfiguredWorkItemStatusOptions();
+  void migrateConfiguredWorkItemSchemas();
 });
 
 let shuttingDown = false;
@@ -4832,28 +5851,39 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   });
 }
 
-async function migrateConfiguredWorkItemStatusOptions() {
+async function migrateConfiguredWorkItemSchemas() {
   if (!appId || !appSecret || !runtimeConfig.knowledgeBase.spaceId) {
     return;
   }
 
   try {
     const token = await getTenantAccessToken();
-    const summary = await migrateWorkItemStatusOptions(token, [
+    const toolConfigs = [
       getWorkItemToolConfig('requirements'),
       getWorkItemToolConfig('bugs'),
-    ]);
+      getWorkItemToolConfig('feedback'),
+    ];
+    const statusSummary = await migrateWorkItemStatusOptions(token, toolConfigs);
+    const relationSummary = await migrateWorkItemRelationSchemas(token, toolConfigs);
     console.log(
-      `Work item status migration completed: scanned=${summary.scanned}, updated=${summary.updated}, unchanged=${summary.unchanged}, failed=${summary.failed}`,
+      `Work item status migration completed: scanned=${statusSummary.scanned}, updated=${statusSummary.updated}, unchanged=${statusSummary.unchanged}, failed=${statusSummary.failed}`,
     );
-    for (const failure of summary.failures) {
+    for (const failure of statusSummary.failures) {
       console.error(
         `Work item status migration failed: tool=${failure.toolId}, node=${failure.nodeTitle || 'unknown'}, message=${failure.message}`,
       );
     }
+    console.log(
+      `Work item relation migration completed: scanned=${relationSummary.scanned}, updated=${relationSummary.updated}, migratedRecords=${relationSummary.migratedRecords}, unchanged=${relationSummary.unchanged}, failed=${relationSummary.failed}`,
+    );
+    for (const failure of relationSummary.failures) {
+      console.error(
+        `Work item relation migration failed: tool=${failure.toolId}, node=${failure.nodeTitle || 'unknown'}, message=${failure.message}`,
+      );
+    }
   } catch (error) {
     console.error(
-      `Work item status migration failed: ${error instanceof Error ? error.message : String(error || 'unknown error')}`,
+      `Work item schema migration failed: ${error instanceof Error ? error.message : String(error || 'unknown error')}`,
     );
   }
 }
@@ -4988,6 +6018,7 @@ async function collectTodoNotificationItemsForUser(token, user) {
           project,
           toolId: toolConfig.toolId,
           items: await getProjectWorkItems(token, project, user, toolConfig),
+          isTestAdmin: toolConfig.toolId === 'testTasks' && Boolean(project.isTestAdmin),
         },
         error: null,
       };
@@ -5012,6 +6043,15 @@ async function collectTodoNotificationItemsForUser(token, user) {
 
 async function getProjectWaitingWorkItemCount(token, project, user, toolConfig) {
   const items = await getProjectWorkItems(token, project, user, toolConfig);
+  if (toolConfig.toolId === 'testTasks') {
+    const isTestAdmin = Boolean(project?.isTestAdmin);
+    return items.filter((item) => (
+      isTestAdmin
+        ? ['待测试', '测试中'].includes(item.itemStatus)
+        : item.itemStatus === '测试中'
+          && item.assignees.some((assignee) => isSameUser(assignee, user))
+    )).length;
+  }
   return countWaitingAssignedWorkItems(toolConfig.toolId, items, user);
 }
 
@@ -5025,7 +6065,9 @@ async function getProjectWorkItems(token, project, user, toolConfig) {
       viewId: '',
       fieldNames: {},
     });
-    return normalizeWorkItemRecords(records, user, toolConfig);
+    return toolConfig.toolId === 'testTasks'
+      ? normalizeTestTaskRecords(records, user, project)
+      : normalizeWorkItemRecords(records, user, toolConfig);
   } catch (error) {
     if (isMissingWorkItemListError(error, toolConfig)) {
       return [];
@@ -5217,11 +6259,14 @@ function buildPermissionContext(permissionRecords, toolPermissionRecords, user) 
     const isSuperAdmin = departments.includes(SUPER_ADMIN_DEPARTMENT);
     const developmentSuperAdminField = getDevelopmentSuperAdminFieldName();
     const isDevelopmentSuperAdmin = departments.includes(developmentSuperAdminField);
+    const testAdministratorField = getTestAdministratorFieldName();
+    const isTestAdmin = departments.includes(testAdministratorField);
     const allowedToolIds = buildAllowedToolIds(
       departments,
       toolMatrix,
       isSuperAdmin,
       isDevelopmentSuperAdmin,
+      isTestAdmin,
     );
     if (
       isAiPlanningProjectEnabled(projectPermission.projectId)
@@ -5236,8 +6281,12 @@ function buildPermissionContext(permissionRecords, toolPermissionRecords, user) 
       departments,
       isSuperAdmin,
       isDevelopmentSuperAdmin,
+      isTestAdmin,
       developmentSuperAdmins: uniqueUsers(
         projectPermission.usersByDepartment[developmentSuperAdminField] || [],
+      ).map(toMentionableUser),
+      testAdministrators: uniqueUsers(
+        projectPermission.usersByDepartment[testAdministratorField] || [],
       ).map(toMentionableUser),
       allowedToolIds,
       allowedTools,
@@ -5282,6 +6331,7 @@ function getProjectPermissionDepartments() {
     [
       ...fields.permissionUsers,
       fields.developmentSuperAdmins,
+      fields.testAdministrators,
     ].map((fieldName) => String(fieldName || '').trim()).filter(Boolean),
   )];
 }
@@ -5290,6 +6340,12 @@ function getDevelopmentSuperAdminFieldName() {
   return String(
     runtimeConfig.bitable.projectPermission.fieldNames.developmentSuperAdmins
     || DEFAULT_DEVELOPMENT_SUPER_ADMIN_FIELD,
+  ).trim();
+}
+
+function getTestAdministratorFieldName() {
+  return String(
+    runtimeConfig.bitable.projectPermission.fieldNames.testAdministrators || '测试管理员',
   ).trim();
 }
 
@@ -5303,11 +6359,18 @@ function isUserInKeySet(user, userKeys) {
   return Array.from(buildUserKeySet(user)).some((key) => userKeys.has(key));
 }
 
-function buildAllowedToolIds(departments, toolMatrix, isSuperAdmin, isDevelopmentSuperAdmin) {
+function buildAllowedToolIds(
+  departments,
+  toolMatrix,
+  isSuperAdmin,
+  isDevelopmentSuperAdmin,
+  isTestAdmin,
+) {
   const allowedToolIds = new Set(['overview', VERSION_MANAGEMENT_TOOL_ID]);
   const roleGrantedToolIds = getRoleGrantedWorkItemToolIds({
     isSuperAdmin,
     isDevelopmentSuperAdmin,
+    isTestAdmin,
     allToolIds: PERMISSION_TOOL_DEFINITIONS.map((tool) => tool.id),
   });
   for (const toolId of roleGrantedToolIds) {
@@ -5366,8 +6429,17 @@ function buildMentionableUsersByTool(projectPermission, toolMatrix) {
   const admins = projectPermission.usersByDepartment[SUPER_ADMIN_DEPARTMENT] || [];
   const developmentSuperAdminField = getDevelopmentSuperAdminFieldName();
   const developmentSuperAdmins = projectPermission.usersByDepartment[developmentSuperAdminField] || [];
+  const testAdministratorField = getTestAdministratorFieldName();
+  const testAdministrators = projectPermission.usersByDepartment[testAdministratorField] || [];
 
   for (const tool of PERMISSION_TOOL_DEFINITIONS) {
+    if (tool.id === 'testTasks') {
+      result[tool.id] = uniqueUsers([
+        ...(projectPermission.usersByDepartment['测试'] || []),
+        ...testAdministrators,
+      ]).map(toMentionableUser);
+      continue;
+    }
     const users = [];
     for (const admin of admins) {
       users.push(admin);
@@ -5432,6 +6504,8 @@ function attachProjectAccess(project, projectAccess) {
     departments: projectAccess.departments,
     isSuperAdmin: projectAccess.isSuperAdmin,
     isDevelopmentSuperAdmin: projectAccess.isDevelopmentSuperAdmin,
+    isTestAdmin: projectAccess.isTestAdmin,
+    testAdministrators: projectAccess.testAdministrators,
     allowedTools: projectAccess.allowedTools,
     mentionableUsersByTool: projectAccess.mentionableUsersByTool,
     aiPlanning: {
@@ -6124,7 +7198,16 @@ function normalizePriorityValue(value) {
 function getWorkItemToolConfig(toolId) {
   const definition = getWorkItemToolDefinition(toolId);
   const knowledgeBase = runtimeConfig.knowledgeBase;
-  const source = definition.toolId === 'feedback'
+  const source = definition.toolId === 'testTasks'
+    ? {
+        parentName: knowledgeBase.testTasksParentName,
+        templateName: knowledgeBase.testTasksTemplateName,
+        templateAppToken: knowledgeBase.testTasksTemplateAppToken,
+        idPrefix: knowledgeBase.testTasksIdPrefix,
+        idDigits: knowledgeBase.testTasksIdDigits,
+        fieldNames: knowledgeBase.testTasksFieldNames,
+      }
+    : definition.toolId === 'feedback'
     ? {
         parentName: knowledgeBase.feedbackParentName,
         templateName: knowledgeBase.feedbackTemplateName,
@@ -6161,6 +7244,9 @@ function normalizeRequirementRecords(records, currentUser) {
 }
 
 function normalizeWorkItemRecords(records, currentUser, toolConfig) {
+  if (toolConfig.toolId === 'testTasks') {
+    return normalizeTestTaskRecords(records, currentUser);
+  }
   const fields = toolConfig.fieldNames;
   const now = Date.now();
 
@@ -6184,6 +7270,13 @@ function normalizeWorkItemRecords(records, currentUser, toolConfig) {
       const submittedAttachments = toolConfig.toolId === 'requirements'
         ? normalizeBitableAttachmentListValue(source[fields.submittedAttachments])
         : [];
+      const attachments = normalizeBitableAttachmentListValue(source[fields.attachments]);
+      const relatedItem = toolConfig.toolId === 'feedback'
+        ? normalizeFeedbackRelatedItemDocument(source[fields.relatedItem])
+        : null;
+      const relatedFeedback = ['requirements', 'bugs'].includes(toolConfig.toolId)
+        ? normalizeRelatedFeedbackDocument(source[fields.relatedFeedback])
+        : null;
 
       return {
         recordId: String(record.record_id || record.recordId || ''),
@@ -6204,7 +7297,17 @@ function normalizeWorkItemRecords(records, currentUser, toolConfig) {
         channel: toolConfig.toolId === 'feedback' ? normalizeTextValue(source[fields.channel]) : '',
         contactInfo,
         requiresSubmissionAttachment,
+        attachments,
+        attachmentsFieldName: fields.attachments || '',
         submittedAttachments,
+        relatedItem,
+        relatedItemParseError: relatedItem?.error || '',
+        relatedFeedback,
+        relatedFeedbackParseError: relatedFeedback?.error || '',
+        relatedItemFieldName: toolConfig.toolId === 'feedback' ? fields.relatedItem : '',
+        relatedFeedbackFieldName: ['requirements', 'bugs'].includes(toolConfig.toolId)
+          ? fields.relatedFeedback
+          : '',
         requiresSubmissionAttachmentFieldName: toolConfig.toolId === 'requirements'
           ? fields.requiresSubmissionAttachment
           : '',
@@ -6244,13 +7347,18 @@ async function createWorkItemRecord(token, context) {
     values[fieldNames.channel] = toolConfig.channelValue;
   }
   if (fieldNames.status) {
-    const defaultStatus = getDefaultWorkItemStatus(fields, toolConfig);
+    const defaultStatus = toolConfig.toolId === 'feedback'
+      ? FEEDBACK_STATUSES.waiting
+      : getDefaultWorkItemStatus(fields, toolConfig);
     if (defaultStatus) {
       values[fieldNames.status] = defaultStatus;
     }
   }
   if (fieldNames.proposer) {
-    values[fieldNames.proposer] = [toBitableUserValue(user)];
+    const proposers = Array.isArray(payload.proposers) && payload.proposers.length > 0
+      ? payload.proposers
+      : [user];
+    values[fieldNames.proposer] = proposers.map(toBitableUserValue).filter(Boolean);
   }
   if (fieldNames.assignees) {
     values[fieldNames.assignees] = (payload.assignees || []).map(toBitableUserValue).filter(Boolean);
@@ -6267,15 +7375,29 @@ async function createWorkItemRecord(token, context) {
   if (toolConfig.toolId === 'feedback' && fieldNames.contactInfo && payload.contactInfo) {
     values[fieldNames.contactInfo] = JSON.stringify(payload.contactInfo);
   }
+  if (
+    ['requirements', 'bugs'].includes(toolConfig.toolId)
+    && fieldNames.relatedFeedback
+    && payload.relatedFeedback
+  ) {
+    values[fieldNames.relatedFeedback] = serializeFeedbackResolutionDocument(payload.relatedFeedback);
+  }
   if (fieldNames.attachments && Array.isArray(payload.attachments) && payload.attachments.length > 0) {
     values[fieldNames.attachments] = payload.attachments.map(toBitableAttachmentValue).filter(Boolean);
   }
   if (fieldNames.comments && payload.sourceMutationId) {
+    const normalizedSourceMutationId = String(payload.sourceMutationId).slice(0, 100);
+    const normalizedSourceMutationFingerprint = String(
+      payload.sourceMutationFingerprint || '',
+    ).trim();
     values[fieldNames.comments] = JSON.stringify({
       version: 1,
       items: [],
       internal: {
-        sourceMutationIds: [String(payload.sourceMutationId).slice(0, 100)],
+        sourceMutationIds: [normalizedSourceMutationId],
+        sourceMutationFingerprints: normalizedSourceMutationFingerprint
+          ? { [normalizedSourceMutationId]: normalizedSourceMutationFingerprint }
+          : {},
       },
     });
   }
@@ -6313,6 +7435,39 @@ function validateWorkItemTableSchema(fields, toolConfig) {
   const fieldByName = new Map(normalizeBitableFields(fields).map((field) => [field.fieldName, field]));
   const names = toolConfig.fieldNames;
 
+  if (toolConfig.toolId === 'testTasks') {
+    const requirements = [
+      [names.taskId, '文本', (field) => getServerFieldTypeNumber(field) === 1],
+      [names.title, '文本', (field) => getServerFieldTypeNumber(field) === 1],
+      [names.content, '文本', (field) => getServerFieldTypeNumber(field) === 1],
+      [names.createdAt, '日期', isBitableDateField],
+      [names.creator, '人员', isBitableUserField],
+      [names.testers, '人员', isBitableUserField],
+      [names.status, '单选', isBitableSingleSelectField],
+      [names.statusChangeLog, '文本', (field) => getServerFieldTypeNumber(field) === 1],
+      [names.comments, '文本', (field) => getServerFieldTypeNumber(field) === 1],
+      [names.results, '文本', (field) => getServerFieldTypeNumber(field) === 1],
+      [names.attachments, '附件', isBitableAttachmentField],
+      [names.relatedFeedback, '文本', (field) => getServerFieldTypeNumber(field) === 1],
+    ];
+    for (const [fieldName, expectedType, matchesType] of requirements) {
+      const field = fieldByName.get(fieldName);
+      if (!field) {
+        throw new Error(`测试任务模板缺少“${fieldName}”字段`);
+      }
+      if (!matchesType(field)) {
+        throw new Error(`测试任务模板字段“${fieldName}”必须是${expectedType}类型`);
+      }
+    }
+    const statusOptions = getFieldOptionNames(fieldByName.get(names.status));
+    for (const status of Object.values(TEST_TASK_STATUSES)) {
+      if (!statusOptions.includes(status)) {
+        throw new Error(`测试任务模板“${names.status}”缺少“${status}”选项`);
+      }
+    }
+    return;
+  }
+
   if (toolConfig.toolId === 'requirements' || toolConfig.toolId === 'bugs') {
     const statusField = fieldByName.get(names.status);
     if (!statusField) {
@@ -6325,6 +7480,13 @@ function validateWorkItemTableSchema(fields, toolConfig) {
     const acceptanceStatus = String(toolConfig.acceptanceStatus || '').trim();
     if (acceptanceStatus && !getFieldOptionNames(statusField).includes(acceptanceStatus)) {
       throw new Error(`${toolConfig.itemLabel}模板“${names.status}”缺少“${acceptanceStatus}”选项`);
+    }
+    const relatedFeedbackField = fieldByName.get(names.relatedFeedback);
+    if (!relatedFeedbackField) {
+      throw new Error(`${toolConfig.itemLabel}模板缺少“${names.relatedFeedback}”字段`);
+    }
+    if (getServerFieldTypeNumber(relatedFeedbackField) !== 1) {
+      throw new Error(`${toolConfig.itemLabel}模板字段“${names.relatedFeedback}”必须是文本类型`);
     }
   }
 
@@ -6370,6 +7532,7 @@ function validateWorkItemTableSchema(fields, toolConfig) {
     [names.expectedDays, '数字', isBitableNumberField],
     [names.contactInfo, '文本', (field) => getServerFieldTypeNumber(field) === 1],
     [names.attachments, '附件', isBitableAttachmentField],
+    [names.relatedItem, '文本', (field) => getServerFieldTypeNumber(field) === 1],
     [names.comments, '文本', (field) => getServerFieldTypeNumber(field) === 1],
     [names.statusChangeLog, '文本', (field) => getServerFieldTypeNumber(field) === 1],
   ];
@@ -6385,7 +7548,7 @@ function validateWorkItemTableSchema(fields, toolConfig) {
   }
 
   const statusOptions = getFieldOptionNames(fieldByName.get(names.status));
-  for (const status of ['待处理', '处理中', '已完成', '已搁置', '已拒绝']) {
+  for (const status of Object.values(FEEDBACK_STATUSES)) {
     if (!statusOptions.includes(status)) {
       throw new Error(`反馈模板“${names.status}”缺少“${status}”选项`);
     }
@@ -6561,14 +7724,99 @@ function normalizeStoredComment(item) {
   };
 }
 
+function normalizeTestTaskRecords(records, currentUser, projectAccess = {}) {
+  const fields = runtimeConfig.knowledgeBase.testTasksFieldNames;
+  return (Array.isArray(records) ? records : [])
+    .map((record) => {
+      const source = record.fields || {};
+      const status = normalizeTextValue(source[fields.status]) || TEST_TASK_STATUSES.waiting;
+      const creators = normalizeUserListValue(source[fields.creator]);
+      const testers = sortCurrentUserFirst(
+        normalizeUserListValue(source[fields.testers]),
+        currentUser,
+      );
+      const content = normalizeTestTaskContentDocument(source[fields.content]);
+      const results = normalizeTestTaskResultsDocument(source[fields.results], content);
+      return {
+        recordId: String(record.record_id || record.recordId || ''),
+        itemId: normalizeTextValue(source[fields.taskId]),
+        taskId: normalizeTextValue(source[fields.taskId]),
+        requirementId: normalizeTextValue(source[fields.taskId]),
+        title: normalizeTextValue(source[fields.title]) || '未命名测试任务',
+        description: content.items.map((item) => item.content).join('\n'),
+        itemStatus: status,
+        requirementStatus: status,
+        priority: '',
+        assignees: testers,
+        testers,
+        proposers: creators,
+        creators,
+        proposedAt: normalizeDateTimestamp(source[fields.createdAt]),
+        createdAt: normalizeDateTimestamp(source[fields.createdAt]),
+        expectedDays: null,
+        remainingDays: null,
+        content,
+        results,
+        attachments: normalizeBitableAttachmentListValue(source[fields.attachments]),
+        relatedFeedback: parseGenericVersionedDocument(source[fields.relatedFeedback], {
+          version: 1,
+          revision: 1,
+          items: [],
+        }),
+        comments: normalizeCommentsForClient(parseCommentsDocument(source[fields.comments], false)),
+        commentsParseError: getCommentsParseError(source[fields.comments]),
+        statusChangeLog: normalizeStatusChangeLogForClient(
+          parseStatusChangeLogDocument(source[fields.statusChangeLog], false),
+        ),
+        statusChangeLogParseError: getStatusChangeLogParseError(source[fields.statusChangeLog]),
+        permissions: buildTestTaskPermissions({
+          status,
+          isCreator: creators.some((creator) => isSameUser(creator, currentUser)),
+          isSuperAdmin: Boolean(projectAccess.isSuperAdmin),
+          isTestAdmin: Boolean(projectAccess.isTestAdmin),
+        }),
+        isMine: Boolean(projectAccess.isTestAdmin)
+          ? ['待测试', '测试中'].includes(status)
+          : status === '测试中' && testers.some((tester) => isSameUser(tester, currentUser)),
+        rawFields: source,
+      };
+    })
+    .filter((task) => task.itemId || task.title !== '未命名测试任务' || task.content.items.length > 0)
+    .sort((left, right) => right.createdAt - left.createdAt);
+}
+
+function parseGenericVersionedDocument(value, fallback) {
+  const text = normalizeTextValue(value).trim();
+  if (!text) {
+    return fallback;
+  }
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function normalizeCommentInternal(value) {
   const sourceMutationIds = Array.isArray(value?.sourceMutationIds)
     ? value.sourceMutationIds
       .map((item) => String(item || '').trim().slice(0, 100))
       .filter(Boolean)
     : [];
+  const sourceMutationFingerprints = {};
+  if (value?.sourceMutationFingerprints && typeof value.sourceMutationFingerprints === 'object') {
+    for (const [mutationId, fingerprint] of Object.entries(value.sourceMutationFingerprints)) {
+      const normalizedMutationId = String(mutationId || '').trim().slice(0, 100);
+      const normalizedFingerprint = String(fingerprint || '').trim().slice(0, 200);
+      if (normalizedMutationId && normalizedFingerprint && sourceMutationIds.includes(normalizedMutationId)) {
+        sourceMutationFingerprints[normalizedMutationId] = normalizedFingerprint;
+      }
+    }
+  }
   return {
     sourceMutationIds: [...new Set(sourceMutationIds)].slice(0, 20),
+    sourceMutationFingerprints,
   };
 }
 
@@ -6859,7 +8107,16 @@ function compareWorkItems(a, b, toolConfig = getWorkItemToolConfig('requirements
 function getWorkItemStatusOrder(toolId, status) {
   const order = toolId === 'bugs'
     ? ['未处理', '修复中', '已修复', '无法复现', '已搁置', '关闭', '未设置状态']
-    : ['待处理', '处理中', '已完成', '已搁置', '已拒绝', '已处理', '关闭', '未设置状态'];
+    : toolId === 'feedback'
+      ? [
+          FEEDBACK_STATUSES.waiting,
+          FEEDBACK_STATUSES.convertedToRequirement,
+          FEEDBACK_STATUSES.convertedToBug,
+          FEEDBACK_STATUSES.replied,
+          ...FEEDBACK_LEGACY_COMPLETED_STATUSES,
+          '未设置状态',
+        ]
+      : ['待处理', '处理中', '已完成', '已搁置', '已拒绝', '已处理', '关闭', '未设置状态'];
   const index = order.indexOf(String(status || '').trim());
   return index === -1 ? order.length : index;
 }
@@ -7221,6 +8478,40 @@ async function ensureProjectRequirementBitable(token, project, currentUser) {
   return ensureProjectWorkItemBitable(token, project, currentUser, getWorkItemToolConfig('requirements'));
 }
 
+async function resolveTestTaskServiceContext({ token, project, user, ensure }) {
+  const toolConfig = getWorkItemToolConfig('testTasks');
+  let ensureResult = null;
+  if (ensure) {
+    ensureResult = await ensureProjectWorkItemBitable(token, project, user, toolConfig);
+  }
+  const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
+  const { appToken, tableId } = await getCachedWorkItemTableContext(token, node, toolConfig);
+  await ensureCachedBitableTextField(token, appToken, tableId, toolConfig.fieldNames.comments);
+  const fields = await fetchCachedBitableFields(token, appToken, tableId);
+  validateWorkItemTableSchema(fields, toolConfig);
+  setCachedWorkItemTableContext(toolConfig, node, { appToken, tableId });
+  return {
+    appToken,
+    tableId,
+    viewId: '',
+    fieldNames: {},
+    fields: normalizeBitableFields(fields),
+    status: ensureResult?.status || 'exists',
+  };
+}
+
+async function ensureWorkItemRuntimeSchema(token, context, toolConfig) {
+  await ensureCachedBitableTextField(
+    token,
+    context.appToken,
+    context.tableId,
+    toolConfig.fieldNames.comments,
+  );
+  await ensureWorkItemRelationSchema(token, context, toolConfig);
+  const { fields } = await ensureWorkItemStatusOptions(token, context, toolConfig);
+  return fields;
+}
+
 async function ensureProjectWorkItemBitable(token, project, currentUser, toolConfig) {
   const parentNode = (await findWikiNodeByTitle(token, toolConfig.parentName)) || (await createWikiNode(token, '', toolConfig.parentName));
   if (!parentNode) {
@@ -7246,7 +8537,7 @@ async function ensureProjectWorkItemBitable(token, project, currentUser, toolCon
   }
 
   const templateContext = await resolveWorkItemTableContext(token, templateNode, toolConfig);
-  await ensureWorkItemStatusOptions(token, templateContext, toolConfig);
+  await ensureWorkItemRuntimeSchema(token, templateContext, toolConfig);
   const copiedNode = await copyWikiNode(token, templateNode.nodeToken, parentNode.nodeToken, project.projectId);
   setCachedWorkItemNode(toolConfig, project.projectId, copiedNode);
   return buildWorkItemEnsureResult('created', copiedNode, await fetchWorkItemItemsWithCopyRetry(token, copiedNode, currentUser, toolConfig), toolConfig);
@@ -7375,8 +8666,11 @@ async function fetchWorkItemItems(token, node, currentUser, toolConfig) {
 
   const { appToken, tableId } = await getCachedWorkItemTableContext(token, node, toolConfig);
 
-  await ensureCachedBitableTextField(token, appToken, tableId, toolConfig.fieldNames.comments);
-  const { fields } = await ensureWorkItemStatusOptions(token, { appToken, tableId }, toolConfig);
+  const fields = await ensureWorkItemRuntimeSchema(
+    token,
+    { appToken, tableId },
+    toolConfig,
+  );
   validateWorkItemTableSchema(fields, toolConfig);
   setCachedWorkItemTableContext(toolConfig, node, { appToken, tableId });
   const records = await fetchBitableRecords(token, {
@@ -7718,6 +9012,184 @@ async function notifyWorkItemCreationRecipients(token, recipients, context) {
   return results;
 }
 
+async function notifyFeedbackReplyRecipients(token, recipients, context) {
+  const results = [];
+  for (const user of normalizeMentionedUsers(recipients)) {
+    try {
+      await sendFeishuInteractiveMessage(
+        token,
+        user.openId,
+        buildFeedbackReplyNotificationCard(user, context),
+      );
+      results.push({ openId: user.openId, name: user.name, ok: true, message: '' });
+    } catch (error) {
+      results.push({
+        openId: user.openId,
+        name: user.name,
+        ok: false,
+        message: error instanceof Error ? error.message : '通知失败',
+      });
+    }
+  }
+  return results;
+}
+
+async function notifyTestTaskRecipients(eventType, recipients, context) {
+  const token = await getTenantAccessToken();
+  const results = [];
+  for (const user of normalizeMentionedUsers(recipients)) {
+    try {
+      await sendFeishuInteractiveMessage(
+        token,
+        user.openId,
+        buildTestTaskNotificationCard(eventType, context),
+      );
+      results.push({ openId: user.openId, name: user.name, ok: true, message: '' });
+    } catch (error) {
+      results.push({
+        openId: user.openId,
+        name: user.name,
+        ok: false,
+        message: error instanceof Error ? error.message : '通知失败',
+      });
+    }
+  }
+  return results;
+}
+
+async function createFeedbackFromTestTaskDraft({
+  token,
+  project,
+  task,
+  resultItem,
+  draft,
+  sourceMutationId,
+}) {
+  const toolConfig = getWorkItemToolConfig('feedback');
+  await ensureProjectWorkItemBitable(token, project, draft.author, toolConfig);
+  const node = await findProjectWorkItemNode(token, project.projectId, toolConfig);
+  const { appToken, tableId } = await getCachedWorkItemTableContext(token, node, toolConfig);
+  const fields = await ensureWorkItemRuntimeSchema(
+    token,
+    { appToken, tableId },
+    toolConfig,
+  );
+  validateWorkItemTableSchema(fields, toolConfig);
+
+  return workItemTableMutationQueue.run(
+    buildWorkItemTableMutationKey(project.projectId, 'feedback'),
+    async () => {
+      const records = await fetchBitableRecords(token, {
+        appToken,
+        tableId,
+        viewId: '',
+        fieldNames: {},
+      }, { consistency: 'fresh' });
+      const duplicate = findWorkItemBySourceMutationId(
+        records,
+        toolConfig.fieldNames.comments,
+        sourceMutationId,
+      );
+      if (duplicate) {
+        return normalizeWorkItemRecords([duplicate], draft.author, toolConfig)[0];
+      }
+
+      const attachments = await copyTestTaskDraftAttachmentsToFeedback({
+        token,
+        project,
+        task,
+        draft,
+        feedbackAppToken: appToken,
+        feedbackTableId: tableId,
+      });
+      const createdRecord = await createWorkItemRecord(token, {
+        appToken,
+        tableId,
+        records,
+        fields,
+        toolConfig,
+        user: draft.author,
+        payload: {
+          title: String(draft.title || '').trim()
+            || buildDefaultTestFeedbackTitle(
+              task.title,
+              task.content.items.find((item) => item.id === resultItem.itemId)?.content,
+            ),
+          description: String(draft.content || resultItem.conclusion || '').trim(),
+          priority: '',
+          assignees: task.creators,
+          expectedDays: null,
+          contactInfo: normalizeFeedbackContactInfo({}, draft.author),
+          attachments,
+          sourceMutationId,
+        },
+      });
+      const item = normalizeWorkItemRecords([createdRecord], draft.author, toolConfig)[0];
+      if (item) {
+        await notifyWorkItemCreationRecipients(token, task.creators, {
+          project,
+          item,
+          submitter: draft.author,
+          toolConfig,
+          needsAssigneeAssignment: false,
+        });
+        publishWorkItemUpdated({
+          projectId: project.projectId,
+          toolId: 'feedback',
+          recordId: item.recordId,
+        });
+      }
+      return item;
+    },
+  );
+}
+
+async function copyTestTaskDraftAttachmentsToFeedback({
+  token,
+  project,
+  task,
+  draft,
+  feedbackAppToken,
+  feedbackTableId,
+}) {
+  const sourceAttachments = Array.isArray(draft.attachments) ? draft.attachments : [];
+  if (sourceAttachments.length === 0) {
+    return [];
+  }
+  const testContext = await resolveTestTaskServiceContext({
+    token,
+    project,
+    user: draft.author,
+    ensure: false,
+  });
+  const availableTokens = new Set(task.attachments.map((item) => item.fileToken));
+  const uploaded = [];
+  for (const attachment of sourceAttachments) {
+    const fileToken = String(attachment.fileToken || '').trim();
+    if (!availableTokens.has(fileToken)) {
+      throw new Error(`测试反馈附件不属于当前测试任务：${attachment.name || fileToken}`);
+    }
+    const downloadUrl = await getMediaDownloadUrl(token, fileToken, testContext.tableId);
+    if (!downloadUrl) {
+      throw new Error(`测试反馈附件不可下载：${attachment.name || fileToken}`);
+    }
+    const fileResponse = await fetch(downloadUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!fileResponse.ok) {
+      throw new Error(`下载测试反馈附件失败：${attachment.name || fileToken}`);
+    }
+    const buffer = await readFetchBodyWithLimit(fileResponse, MAX_SUBMIT_ATTACHMENT_BYTES);
+    uploaded.push(await uploadBitableAttachment(token, feedbackAppToken, feedbackTableId, {
+      name: attachment.name || fileToken,
+      mimeType: attachment.mimeType || fileResponse.headers.get('content-type') || 'application/octet-stream',
+      size: buffer.length,
+      buffer,
+    }));
+  }
+  return uploaded;
+}
+
 async function notifyWorkItemEditRecipients(token, recipients, context) {
   const uniqueUsers = normalizeMentionedUsers(recipients);
   const results = [];
@@ -8047,7 +9519,7 @@ function buildTodoNotificationCard(_user, context) {
   const elements = [
     buildCardTextElement(
       '待办汇总',
-      `需求 ${summary.counts.requirements} 项 · Bug ${summary.counts.bugs} 项 · 反馈 ${summary.counts.feedback} 项`,
+      `需求 ${summary.counts.requirements} 项 · Bug ${summary.counts.bugs} 项 · 测试任务 ${summary.counts.testTasks} 项 · 反馈 ${summary.counts.feedback} 项`,
     ),
     buildTodoNotificationListElement(summary.displayedItems),
   ];
@@ -8081,6 +9553,41 @@ function buildTodoNotificationCard(_user, context) {
       },
     },
     elements,
+  };
+}
+
+function buildTestTaskNotificationCard(eventType, context) {
+  const task = context.task || {};
+  const project = context.project || {};
+  const isStarted = eventType === 'started';
+  const link = buildPlatformExternalLink('test-task-detail', {
+    projectId: project.projectId || '',
+    tool: 'testTasks',
+    recordId: task.recordId || '',
+  });
+  const testerNames = normalizeMentionedUsers(context.testers || task.testers || [])
+    .map((item) => item.name || item.openId)
+    .filter(Boolean)
+    .join('、');
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      template: isStarted ? 'blue' : 'orange',
+      title: {
+        tag: 'plain_text',
+        content: isStarted ? '测试任务已开始测试' : '有新的待测试任务',
+      },
+    },
+    elements: [
+      buildCardTextElement('项目名称', `${project.projectName || '未命名项目'} (${project.projectId || '无ID'})`),
+      buildCardTextElement('测试任务', `${task.itemId || task.taskId || ''} ${task.title || '未命名测试任务'}`.trim()),
+      buildCardPersonElement(isStarted ? '操作人' : '创建人', context.actor || task.creators?.[0] || {}),
+      ...(isStarted ? [buildCardTextElement('测试人员', testerNames || '未设置')] : []),
+      {
+        tag: 'action',
+        actions: [buildCardLinkButton('打开测试任务', link)],
+      },
+    ],
   };
 }
 
@@ -8181,6 +9688,48 @@ function buildVersionCommentNotificationCard(_user, context) {
         tag: 'action',
         actions: [
           buildCardLinkButton('跳转至版本留言', link),
+        ],
+      },
+    ],
+  };
+}
+
+function buildFeedbackReplyNotificationCard(_user, context) {
+  const toolConfig = context.toolConfig || getWorkItemToolConfig('feedback');
+  const projectName = context.project?.projectName || '未命名项目';
+  const feedback = context.feedback || {};
+  const operator = context.operator || {};
+  const link = buildPlatformExternalLink(toolConfig.directDetailType, {
+    projectId: context.project?.projectId || '',
+    tool: toolConfig.toolId,
+    recordId: feedback.recordId || '',
+  }, context.request);
+
+  return {
+    config: {
+      wide_screen_mode: true,
+    },
+    header: {
+      template: 'turquoise',
+      title: {
+        tag: 'plain_text',
+        content: `您的反馈“${feedback.title || toolConfig.unnamedTitle}”有了回复`,
+      },
+    },
+    elements: [
+      buildCardLargeTextElement('回复内容', context.replyContent || '无'),
+      buildCardTextElement('项目名称', `${projectName} (${context.project?.projectId || '无ID'})`),
+      buildCardTextElement(
+        toolConfig.itemNameLabel,
+        feedback.itemId
+          ? `${feedback.title || toolConfig.unnamedTitle} (${feedback.itemId})`
+          : feedback.title || toolConfig.unnamedTitle,
+      ),
+      buildCardPersonElement('回复人', operator),
+      {
+        tag: 'action',
+        actions: [
+          buildCardLinkButton('查看反馈', link),
         ],
       },
     ],
@@ -8645,6 +10194,8 @@ function isEditableWorkItemField(field, toolConfig) {
     names.status,
     names.requiresSubmissionAttachment,
     names.submittedAttachments,
+    names.relatedItem,
+    names.relatedFeedback,
     names.comments,
     names.statusChangeLog,
   ].map((item) => String(item || '').trim()).filter(Boolean));
@@ -8822,7 +10373,13 @@ function getFallbackWorkItemStatusOptions(toolConfig) {
   const statuses = toolConfig?.toolId === 'bugs'
     ? ['未处理', '修复中', '待验收', '已修复', '无法复现', '已搁置', '关闭']
     : toolConfig?.toolId === 'feedback'
-      ? ['待处理', '处理中', '已完成', '已搁置', '已拒绝']
+      ? [
+          FEEDBACK_STATUSES.waiting,
+          FEEDBACK_STATUSES.convertedToRequirement,
+          FEEDBACK_STATUSES.convertedToBug,
+          FEEDBACK_STATUSES.replied,
+          ...FEEDBACK_LEGACY_COMPLETED_STATUSES,
+        ]
       : ['待处理', '处理中', '待验收', '已处理', '已完成', '关闭'];
   return statuses.map((name) => ({ name, color: '' }));
 }

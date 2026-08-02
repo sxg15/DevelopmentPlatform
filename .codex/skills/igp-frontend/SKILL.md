@@ -10,7 +10,10 @@ description: Maintain the IGP React/Vite frontend, including authentication shel
 Read `AGENTS.md`, then inspect only the owning frontend modules.
 
 - App startup or login: `src/main.jsx`, `src/ui/App.jsx`,
-  `src/ui/AppErrorBoundary.jsx`, `src/api/auth.js`,
+  `src/ui/AppErrorBoundary.jsx`, `src/ui/GlobalOperationOverlay.jsx`,
+  `src/ui/SessionExpiredOverlay.jsx`, `src/ui/pageInteractionLock.js`,
+  `src/ui/authNavigation.js`, `src/api/auth.js`, `src/api/client.js`,
+  `src/api/requestActivity.js`, `src/api/authenticationState.js`,
   `src/api/clientErrors.js`, `src/integrations/feishuH5.js`.
 - Personal settings: `src/ui/settings/PersonalSettingsDialog.jsx`,
   `src/ui/settings/mcpConfigUtils.js`, `src/api/personalSettings.js`, and
@@ -33,12 +36,25 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
   `src/ui/work-items/WorkItemTimeline.jsx`,
   `src/ui/work-items/workItemTimelineUtils.js`,
   `src/ui/workItemListUtils.js`, `src/api/workItems.js`.
+- Test tasks: `src/ui/test-tasks/TestTaskManagement.jsx`,
+  `src/api/testTasks.js`, `src/styles/testTasks.css`, and
+  `shared/testTaskUtils.js`.
 - Cache/drafts: `src/ui/localCache.js`.
 - Styling: `src/styles.css` and `src/styles/`.
 
 ## Rules
 
 - Put HTTP calls in `src/api/`; do not add direct `fetch` calls to React components.
+- Keep frontend HTTP requests bounded. Write requests must publish shared global
+  operation activity so the body-level overlay blocks pointer, touch, and keyboard
+  interaction until completion or timeout. Background diagnostics and silent
+  initialization may opt out explicitly; reads, polling, and SSE must not
+  repeatedly lock the interface.
+- Treat authenticated business API `401` responses and stable Feishu
+  authorization-expiration codes as a sticky global reauthorization state.
+  Initial `/api/me` probes and authentication endpoints must opt out. The refresh
+  action must preserve the current URL, set `forceAuth=1`, and replace the page so
+  an existing server session cannot bypass fresh Feishu authorization.
 - Keep the root error boundary and global runtime reporting active. Client reports
   must use `shared/clientErrorUtils.js` and must not include form values, work-item
   payloads, query strings, tokens, or runtime configuration.
@@ -65,6 +81,22 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
   Keep exact config generation in `mcpConfigUtils.js`, not in JSX.
 - Reuse `shared/workItemDefinitions.js` instead of duplicating route segments,
   labels, statuses, or field contracts.
+- Feedback details expose classification only while the item is `待分类` or a
+  legacy unfinished status and the viewer is a current assignee or project/global
+  administrator. Hide the generic status selector for feedback.
+- The feedback resolution dialog supports full requirement/Bug submission fields,
+  selected source attachments, new uploads, explicit unassigned routing, and
+  reply-only text. Requirement/Bug details link back through `关联反馈`; feedback
+  details link forward through `关联项`, and malformed relation JSON is visible and
+  blocks another conversion.
+- Keep the dedicated test-task list/detail workflow outside the generic work-item
+  form. It owns subtask editing, tester selection, per-item conclusions, feedback
+  drafts and attachments, administrator completion, comments, cached snapshots,
+  direct targets, and realtime refresh.
+- Render test-task actions from server permissions. Starting requires a selected
+  tester; only test administrators may adjust testers, edit results/drafts, or
+  complete. Completion explains that saved feedback drafts are submitted
+  immediately.
 - Keep pure formatting/filtering logic outside JSX when it can be tested.
 - Keep React Chrono lazy-loaded behind `WorkItemTimelinePanel`; a timeline load or
   render failure must not replace the work-item detail page.
@@ -83,8 +115,8 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - Preserve local snapshot and draft keys when changing workspace state.
 - Render every project tool with its required shared `iconKey`; keep a generic
   Lucide fallback for stale cached tool definitions.
-- Keep stylesheet import order: base, overview, work items, AI planning, auth, settings,
-  responsive.
+- Keep stylesheet import order: base, overview, version management, work items,
+  test tasks, AI planning, auth, settings, responsive.
 - Add component-specific CSS to the owning stylesheet; add cross-module responsive
   overrides to `responsive.css`.
 - Maintain existing dense operational UI patterns and verify text does not truncate

@@ -11,6 +11,7 @@ export async function fetchPersonalSettings() {
 export async function ensurePersonalSettingsRecord() {
   const payload = await requestJson('/api/me/settings/ensure', {
     method: 'POST',
+    globalOperation: false,
   });
   return {
     created: payload.created === true,

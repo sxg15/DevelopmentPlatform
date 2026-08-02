@@ -420,6 +420,23 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .workitem-relation-panel {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .workitem-relation-panel button {
+    width: 100%;
+  }
+
+  .feedback-source-attachments label {
+    grid-template-columns: auto auto minmax(0, 1fr);
+  }
+
+  .feedback-source-attachments small {
+    grid-column: 3;
+  }
+
   .workitem-submit-actions {
     flex-direction: column-reverse;
   }

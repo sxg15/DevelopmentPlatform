@@ -33,6 +33,9 @@ Read `AGENTS.md`, then locate the owning layer.
   `server/services/mcpAiPlanService.js`.
 - Version management provisioning and mutations:
   `server/services/versionManagementService.js`.
+- Test-task provisioning and workflow:
+  `server/services/testTaskService.js`, `shared/testTaskUtils.js`, and the
+  test-task route orchestration in `server/index.js`.
 - Codex read-only planning: `server/integrations/codexAppServerClient.js`,
   `server/integrations/codexApiBridge.js`,
   `server/services/aiPlanningService.js`,
@@ -55,6 +58,10 @@ Read `AGENTS.md`, then locate the owning layer.
 - Preserve existing route paths, methods, request payloads, response payloads,
   status codes, cookies, and SSE event shape unless the request explicitly changes
   the contract.
+- Normalize browser `/api` authentication failures through
+  `shared/authenticationErrorUtils.js`. Missing sessions return HTTP 401 with
+  `AUTH_EXPIRED`; recognized Feishu user-authorization expiry returns HTTP 401
+  with `FEISHU_AUTH_EXPIRED`. Keep `/mcp` authentication behavior independent.
 - Keep HTTP details and integration-specific caches under `server/integrations/`.
 - Keep process-local infrastructure state under `server/runtime/`.
 - Keep long-connection lifecycle in `server/integrations/`, cache state in
@@ -78,8 +85,36 @@ Read `AGENTS.md`, then locate the owning layer.
 - Reuse work-item permission, schema, notification, and unassigned-routing rules
   for assistant mutations. Preserve hidden source mutation metadata in comments
   JSON and serialize it out of browser/API payloads.
+- Keep feedback classification at
+  `POST /api/projects/:projectId/feedback/:recordId/resolve`. Permit current
+  feedback assignees plus project/global development administrators, reject
+  generic feedback status changes, and serialize each feedback mutation by record.
+- Ensure text fields `关联项` on feedback and `关联反馈` on requirement/Bug
+  templates and project tables. Migrate legacy unfinished feedback statuses to
+  `待分类`, preserve historical completed statuses, and reject existing relation
+  fields with a non-text type.
+- Feedback conversion must create at most one target record, retain all valid
+  source proposers, copy only selected source attachments, accept normal new
+  uploads, and use hidden source mutation IDs plus fingerprints so retry after a
+  failed source write reuses the target. Notify only target assignees or project
+  development super-admins.
+- Reply-only feedback resolution requires a valid internal Feishu proposer, writes
+  the reply comment and `已回复` status atomically, and sends the proposer card
+  afterward without rolling back a successful write when delivery fails.
 - Keep config normalization pure and test it without reading runtime secrets.
 - Apply project/tool permission checks before accessing work-item data.
+- Keep test-task mutations in `server/services/testTaskService.js`. Enforce
+  `待测试 -> 测试中 -> 已完成`; require a test administrator and at least one
+  project test user to start, and permit only test administrators to adjust
+  testers, edit results or drafts, and complete.
+- Store test-task content, results, and feedback associations as versioned JSON.
+  Feishu may return text fields as rich-text fragment arrays; join their text
+  values before JSON parsing instead of coercing the array directly to a string.
+  On completion, create feedback drafts idempotently by task record and subtask ID,
+  persist each successful association before continuing, and retain `测试中` with
+  retry details after a partial failure.
+- Include test tasks in overview, SSE, pending counts, and daily reminders, but do
+  not add them to MCP, version associations, AI planning, or private-chat actions.
 - Do not expose `appSecret`, tenant/user tokens, or runtime config values.
 - Keep `/api/client-errors` available before authentication and rate-limited so
   startup failures can be diagnosed without allowing log flooding. Normalize

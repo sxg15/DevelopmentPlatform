@@ -139,6 +139,18 @@ export function sliceWorkItemTimelineEvents(events, visibleCount = WORK_ITEM_TIM
   return normalizeTimelineArray(events).slice(0, normalizedCount);
 }
 
+export function buildWorkItemTimelineChronoId(event, index = 0) {
+  const normalizedType = normalizeTimelineText(event?.type)
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'event';
+  const normalizedTimestamp = normalizeWorkItemTimelineTimestamp(event?.occurredAt) || 0;
+  const normalizedIndex = Number.isFinite(Number(index))
+    ? Math.max(0, Math.floor(Number(index)))
+    : 0;
+
+  return `work-item-timeline-${normalizedType}-${normalizedTimestamp}-${normalizedIndex}`;
+}
+
 export function sortWorkItemTimelineEvents(events) {
   return normalizeTimelineArray(events)
     .map((event, stableIndex) => ({ event, stableIndex }))

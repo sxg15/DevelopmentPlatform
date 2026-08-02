@@ -1,10 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Bot,
+  Bug,
   CircleHelp,
+  ClipboardList,
+  ExternalLink,
   Link2,
   LoaderCircle,
+  MessageSquareReply,
+  Paperclip,
+  Send,
   Sparkles,
+  Trash2,
   Unlink2,
   X,
 } from 'lucide-react';
@@ -53,10 +61,13 @@ import {
   shouldConfirmStatusUpdateWithoutSubmissionAttachments,
 } from '../../../shared/requirementSubmissionAttachmentUtils.js';
 import {
+  FEEDBACK_LEGACY_ACTIVE_STATUSES,
+  FEEDBACK_STATUSES,
   PROJECT_TOOL_DEFINITIONS as PROJECT_TOOLS,
   REQUIREMENT_PRIORITIES,
   WORK_ITEM_TOOL_DEFINITIONS as WORK_ITEM_TOOL_CONFIGS,
 } from '../../../shared/workItemDefinitions.js';
+import { FEEDBACK_RESOLUTION_TYPES } from '../../../shared/feedbackResolutionUtils.js';
 import {
   WORK_ITEM_VERSION_ASSOCIATION_CONFIRMATION_TYPE,
   WORK_ITEM_VERSION_ASSOCIATION_OPERATIONS,
@@ -74,6 +85,7 @@ import {
   deleteWorkItem,
   ensureProjectWorkItems,
   fetchWorkItemRecord,
+  resolveFeedback,
   updateRequirementSubmissionAttachments,
   updateWorkItem,
   updateWorkItemStatus as updateRequirementStatus,
@@ -82,6 +94,7 @@ import { ProjectOverview } from '../ProjectOverview.jsx';
 import { VersionManagement } from '../versions/VersionManagement.jsx';
 import { AiPlanLibrary } from '../ai/AiPlanLibrary.jsx';
 import { AiPlanningWorkspace } from '../ai/AiPlanningWorkspace.jsx';
+import { TestTaskManagement } from '../test-tasks/TestTaskManagement.jsx';
 import { fetchAiProjectActivity } from '../../api/aiPlans.js';
 import {
   getProjectToolPendingCount,
@@ -391,7 +404,12 @@ export function PlatformWorkspace({ user, cacheUserKey }) {
         projectId
           ? {
               ...current,
-              [projectId]: nextCounts[projectId] || { requirements: 0, bugs: 0, feedback: 0 },
+              [projectId]: nextCounts[projectId] || {
+                requirements: 0,
+                bugs: 0,
+                testTasks: 0,
+                feedback: 0,
+              },
             }
           : nextCounts
       ));
@@ -412,6 +430,7 @@ export function PlatformWorkspace({ user, cacheUserKey }) {
       [normalizedProjectId]: {
         requirements: Number(current[normalizedProjectId]?.requirements || 0),
         bugs: Number(current[normalizedProjectId]?.bugs || 0),
+        testTasks: Number(current[normalizedProjectId]?.testTasks || 0),
         feedback: Number(current[normalizedProjectId]?.feedback || 0),
         [normalizedToolId]: Math.max(0, Number(count) || 0),
       },
@@ -487,6 +506,7 @@ function ProjectWorkspace({
   const [workItemFilters, setWorkItemFilters] = useState(() => getInitialWorkspacePreferences(cacheUserKey, project).workItemFilters);
   const [selectedWorkItemId, setSelectedWorkItemId] = useState('');
   const [selectedVersionId, setSelectedVersionId] = useState('');
+  const [selectedTestTaskId, setSelectedTestTaskId] = useState('');
   const [highlightCommentId, setHighlightCommentId] = useState('');
   const [aiPlanningOffer, setAiPlanningOffer] = useState(null);
   const [aiPlanningLaunch, setAiPlanningLaunch] = useState(null);
@@ -497,7 +517,9 @@ function ProjectWorkspace({
   const processedRealtimeEventRef = useRef('');
   const visibleTools = getProjectTools(project);
   const activeTool = visibleTools.find((tool) => tool.id === activeToolId) || visibleTools[0];
-  const activeWorkItemConfig = getWorkItemToolConfig(activeToolId);
+  const activeWorkItemConfig = activeToolId === 'testTasks'
+    ? null
+    : getWorkItemToolConfig(activeToolId);
   const activeWorkItemState = activeWorkItemConfig ? workItemStates[activeWorkItemConfig.toolId] || INITIAL_REQUIREMENTS_STATE : INITIAL_REQUIREMENTS_STATE;
   const projectName = project.projectName || '未命名项目';
   const mentionableUsersByTool = project.mentionableUsersByTool && typeof project.mentionableUsersByTool === 'object'
@@ -514,6 +536,7 @@ function ProjectWorkspace({
     setWorkItemFilters(preferences.workItemFilters);
     setSelectedWorkItemId('');
     setSelectedVersionId('');
+    setSelectedTestTaskId('');
     setHighlightCommentId('');
     setAiPlanningOffer(null);
     setAiPlanningLaunch(null);
@@ -651,6 +674,10 @@ function ProjectWorkspace({
     onDirectNotice?.({ type: 'idle', message: '' });
 
     const toolConfig = getWorkItemToolConfig(toolId);
+    if (toolId === 'testTasks') {
+      setSelectedWorkItemId('');
+      return;
+    }
     if (!toolConfig) {
       setSelectedWorkItemId('');
       return;
@@ -669,6 +696,13 @@ function ProjectWorkspace({
     setActiveToolId(toolId);
 
     const toolConfig = getWorkItemToolConfig(toolId);
+    if (toolId === 'testTasks') {
+      setSelectedTestTaskId(String(target.recordId || '').trim());
+      setSelectedWorkItemId('');
+      setHighlightCommentId('');
+      onDirectNotice?.({ type: 'idle', message: '' });
+      return;
+    }
     if (!toolConfig) {
       setSelectedWorkItemId('');
       setHighlightCommentId('');
@@ -824,6 +858,15 @@ function ProjectWorkspace({
   }
 
   async function handleOverviewItemOpen(item) {
+    if (item?.toolId === 'testTasks') {
+      if (!visibleTools.some((tool) => tool.id === 'testTasks')) {
+        onDirectNotice?.({ type: 'error', message: '没有权限查看该测试任务' });
+        return;
+      }
+      setSelectedTestTaskId(String(item?.recordId || '').trim());
+      setActiveToolId('testTasks');
+      return;
+    }
     const toolConfig = getWorkItemToolConfig(item?.toolId);
     if (!toolConfig || !visibleTools.some((tool) => tool.id === toolConfig.toolId)) {
       onDirectNotice?.({ type: 'error', message: '没有权限查看该工作项' });
@@ -837,7 +880,25 @@ function ProjectWorkspace({
     });
   }
 
+  async function handleRelatedWorkItemOpen(toolId, recordId) {
+    const toolConfig = getWorkItemToolConfig(toolId);
+    if (
+      !toolConfig
+      || !recordId
+      || !visibleTools.some((tool) => tool.id === toolConfig.toolId)
+    ) {
+      onDirectNotice?.({ type: 'error', message: '没有权限查看关联工作项' });
+      return;
+    }
+    setActiveToolId(toolConfig.toolId);
+    await loadWorkItems(toolConfig, { recordId });
+  }
+
   async function handleOverviewStatusOpen(toolId, statuses) {
+    if (toolId === 'testTasks') {
+      setActiveToolId('testTasks');
+      return;
+    }
     const toolConfig = getWorkItemToolConfig(toolId);
     if (!toolConfig || !visibleTools.some((tool) => tool.id === toolConfig.toolId)) {
       onDirectNotice?.({ type: 'error', message: '没有权限查看该列表' });
@@ -886,7 +947,13 @@ function ProjectWorkspace({
               const pendingCount = tool.id === 'aiPlans'
                 ? aiActivity.pendingReviewCount
                 : getProjectToolPendingCount(relatedWorkItemCounts, tool.id);
-              const pendingLabel = tool.id === 'aiPlans' ? '待审核' : '未处理';
+              const pendingLabel = tool.id === 'aiPlans'
+                ? '待审核'
+                : tool.id === 'testTasks'
+                  ? '待办'
+                  : tool.id === 'feedback'
+                    ? '待分类'
+                    : '未处理';
               return (
                 <button
                   key={tool.id}
@@ -919,8 +986,9 @@ function ProjectWorkspace({
             activeToolId === 'overview' ? 'project-detail-surface-overview' : '',
             activeToolId === 'versions' ? 'project-detail-surface-versions' : '',
             activeToolId === 'aiPlans' ? 'project-detail-surface-ai-plans' : '',
+            activeToolId === 'testTasks' ? 'project-detail-surface-test-tasks' : '',
           ].filter(Boolean).join(' ')}>
-            {!activeWorkItemConfig && !['overview', 'versions', 'aiPlans'].includes(activeToolId) ? (
+            {!activeWorkItemConfig && !['overview', 'versions', 'aiPlans', 'testTasks'].includes(activeToolId) ? (
               <>
                 <p className="project-detail-eyebrow">{activeTool.label}</p>
                 <h1>{projectName}</h1>
@@ -979,6 +1047,28 @@ function ProjectWorkspace({
                 }}
               />
             ) : null}
+            {activeToolId === 'testTasks' ? (
+              <TestTaskManagement
+                project={project}
+                user={user}
+                cacheUserKey={cacheUserKey}
+                realtimeEvent={realtimeEvent}
+                directTarget={selectedTestTaskId
+                  ? {
+                      key: `test-task:${selectedTestTaskId}`,
+                      projectId: String(project.projectId || ''),
+                      toolId: 'testTasks',
+                      recordId: selectedTestTaskId,
+                    }
+                  : directTarget}
+                onDirectNotice={onDirectNotice}
+                onPendingCountChange={(count) => onRelatedCountChange?.(
+                  project.projectId,
+                  'testTasks',
+                  count,
+                )}
+              />
+            ) : null}
             {activeWorkItemConfig ? (
               <RequirementsStatus
                 toolConfig={activeWorkItemConfig}
@@ -1008,6 +1098,8 @@ function ProjectWorkspace({
                 }}
                 projectId={project.projectId}
                 mentionableUsers={mentionableUsersByTool[activeWorkItemConfig.toolId] || activeWorkItemState.result?.mentionableUsers || []}
+                mentionableUsersByTool={mentionableUsersByTool}
+                allowedToolIds={visibleTools.map((tool) => tool.id)}
                 isSuperAdmin={Boolean(project.isSuperAdmin)}
                 isDevelopmentSuperAdmin={Boolean(project.isDevelopmentSuperAdmin)}
                 aiPlanningEnabled={Boolean(
@@ -1081,6 +1173,7 @@ function ProjectWorkspace({
                   }
                 }}
                 onRequirementUpdated={(requirement) => handleWorkItemUpdated(activeWorkItemConfig, requirement)}
+                onOpenRelatedItem={handleRelatedWorkItemOpen}
                 onRequirementDeleted={(payload) => {
                   updateWorkItemState(
                     activeWorkItemConfig.toolId,
@@ -1136,6 +1229,8 @@ function RequirementsStatus({
   onRequirementBack,
   projectId,
   mentionableUsers,
+  mentionableUsersByTool,
+  allowedToolIds,
   isSuperAdmin,
   isDevelopmentSuperAdmin,
   aiPlanningEnabled,
@@ -1148,6 +1243,7 @@ function RequirementsStatus({
   onAiActivityChange,
   onWorkItemCreated,
   onRequirementUpdated,
+  onOpenRelatedItem,
   onRequirementDeleted,
 }) {
   const [submitOpen, setSubmitOpen] = useState(false);
@@ -1220,12 +1316,15 @@ function RequirementsStatus({
         cacheUserKey={cacheUserKey}
         projectId={projectId}
         mentionableUsers={mentionableUsers}
+        mentionableUsersByTool={mentionableUsersByTool}
+        allowedToolIds={allowedToolIds}
         commentsFieldName={state.result?.commentsFieldName || '留言'}
         statusChangeLogFieldName={state.result?.statusChangeLogFieldName || '处理状态变动记录'}
         highlightCommentId={highlightCommentId}
         statusOptions={state.result?.statusOptions || []}
         editableFields={state.result?.editableFields || []}
         onRequirementUpdated={onRequirementUpdated}
+        onOpenRelatedItem={onOpenRelatedItem}
         onRequirementDeleted={onRequirementDeleted}
         canDelete={isSuperAdmin}
         isSuperAdmin={isSuperAdmin}
@@ -2671,6 +2770,8 @@ function BitableRecordDetail({
   cacheUserKey,
   projectId,
   mentionableUsers,
+  mentionableUsersByTool,
+  allowedToolIds,
   commentsFieldName,
   statusChangeLogFieldName,
   highlightCommentId,
@@ -2687,6 +2788,7 @@ function BitableRecordDetail({
   onAiLaunchConsumed,
   onAiActivityChange,
   onRequirementUpdated,
+  onOpenRelatedItem,
   onRequirementDeleted,
   onBack,
 }) {
@@ -2695,10 +2797,22 @@ function BitableRecordDetail({
     commentsFieldName,
     statusChangeLogFieldName,
     record.submittedAttachmentsFieldName,
+    record.relatedItemFieldName,
+    record.relatedFeedbackFieldName,
   ].filter(Boolean);
   const displayFields = buildDisplayFields(fields, rawFields, hiddenFieldNames);
   const showRemainingTime = shouldShowWorkItemRemainingTime(toolConfig.toolId, record);
   const canUpdateStatus = isRequirementRelatedToUser(record, user);
+  const canResolveFeedback = Boolean(
+    toolConfig.toolId === 'feedback'
+    && (isSuperAdmin || isDevelopmentSuperAdmin || canUpdateStatus)
+    && (
+      getWorkItemStatus(record) === FEEDBACK_STATUSES.waiting
+      || FEEDBACK_LEGACY_ACTIVE_STATUSES.includes(getWorkItemStatus(record))
+    )
+    && !record.relatedItem?.recordId
+    && !record.relatedItemParseError
+  );
   const canSubmitRequirementAttachments = Boolean(
     toolConfig.toolId === 'requirements'
     && canUpdateStatus
@@ -2717,6 +2831,7 @@ function BitableRecordDetail({
   const [activeAction, setActiveAction] = useState('comments');
   const [aiPlanningOpen, setAiPlanningOpen] = useState(false);
   const [aiAutoCreateRequest, setAiAutoCreateRequest] = useState(null);
+  const [feedbackResolutionType, setFeedbackResolutionType] = useState('');
 
   useEffect(() => {
     document.documentElement.classList.add('requirement-detail-scroll-lock');
@@ -2729,7 +2844,15 @@ function BitableRecordDetail({
   }, []);
 
   useEffect(() => {
-    setActiveAction(canUpdateStatus ? 'status' : canChangeAssignees ? 'assignees' : 'comments');
+    setActiveAction(
+      canResolveFeedback
+        ? 'feedback-resolution'
+        : canUpdateStatus && toolConfig.toolId !== 'feedback'
+          ? 'status'
+          : canChangeAssignees
+            ? 'assignees'
+            : 'comments',
+    );
   }, [record.recordId]);
 
   useEffect(() => {
@@ -2866,6 +2989,31 @@ function BitableRecordDetail({
           onSaved={handleEditSaved}
         />
       ) : null}
+      {feedbackResolutionType ? (
+        <FeedbackResolutionDialog
+          resolutionType={feedbackResolutionType}
+          projectId={projectId}
+          record={record}
+          mentionableUsers={mentionableUsersByTool?.[feedbackResolutionType] || []}
+          onClose={() => setFeedbackResolutionType('')}
+          onResolved={(payload) => {
+            setFeedbackResolutionType('');
+            if (payload.feedback) {
+              onRequirementUpdated?.(payload.feedback);
+            }
+            const failedNotifications = (payload.notificationResults || [])
+              .filter((item) => !item.ok);
+            setEditStatus({
+              type: failedNotifications.length > 0 ? 'warning' : 'success',
+              message: failedNotifications.length > 0
+                ? `反馈已处理，${failedNotifications.length} 个飞书通知发送失败`
+                : payload.resolution?.type === FEEDBACK_RESOLUTION_TYPES.reply
+                  ? '已回复反馈提出人'
+                  : `反馈已转为${payload.resolution?.type === 'bugs' ? 'Bug' : '需求'}`,
+            });
+          }}
+        />
+      ) : null}
       {aiPlanningOpen ? (
         <AiPlanningWorkspace
           projectId={projectId}
@@ -2885,6 +3033,11 @@ function BitableRecordDetail({
       <div className="bitable-detail-scroll">
         <div className="bitable-detail-layout">
           <div className="bitable-detail-main">
+            <WorkItemRelationPanel
+              toolConfig={toolConfig}
+              record={record}
+              onOpenRelatedItem={onOpenRelatedItem}
+            />
             <dl className="bitable-detail-fields">
               {displayFields.map((field) => (
                 <div
@@ -2906,7 +3059,26 @@ function BitableRecordDetail({
             </dl>
           </div>
           <aside className="bitable-detail-operation-sidebar" aria-label={`${toolConfig.itemLabel}操作`}>
-            {canUpdateStatus ? (
+            {canResolveFeedback ? (
+              <DetailActionSection
+                actionId="feedback-resolution"
+                title="分配反馈"
+                isOpen={activeAction === 'feedback-resolution'}
+                onToggle={setActiveAction}
+              >
+                <FeedbackResolutionPanel
+                  allowedToolIds={allowedToolIds}
+                  canReply={Boolean(
+                    record.contactInfo?.valid
+                    && record.contactInfo?.isFeishuUser
+                    && record.contactInfo?.feishuUserId
+                    && record.proposers?.some((person) => person.openId)
+                  )}
+                  onSelect={setFeedbackResolutionType}
+                />
+              </DetailActionSection>
+            ) : null}
+            {canUpdateStatus && toolConfig.toolId !== 'feedback' ? (
               <DetailActionSection
                 actionId="status"
                 title="更新处理状态"
@@ -2985,6 +3157,447 @@ function BitableRecordDetail({
         <WorkItemTimelinePanel toolConfig={toolConfig} record={record} />
       </div>
     </section>
+  );
+}
+
+function WorkItemRelationPanel({ toolConfig, record, onOpenRelatedItem }) {
+  if (toolConfig.toolId === 'feedback') {
+    if (record.relatedItemParseError) {
+      return (
+        <section className="workitem-relation-panel is-error" role="alert">
+          <strong>关联项格式异常</strong>
+          <span>{record.relatedItemParseError}</span>
+        </section>
+      );
+    }
+    if (record.relatedItem?.recordId) {
+      const label = record.relatedItem.type === 'bugs' ? '关联Bug' : '关联需求';
+      return (
+        <section className="workitem-relation-panel">
+          <div>
+            <strong>{label}</strong>
+            <span>
+              {record.relatedItem.title || '未命名工作项'}
+              {record.relatedItem.itemId ? ` (${record.relatedItem.itemId})` : ''}
+            </span>
+          </div>
+          <button
+            type="button"
+            title={`打开${label}`}
+            onClick={() => onOpenRelatedItem?.(
+              record.relatedItem.type,
+              record.relatedItem.recordId,
+            )}
+          >
+            <ExternalLink aria-hidden="true" />
+            打开
+          </button>
+        </section>
+      );
+    }
+    if (getWorkItemStatus(record) === FEEDBACK_STATUSES.replied) {
+      return (
+        <section className="workitem-relation-panel">
+          <div>
+            <strong>处理结果</strong>
+            <span>已回复提出人</span>
+          </div>
+          <MessageSquareReply aria-hidden="true" />
+        </section>
+      );
+    }
+    return null;
+  }
+
+  if (!['requirements', 'bugs'].includes(toolConfig.toolId)) {
+    return null;
+  }
+  if (record.relatedFeedbackParseError) {
+    return (
+      <section className="workitem-relation-panel is-error" role="alert">
+        <strong>关联反馈格式异常</strong>
+        <span>{record.relatedFeedbackParseError}</span>
+      </section>
+    );
+  }
+  if (!record.relatedFeedback?.recordId) {
+    return null;
+  }
+  return (
+    <section className="workitem-relation-panel">
+      <div>
+        <strong>源反馈</strong>
+        <span>
+          {record.relatedFeedback.title || '未命名反馈'}
+          {record.relatedFeedback.feedbackId
+            ? ` (${record.relatedFeedback.feedbackId})`
+            : ''}
+        </span>
+      </div>
+      <button
+        type="button"
+        title="打开源反馈"
+        onClick={() => onOpenRelatedItem?.('feedback', record.relatedFeedback.recordId)}
+      >
+        <ExternalLink aria-hidden="true" />
+        打开
+      </button>
+    </section>
+  );
+}
+
+function FeedbackResolutionPanel({
+  allowedToolIds,
+  canReply,
+  onSelect,
+}) {
+  const allowed = new Set(Array.isArray(allowedToolIds) ? allowedToolIds : []);
+  return (
+    <div className="feedback-resolution-actions">
+      {allowed.has('requirements') ? (
+        <button
+          type="button"
+          onClick={() => onSelect(FEEDBACK_RESOLUTION_TYPES.requirements)}
+        >
+          <ClipboardList aria-hidden="true" />
+          转为需求
+        </button>
+      ) : null}
+      {allowed.has('bugs') ? (
+        <button
+          type="button"
+          onClick={() => onSelect(FEEDBACK_RESOLUTION_TYPES.bugs)}
+        >
+          <Bug aria-hidden="true" />
+          转为Bug
+        </button>
+      ) : null}
+      <button
+        type="button"
+        disabled={!canReply}
+        title={canReply ? '回复飞书提出人' : '仅支持具有有效飞书提出人的内部反馈'}
+        onClick={() => onSelect(FEEDBACK_RESOLUTION_TYPES.reply)}
+      >
+        <MessageSquareReply aria-hidden="true" />
+        仅回复
+      </button>
+    </div>
+  );
+}
+
+function FeedbackResolutionDialog({
+  resolutionType,
+  projectId,
+  record,
+  mentionableUsers,
+  onClose,
+  onResolved,
+}) {
+  const isReply = resolutionType === FEEDBACK_RESOLUTION_TYPES.reply;
+  const targetConfig = resolutionType === FEEDBACK_RESOLUTION_TYPES.bugs
+    ? WORK_ITEM_TOOL_CONFIGS.bugs
+    : WORK_ITEM_TOOL_CONFIGS.requirements;
+  const [title, setTitle] = useState(record.title || '');
+  const [description, setDescription] = useState(record.description || '');
+  const [priority, setPriority] = useState('P2');
+  const [expectedDays, setExpectedDays] = useState(
+    record.expectedDays === null || record.expectedDays === undefined
+      ? ''
+      : String(record.expectedDays),
+  );
+  const [assignees, setAssignees] = useState([]);
+  const [needsAssigneeAssignment, setNeedsAssigneeAssignment] = useState(false);
+  const [requiresSubmissionAttachment, setRequiresSubmissionAttachment] = useState(false);
+  const [sourceAttachmentTokens, setSourceAttachmentTokens] = useState(
+    () => (record.attachments || []).map((attachment) => attachment.fileToken).filter(Boolean),
+  );
+  const [attachments, setAttachments] = useState([]);
+  const [replyContent, setReplyContent] = useState('');
+  const [clientMutationId] = useState(() => createWorkItemClientMutationId());
+  const [status, setStatus] = useState({ type: 'idle', message: '' });
+  const mentionCandidates = normalizeMentionCandidates(mentionableUsers);
+
+  useEffect(() => {
+    setAssignees((current) => filterSelectedMentionedUsers(current, mentionCandidates));
+  }, [mentionableUsers]);
+
+  useEffect(() => {
+    if (needsAssigneeAssignment && assignees.length > 0) {
+      setAssignees([]);
+    }
+  }, [needsAssigneeAssignment, assignees.length]);
+
+  function addAttachments(files) {
+    setAttachments((current) => mergeAttachmentFiles(current, Array.from(files || [])));
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    if (status.type === 'loading') {
+      return;
+    }
+    if (isReply) {
+      if (!replyContent.trim()) {
+        setStatus({ type: 'error', message: '请填写回复内容' });
+        return;
+      }
+    } else {
+      if (!title.trim()) {
+        setStatus({ type: 'error', message: `请填写${targetConfig.itemLabel}标题` });
+        return;
+      }
+      const assignmentError = validateWorkItemAssignmentChoice({
+        toolId: targetConfig.toolId,
+        assignees,
+        needsAssigneeAssignment,
+      });
+      if (assignmentError) {
+        setStatus({ type: 'error', message: assignmentError });
+        return;
+      }
+      const expected = String(expectedDays || '').trim();
+      if (expected && (!Number.isFinite(Number(expected)) || Number(expected) < 0)) {
+        setStatus({ type: 'error', message: '期望时限必须是大于等于0的数字' });
+        return;
+      }
+      if (sourceAttachmentTokens.length + attachments.length > 5) {
+        setStatus({ type: 'error', message: '转换后的工作项最多包含5个附件' });
+        return;
+      }
+    }
+
+    setStatus({ type: 'loading', message: '正在处理反馈' });
+    try {
+      const payload = await resolveFeedback(projectId, record.recordId, {
+        resolutionType,
+        clientMutationId,
+        title: title.trim(),
+        description: description.trim(),
+        priority,
+        expectedDays: String(expectedDays || '').trim()
+          ? Number(expectedDays)
+          : null,
+        assignees,
+        needsAssigneeAssignment,
+        requiresSubmissionAttachment,
+        sourceAttachmentTokens,
+        replyContent: replyContent.trim(),
+        attachments,
+      });
+      onResolved?.(payload);
+    } catch (error) {
+      setStatus({ type: 'error', message: formatErrorMessage(error) });
+    }
+  }
+
+  return (
+    <div className="workitem-submit-backdrop" role="presentation">
+      <section
+        className="workitem-submit-dialog feedback-resolution-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={isReply ? '回复反馈提出人' : `反馈转为${targetConfig.itemLabel}`}
+      >
+        <div className="workitem-submit-header">
+          <div>
+            <h3>{isReply ? '回复反馈提出人' : `转为${targetConfig.itemLabel}`}</h3>
+            <span>{record.feedbackId || record.itemId || '无反馈ID'}</span>
+          </div>
+          <button
+            type="button"
+            className="workitem-submit-close"
+            disabled={status.type === 'loading'}
+            onClick={onClose}
+          >
+            <X aria-hidden="true" />
+            <span className="sr-only">关闭</span>
+          </button>
+        </div>
+        <form className="workitem-submit-form" onSubmit={handleSubmit}>
+          {isReply ? (
+            <label className="workitem-submit-field">
+              <span>回复内容</span>
+              <textarea
+                value={replyContent}
+                rows={8}
+                maxLength={2000}
+                disabled={status.type === 'loading'}
+                onChange={(event) => setReplyContent(event.target.value)}
+              />
+            </label>
+          ) : (
+            <>
+              <label className="workitem-submit-field">
+                <span>标题</span>
+                <input
+                  value={title}
+                  maxLength={200}
+                  disabled={status.type === 'loading'}
+                  onChange={(event) => setTitle(event.target.value)}
+                />
+              </label>
+              <label className="workitem-submit-field">
+                <span>描述</span>
+                <textarea
+                  value={description}
+                  rows={6}
+                  maxLength={5000}
+                  disabled={status.type === 'loading'}
+                  onChange={(event) => setDescription(event.target.value)}
+                />
+              </label>
+              <div className="workitem-submit-grid">
+                <label className="workitem-submit-field">
+                  <span>优先级</span>
+                  <select
+                    value={priority}
+                    disabled={status.type === 'loading'}
+                    onChange={(event) => setPriority(event.target.value)}
+                  >
+                    {REQUIREMENT_PRIORITIES.map((item) => (
+                      <option key={item} value={item}>{item}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="workitem-submit-field">
+                  <span>期望时限（天）</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value={expectedDays}
+                    disabled={status.type === 'loading'}
+                    onChange={(event) => setExpectedDays(event.target.value)}
+                  />
+                </label>
+                {resolutionType === FEEDBACK_RESOLUTION_TYPES.requirements ? (
+                  <label className="workitem-submit-field workitem-submit-field-wide">
+                    <span>需要提交附件</span>
+                    <select
+                      value={requiresSubmissionAttachment ? '是' : '否'}
+                      disabled={status.type === 'loading'}
+                      onChange={(event) => setRequiresSubmissionAttachment(
+                        event.target.value === '是',
+                      )}
+                    >
+                      <option value="否">否</option>
+                      <option value="是">是</option>
+                    </select>
+                  </label>
+                ) : null}
+              </div>
+              <section className="workitem-assignee-choice" aria-label="处理人员选择">
+                <button
+                  type="button"
+                  className="workitem-assignee-undetermined"
+                  aria-pressed={needsAssigneeAssignment}
+                  disabled={status.type === 'loading'}
+                  onClick={() => {
+                    setNeedsAssigneeAssignment((current) => !current);
+                    setStatus({ type: 'idle', message: '' });
+                  }}
+                >
+                  不知道该由谁处理
+                </button>
+                <MentionUserMultiSelect
+                  selectedPeople={assignees}
+                  candidates={mentionCandidates}
+                  onChange={setAssignees}
+                  disabled={status.type === 'loading' || needsAssigneeAssignment}
+                  label="处理人员"
+                  emptyText="暂无可选处理人员"
+                  selectedLabel="已选择处理人员"
+                />
+              </section>
+              {(record.attachments || []).length > 0 ? (
+                <section className="feedback-source-attachments">
+                  <strong>源反馈附件</strong>
+                  {(record.attachments || []).map((attachment) => {
+                    const checked = sourceAttachmentTokens.includes(attachment.fileToken);
+                    return (
+                      <label key={attachment.fileToken}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={status.type === 'loading'}
+                          onChange={() => setSourceAttachmentTokens((current) => (
+                            checked
+                              ? current.filter((token) => token !== attachment.fileToken)
+                              : [...current, attachment.fileToken]
+                          ))}
+                        />
+                        <Paperclip aria-hidden="true" />
+                        <span>{attachment.name || attachment.fileToken}</span>
+                        <small>{formatFileSize(attachment.size)}</small>
+                      </label>
+                    );
+                  })}
+                </section>
+              ) : null}
+              <label className="workitem-submit-field">
+                <span>新增附件</span>
+                <input
+                  type="file"
+                  multiple
+                  disabled={status.type === 'loading'}
+                  onChange={(event) => {
+                    addAttachments(event.target.files);
+                    event.target.value = '';
+                  }}
+                />
+              </label>
+              {attachments.length > 0 ? (
+                <div className="feedback-new-attachments">
+                  {attachments.map((file, index) => (
+                    <div key={`${file.name}-${file.size}-${index}`}>
+                      <span>{file.name}</span>
+                      <small>{formatFileSize(file.size)}</small>
+                      <button
+                        type="button"
+                        title="移除附件"
+                        disabled={status.type === 'loading'}
+                        onClick={() => setAttachments((current) => (
+                          current.filter((_, currentIndex) => currentIndex !== index)
+                        ))}
+                      >
+                        <Trash2 aria-hidden="true" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          )}
+          {status.message ? (
+            <p className={`record-comment-status record-comment-status-${status.type}`}>
+              {status.message}
+            </p>
+          ) : null}
+          <div className="workitem-submit-actions">
+            <button
+              type="button"
+              className="workitem-submit-cancel"
+              disabled={status.type === 'loading'}
+              onClick={onClose}
+            >
+              取消
+            </button>
+            <button
+              type="submit"
+              className="workitem-submit-confirm"
+              disabled={status.type === 'loading'}
+            >
+              {isReply ? <Send aria-hidden="true" /> : <Link2 aria-hidden="true" />}
+              {status.type === 'loading'
+                ? '处理中'
+                : isReply
+                  ? '发送回复'
+                  : `创建${targetConfig.itemLabel}`}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
   );
 }
 
@@ -3630,7 +4243,7 @@ function WorkItemVersionAssociationDialog({
   const Icon = unlinking ? Unlink2 : Link2;
   const selected = new Set(confirmation.selectedVersionIds);
 
-  return (
+  return createPortal(
     <div className="workitem-submit-backdrop workitem-version-confirm-backdrop" role="presentation">
       <section
         className="workitem-version-confirm-dialog"
@@ -3688,7 +4301,8 @@ function WorkItemVersionAssociationDialog({
           </button>
         </div>
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -4426,6 +5040,10 @@ function getDefaultDirectToolId(targetType) {
 
   if (direct === 'feedback-detail' || direct === 'feedback-comment') {
     return 'feedback';
+  }
+
+  if (direct === 'test-task-detail' || direct === 'test-task-comment') {
+    return 'testTasks';
   }
 
   if (direct === 'version-detail' || direct === 'version-comment') {

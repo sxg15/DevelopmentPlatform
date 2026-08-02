@@ -48,13 +48,18 @@ export function canManageWorkItemAssignees({
 export function getRoleGrantedWorkItemToolIds({
   isSuperAdmin,
   isDevelopmentSuperAdmin,
+  isTestAdmin,
   allToolIds,
 }) {
   if (isSuperAdmin) {
     return new Set(Array.isArray(allToolIds) ? allToolIds : []);
   }
 
-  return isDevelopmentSuperAdmin
+  const granted = isDevelopmentSuperAdmin
     ? new Set(DEVELOPMENT_SUPER_ADMIN_TOOL_IDS)
     : new Set();
+  if (isTestAdmin) {
+    granted.add('testTasks');
+  }
+  return granted;
 }

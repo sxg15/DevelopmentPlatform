@@ -117,7 +117,10 @@ export function collectPendingTodoNotificationItems(sources, user, statusGroups 
 
     for (const item of Array.isArray(source?.items) ? source.items : []) {
       const status = getWorkItemStatus(item);
-      if (!isWorkItemAssignedToUser(item, user) || completedStatuses.has(status)) {
+      const isAssigned = toolId === 'testTasks'
+        ? isTestTaskPendingForUser(item, user, source)
+        : isWorkItemAssignedToUser(item, user);
+      if (!isAssigned || completedStatuses.has(status)) {
         continue;
       }
 
@@ -143,6 +146,7 @@ export function summarizeTodoNotificationItems(items, displayLimit = TODO_NOTIFI
   const counts = {
     requirements: 0,
     bugs: 0,
+    testTasks: 0,
     feedback: 0,
   };
 
@@ -159,6 +163,14 @@ export function summarizeTodoNotificationItems(items, displayLimit = TODO_NOTIFI
     displayedItems: source.slice(0, limit),
     hiddenCount: Math.max(0, source.length - limit),
   };
+}
+
+function isTestTaskPendingForUser(item, user, source) {
+  const status = getWorkItemStatus(item);
+  if (source?.isTestAdmin === true && ['待测试', '测试中'].includes(status)) {
+    return true;
+  }
+  return status === '测试中' && isWorkItemAssignedToUser(item, user);
 }
 
 function compareTodoNotificationItems(left, right) {

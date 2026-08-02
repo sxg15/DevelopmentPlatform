@@ -46,6 +46,158 @@ body.requirement-detail-scroll-lock {
   overscroll-behavior: none;
 }
 
+html.global-page-interaction-lock,
+body.global-page-interaction-lock {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+.global-operation-backdrop {
+  position: fixed;
+  z-index: 2147483646;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: #ffffff;
+  background: rgb(0 0 0 / 68%);
+  cursor: wait;
+  outline: none;
+  touch-action: none;
+}
+
+.global-operation-indicator {
+  display: flex;
+  align-items: center;
+  width: min(320px, 100%);
+  min-height: 92px;
+  gap: 16px;
+  padding: 18px 20px;
+  background: rgb(13 24 21 / 96%);
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 36%);
+}
+
+.global-operation-indicator > svg {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  color: #76ead6;
+  animation: global-operation-spin 900ms linear infinite;
+}
+
+.global-operation-indicator > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.global-operation-indicator strong {
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 24px;
+}
+
+.global-operation-indicator span {
+  color: rgb(255 255 255 / 76%);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 19px;
+}
+
+@keyframes global-operation-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .global-operation-indicator > svg {
+    animation-duration: 1800ms;
+  }
+}
+
+.session-expired-backdrop {
+  position: fixed;
+  z-index: 2147483647;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: #ffffff;
+  background: rgb(0 0 0 / 74%);
+  touch-action: none;
+}
+
+.session-expired-dialog {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  width: min(440px, 100%);
+  min-width: 0;
+  gap: 16px;
+  padding: 22px;
+  background: #101916;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 42%);
+}
+
+.session-expired-dialog > svg {
+  width: 34px;
+  height: 34px;
+  color: #fbbf24;
+}
+
+.session-expired-dialog > div {
+  min-width: 0;
+}
+
+.session-expired-dialog h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 26px;
+}
+
+.session-expired-dialog p {
+  margin: 6px 0 0;
+  color: rgb(255 255 255 / 76%);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 21px;
+}
+
+.session-expired-dialog button {
+  display: inline-flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 0 16px;
+  color: #062e28;
+  background: #76ead6;
+  border: 1px solid #76ead6;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.session-expired-dialog button:hover,
+.session-expired-dialog button:focus-visible {
+  background: #99f6e4;
+  border-color: #99f6e4;
+}
+
+.session-expired-dialog button svg {
+  width: 18px;
+  height: 18px;
+}
+
 button,
 input,
 textarea,

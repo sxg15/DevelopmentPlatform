@@ -28,6 +28,8 @@ or validation commands change.
 - `shared/workItemDefinitions.js`: canonical project tool and work-item definitions.
 - `shared/workItemAssignmentUtils.js`: assignment permissions and explicit
   unassigned routing.
+- `shared/testTaskUtils.js`: test-task status, short subtask IDs, versioned content
+  and result JSON, feedback drafts, validation, and action permissions.
 - `shared/requirementSubmissionAttachmentUtils.js`: requirement delivery attachment
   rules and change descriptions.
 - `shared/projectOverviewUtils.js`: overview aggregation, risk detection, and trends.
@@ -41,6 +43,8 @@ or validation commands change.
   scheduled reminder matching, pending-item filtering, sorting, and summaries.
 - `shared/clientErrorUtils.js`: runtime-neutral client error redaction, truncation,
   and diagnostic identifiers.
+- `shared/authenticationErrorUtils.js`: browser/server authentication-expiration
+  codes and response normalization.
 - `shared/aiPlanningDefinitions.js`: AI conversation, run-progress, question,
   message, and submitted-plan contracts.
 - `shared/feishuAssistantDefinitions.js`: Feishu private-chat intents, draft
@@ -57,6 +61,10 @@ Shared modules must remain runtime-neutral and importable from Node tests.
 - `src/ui/settings/PersonalSettingsDialog.jsx`: personal settings modal and
   notification preferences.
 - `src/ui/AppErrorBoundary.jsx`: root fallback for React render and effect errors.
+- `src/ui/GlobalOperationOverlay.jsx`: body-level blocking overlay for in-flight
+  frontend write operations.
+- `src/ui/SessionExpiredOverlay.jsx`: uncloseable body-level reauthorization
+  prompt for expired platform sessions or Feishu user authorization.
 - `src/ui/workspace/PlatformWorkspace.jsx`: project/work-item orchestration.
 - `src/ui/workspace/ProjectNavigation.jsx`: project sidebar and home navigation.
 - `src/ui/workspace/projectToolDisplayUtils.js`: defensive project-tool pending
@@ -78,6 +86,8 @@ Shared modules must remain runtime-neutral and importable from Node tests.
 - `src/ui/work-items/workItemTimelineUtils.js`: pure timeline event classification,
   ordering, filtering, pagination, and timestamp helpers.
 - `src/ui/workItemListUtils.js`: pure list filtering, grouping, and sorting rules.
+- `src/ui/test-tasks/TestTaskManagement.jsx`: test-task list/detail, creation,
+  tester assignment, result drafts, completion, comments, and realtime refresh.
 - `src/ui/ai/AiPlanningWorkspace.jsx`: owner-private Codex conversation,
   question/answer workflow, attachment summary, progress, failure, and draft
   submission UI.
@@ -86,6 +96,12 @@ Shared modules must remain runtime-neutral and importable from Node tests.
 - `src/api/`: all frontend HTTP clients, including personal settings and sanitized
   client-error reporting. Version requests belong in `src/api/versions.js`.
   Do not add direct `fetch` calls to UI files.
+- `src/api/testTasks.js`: dedicated test-task HTTP client, including multipart
+  result and feedback-draft attachment writes.
+- `src/api/client.js` and `src/api/requestActivity.js`: bounded HTTP requests and
+  shared write-operation activity used by the global blocking overlay.
+- `src/api/authenticationState.js`: sticky authentication-expiration state shared
+  by the API client and session-expired overlay.
 - `src/integrations/feishuH5.js`: Feishu H5 SDK loading and authorization.
 - `src/styles.css`: stylesheet aggregator. Keep imports in cascade order.
 - `src/styles/`: base, overview, work-item, authentication, and responsive styles.
@@ -152,6 +168,9 @@ Shared modules must remain runtime-neutral and importable from Node tests.
 - `server/services/versionManagementService.js`: Wiki template provisioning,
   version Bitable schema validation, project-keyed mutations, active-slot
   replacement/rollback, references, associations, status history, and comments.
+- `server/services/testTaskService.js`: test-task provisioning context, JSON
+  documents, administrator-only transitions, tester assignment, result drafts,
+  feedback submission, notifications, and realtime publication.
 - `server/repositories/aiPlanningRepository.js`: SQLite persistence for private
   conversations, runs, question sets, drafts, submissions, and notification
   outbox entries.
@@ -205,8 +224,28 @@ rollback release.
 
 ## Domain Compatibility
 
-- Requirements, Bugs, and feedback share route and field contracts through
+- Requirements, Bugs, test tasks, and feedback share project-tool contracts through
   `shared/workItemDefinitions.js`; update frontend and backend consumers together.
+- Test tasks use tool ID `testTasks`, route `test-tasks`, and the `ListChecks`
+  icon. The tool-permission matrix field is `测试任务`; only configured development
+  and test departments receive access, while project `测试管理员` receive direct
+  access and are the only users allowed to start testing, adjust testers, edit
+  results or feedback drafts, and complete a testing task.
+- Test-task content and result fields are versioned JSON documents. Each content
+  item has a six-character generated ID and text; each result maps that ID to a
+  conclusion and optional feedback draft. Normalize Feishu rich-text field
+  fragments before parsing these JSON documents. The status flow is
+  `待测试 -> 测试中 -> 已完成`, starting requires at least one project test user,
+  and completing requires every conclusion.
+- Completing a test task submits each unfinished feedback draft idempotently,
+  preserves its association after each successful feedback write, and leaves the
+  task in `测试中` with retry details when any feedback fails. Draft authors become
+  feedback proposers, original test-task creators become handlers, and selected
+  draft attachments are copied into the feedback table.
+- Test tasks participate in project overview, realtime refresh, navigation badges,
+  and daily reminders. Test administrators see every active test task as pending;
+  selected testers see assigned `测试中` tasks. Test tasks are excluded from MCP,
+  version associations, AI planning, and the Feishu private-chat assistant.
 - Requirement and Bug status fields include `待验收`. It is an active processing
   status: include it in processing totals and pending reminders, exclude it from
   completed version associations, and idempotently ensure it on templates and
@@ -225,6 +264,24 @@ rollback release.
   each node. Assignee and attachment events use the stored system-comment
   prefixes; do not create a separate timeline field.
 - Feedback stores normalized identity/contact data in `联系信息数据`.
+- New feedback starts at `待分类` and may finish only as `已转需求`,
+  `已转Bug`, or `已回复`. Legacy unfinished `待处理`/`处理中` records migrate
+  to `待分类`; legacy completed statuses remain historical completed states.
+- Feedback classification is limited to current feedback assignees, project
+  `研发超级管理员`, and global `超级管理员`. One feedback may create at most one
+  immutable requirement or Bug. Store the forward JSON association in feedback
+  field `关联项` and the reverse source snapshot in requirement/Bug field
+  `关联反馈`; both fields must be text and malformed JSON must fail closed.
+- Converting feedback reuses the complete requirement/Bug submission rules,
+  preserves all valid feedback proposers as target proposers, supports selected
+  source attachments plus new uploads, and notifies only target assignees or the
+  project's development super-admins for explicit unassigned routing. Hidden
+  source mutation metadata must make target creation idempotent across a partial
+  source-write failure.
+- Reply-only feedback resolution is limited to valid internal Feishu proposers.
+  The reply text is required, is stored as a feedback comment, and moves the
+  feedback to `已回复`; Feishu card delivery failure must not roll back the stored
+  reply or completed status.
 - Personal settings use the Wiki-backed Bitable fields `用户`,
   `接收待办事项通知`, `待办事项通知时间`, and `开发平台令牌`. Enabled
   notifications store the select value `允许`. The backend idempotently ensures
@@ -275,12 +332,14 @@ rollback release.
 - MCP Host and Origin checks allow only loopback, local IPv4 addresses, and the
   machine hostname. Missing, malformed, duplicate, or invalid tokens return the
   same 401 challenge; failed authentication is limited per client address.
-- Daily pending notifications include assigned requirement, Bug, and feedback
+- Daily pending notifications include requirement, Bug, test-task, and feedback
   records whose statuses are not in the configured completed groups. Missing
   work-item tables count as empty; blocked and unset statuses remain pending.
-- Project navigation pending badges count only work assigned to the current user in
-  the tool's initial waiting status: `待处理` for requirements/feedback and
-  `未处理` for Bugs.
+- Project navigation pending badges count only actionable work: assigned initial
+  waiting items use `待处理` for requirements, `未处理` for Bugs, and `待分类`
+  for feedback;
+  test administrators count all `待测试`/`测试中` tasks and selected testers count
+  their assigned `测试中` tasks.
 - Notification checks run in `Asia/Shanghai` at second five of each minute, do not
   catch up after downtime, and send at most once per user and calendar day.
 - Project overview reads existing work-item tables and must not create Wiki nodes or

@@ -1,18 +1,29 @@
 import {
+  FEEDBACK_STATUSES,
   WORK_ITEM_ACCEPTANCE_STATUS,
   getWorkItemProcessingStatuses as getSharedWorkItemProcessingStatuses,
+  getWorkItemWaitingStatus as getSharedWorkItemWaitingStatus,
 } from '../../shared/workItemDefinitions.js';
 
 const DEFAULT_EXPANDED_STATUSES = {
   requirements: new Set(['待处理', ...getSharedWorkItemProcessingStatuses('requirements')]),
   bugs: new Set(['未处理', ...getSharedWorkItemProcessingStatuses('bugs')]),
-  feedback: new Set(['待处理', '处理中']),
+  feedback: new Set([FEEDBACK_STATUSES.waiting]),
 };
 
 const STATUS_ORDERS = {
   requirements: ['待处理', '处理中', WORK_ITEM_ACCEPTANCE_STATUS, '已完成', '已搁置', '已拒绝', '已处理', '关闭', '未设置状态'],
   bugs: ['未处理', '修复中', WORK_ITEM_ACCEPTANCE_STATUS, '已修复', '无法复现', '已搁置', '关闭', '未设置状态'],
-  feedback: ['待处理', '处理中', '已完成', '已搁置', '已拒绝', '未设置状态'],
+  feedback: [
+    FEEDBACK_STATUSES.waiting,
+    FEEDBACK_STATUSES.convertedToRequirement,
+    FEEDBACK_STATUSES.convertedToBug,
+    FEEDBACK_STATUSES.replied,
+    '已完成',
+    '已搁置',
+    '已拒绝',
+    '未设置状态',
+  ],
 };
 
 export const DEADLINE_FILTER_OPTIONS = [
@@ -64,7 +75,7 @@ export function isWorkItemWaitingForTime(toolId, item) {
 }
 
 export function getWorkItemWaitingStatus(toolId) {
-  return String(toolId || '').trim() === 'bugs' ? '未处理' : '待处理';
+  return getSharedWorkItemWaitingStatus(toolId);
 }
 
 export function getWorkItemProcessingStatus(toolId) {

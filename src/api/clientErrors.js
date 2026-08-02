@@ -33,6 +33,8 @@ export function reportClientError(error, details = {}) {
       },
       body: JSON.stringify(payload),
       keepalive: true,
+      globalOperation: false,
+      detectAuthenticationExpiration: false,
     }).catch(() => null);
   } catch {
     return Promise.resolve(null);

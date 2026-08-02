@@ -5,6 +5,8 @@ import './styles.css';
 import { installGlobalErrorReporting } from './api/clientErrors.js';
 import { App } from './ui/App.jsx';
 import { AppErrorBoundary } from './ui/AppErrorBoundary.jsx';
+import { GlobalOperationOverlay } from './ui/GlobalOperationOverlay.jsx';
+import { SessionExpiredOverlay } from './ui/SessionExpiredOverlay.jsx';
 
 installGlobalErrorReporting();
 
@@ -18,5 +20,7 @@ createRoot(rootElement).render(
     <AppErrorBoundary>
       <App />
     </AppErrorBoundary>
+    <GlobalOperationOverlay />
+    <SessionExpiredOverlay />
   </React.StrictMode>,
 );

@@ -1,4 +1,4 @@
-const PENDING_COUNT_TOOL_IDS = Object.freeze(['requirements', 'bugs', 'feedback']);
+const PENDING_COUNT_TOOL_IDS = Object.freeze(['requirements', 'bugs', 'testTasks', 'feedback']);
 
 export function normalizeRelatedWorkItemCounts(counts) {
   if (!counts || typeof counts !== 'object' || Array.isArray(counts)) {
@@ -11,6 +11,7 @@ export function normalizeRelatedWorkItemCounts(counts) {
       {
         requirements: normalizeCount(value?.requirements),
         bugs: normalizeCount(value?.bugs),
+        testTasks: normalizeCount(value?.testTasks),
         feedback: normalizeCount(value?.feedback),
       },
     ]).filter(([projectId]) => Boolean(projectId)),

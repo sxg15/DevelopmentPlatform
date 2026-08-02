@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { Chrono } from 'react-chrono';
 import {
+  buildWorkItemTimelineChronoId,
   buildWorkItemTimelineEvents,
   filterWorkItemTimelineEvents,
   formatWorkItemTimelineDateTime,
@@ -104,8 +105,8 @@ export default function WorkItemTimeline({ toolConfig, record }) {
           <div className="work-item-timeline-chrono">
             <Chrono
               key={`${record?.recordId || 'record'}:${activeFilter}:${visibleCount}`}
-              items={timelineEvents.map((event) => ({
-                id: event.id,
+              items={timelineEvents.map((event, index) => ({
+                id: buildWorkItemTimelineChronoId(event, index),
                 title: formatWorkItemTimelineTrackDate(event.occurredAt),
               }))}
               mode="horizontal-all"

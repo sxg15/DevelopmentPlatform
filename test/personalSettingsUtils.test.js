@@ -47,7 +47,7 @@ test('notification due checks and dedupe keys use Asia Shanghai calendar time', 
   );
 });
 
-test('todo notification items include assigned unfinished work across all three tools', () => {
+test('todo notification items include assigned unfinished work across all four tools', () => {
   const user = { openId: 'ou_current', name: '当前用户' };
   const sources = [
     {
@@ -111,6 +111,7 @@ test('todo notification items include assigned unfinished work across all three 
     requirements: { completed: ['已完成', '关闭'] },
     bugs: { completed: ['已修复', '关闭'] },
     feedback: { completed: ['已完成', '关闭'] },
+    testTasks: { completed: ['已完成'] },
   });
 
   assert.deepEqual(items.map((item) => item.recordId), ['bug-1', 'req-3', 'req-1']);
@@ -119,6 +120,7 @@ test('todo notification items include assigned unfinished work across all three 
     counts: {
       requirements: 2,
       bugs: 1,
+      testTasks: 0,
       feedback: 0,
     },
     displayedItems: items,

@@ -16,6 +16,7 @@ export function normalizeConfig(config) {
   const requirementsFieldNames = config?.knowledgeBase?.requirementsFieldNames || {};
   const bugsFieldNames = config?.knowledgeBase?.bugsFieldNames || {};
   const feedbackFieldNames = config?.knowledgeBase?.feedbackFieldNames || {};
+  const testTasksFieldNames = config?.knowledgeBase?.testTasksFieldNames || {};
   const projectBaseFieldNames = config?.bitable?.projectBase?.fieldNames || {};
   const projectPermissionFieldNames = config?.bitable?.projectPermission?.fieldNames || {};
   const toolPermissionFieldNames = config?.bitable?.toolPermission?.fieldNames || {};
@@ -108,6 +109,7 @@ export function normalizeConfig(config) {
         attachments: String(requirementsFieldNames.attachments || '附件'),
         requiresSubmissionAttachment: String(requirementsFieldNames.requiresSubmissionAttachment || '需要提交附件'),
         submittedAttachments: String(requirementsFieldNames.submittedAttachments || '提交附件'),
+        relatedFeedback: String(requirementsFieldNames.relatedFeedback || '关联反馈'),
         comments: String(requirementsFieldNames.comments || '留言'),
         statusChangeLog: String(requirementsFieldNames.statusChangeLog || '处理状态变动记录'),
       },
@@ -128,6 +130,7 @@ export function normalizeConfig(config) {
         proposedAt: String(bugsFieldNames.proposedAt || '发现时间'),
         expectedDays: String(bugsFieldNames.expectedDays || requirementsFieldNames.expectedDays || '期望时限'),
         attachments: String(bugsFieldNames.attachments || requirementsFieldNames.attachments || '附件'),
+        relatedFeedback: String(bugsFieldNames.relatedFeedback || '关联反馈'),
         comments: String(bugsFieldNames.comments || requirementsFieldNames.comments || '留言'),
         statusChangeLog: String(bugsFieldNames.statusChangeLog || requirementsFieldNames.statusChangeLog || '处理状态变动记录'),
       },
@@ -149,8 +152,31 @@ export function normalizeConfig(config) {
         expectedDays: String(feedbackFieldNames.expectedDays || requirementsFieldNames.expectedDays || '期望时限'),
         contactInfo: String(feedbackFieldNames.contactInfo || '联系信息数据'),
         attachments: String(feedbackFieldNames.attachments || requirementsFieldNames.attachments || '附件'),
+        relatedItem: String(feedbackFieldNames.relatedItem || '关联项'),
         comments: String(feedbackFieldNames.comments || requirementsFieldNames.comments || '留言'),
         statusChangeLog: String(feedbackFieldNames.statusChangeLog || requirementsFieldNames.statusChangeLog || '处理状态变动记录'),
+      },
+      testTasksParentName: String(config?.knowledgeBase?.testTasksParentName || '测试任务'),
+      testTasksTemplateName: String(config?.knowledgeBase?.testTasksTemplateName || '模板'),
+      testTasksTemplateAppToken: String(
+        config?.knowledgeBase?.testTasksTemplateAppToken || 'SGvgwousMiRvjGkHQf7cwDwJnab',
+      ),
+      testTasksIdPrefix: String(config?.knowledgeBase?.testTasksIdPrefix || 'T-'),
+      testTasksIdDigits: normalizePositiveInteger(config?.knowledgeBase?.testTasksIdDigits, 4),
+      testTasksFieldNames: {
+        taskId: String(testTasksFieldNames.taskId || '任务ID'),
+        itemId: String(testTasksFieldNames.itemId || testTasksFieldNames.taskId || '任务ID'),
+        title: String(testTasksFieldNames.title || '任务名称'),
+        content: String(testTasksFieldNames.content || '任务内容'),
+        createdAt: String(testTasksFieldNames.createdAt || '创建时间'),
+        creator: String(testTasksFieldNames.creator || '创建人'),
+        testers: String(testTasksFieldNames.testers || '测试人员'),
+        status: String(testTasksFieldNames.status || '处理状态'),
+        statusChangeLog: String(testTasksFieldNames.statusChangeLog || '处理状态变动记录'),
+        comments: String(testTasksFieldNames.comments || '留言'),
+        results: String(testTasksFieldNames.results || '测试结果记录'),
+        attachments: String(testTasksFieldNames.attachments || '附件'),
+        relatedFeedback: String(testTasksFieldNames.relatedFeedback || '关联反馈'),
       },
     },
     debug: {
@@ -192,6 +218,9 @@ export function normalizeConfig(config) {
           developmentSuperAdmins: String(
             projectPermissionFieldNames.developmentSuperAdmins || DEFAULT_DEVELOPMENT_SUPER_ADMIN_FIELD,
           ),
+          testAdministrators: String(
+            projectPermissionFieldNames.testAdministrators || '测试管理员',
+          ),
           permissionUsers: Array.isArray(projectPermissionFieldNames.permissionUsers)
             ? projectPermissionFieldNames.permissionUsers.map((item) => String(item)).filter(Boolean)
             : ['超级管理员', DEFAULT_DEVELOPMENT_SUPER_ADMIN_FIELD, '研发', '测试', '发行', '商务'],
@@ -208,6 +237,7 @@ export function normalizeConfig(config) {
             bugs: String(toolPermissionToolFields.bugs || 'Bug列表'),
             builds: String(toolPermissionToolFields.builds || '打包列表'),
             review: String(toolPermissionToolFields.review || '内容审查'),
+            testTasks: String(toolPermissionToolFields.testTasks || '测试任务'),
             feedback: String(toolPermissionToolFields.feedback || '反馈列表'),
           },
         },

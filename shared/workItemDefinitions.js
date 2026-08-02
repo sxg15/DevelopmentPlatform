@@ -1,5 +1,13 @@
 export const REQUIREMENT_PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4'];
 export const WORK_ITEM_ACCEPTANCE_STATUS = '待验收';
+export const FEEDBACK_STATUSES = Object.freeze({
+  waiting: '待分类',
+  convertedToRequirement: '已转需求',
+  convertedToBug: '已转Bug',
+  replied: '已回复',
+});
+export const FEEDBACK_LEGACY_ACTIVE_STATUSES = Object.freeze(['待处理', '处理中']);
+export const FEEDBACK_LEGACY_COMPLETED_STATUSES = Object.freeze(['已完成', '已搁置', '已拒绝', '关闭']);
 
 export const PROJECT_TOOL_DEFINITIONS = Object.freeze([
   { id: 'overview', label: '项目总览', iconKey: 'LayoutDashboard' },
@@ -7,6 +15,7 @@ export const PROJECT_TOOL_DEFINITIONS = Object.freeze([
   { id: 'aiPlans', label: 'AI方案', iconKey: 'FileText' },
   { id: 'requirements', label: '需求列表', iconKey: 'ClipboardList' },
   { id: 'bugs', label: 'Bug列表', iconKey: 'Bug' },
+  { id: 'testTasks', label: '测试任务', iconKey: 'ListChecks' },
   { id: 'feedback', label: '反馈列表', iconKey: 'MessageSquare' },
   { id: 'builds', label: '打包列表', iconKey: 'PackageCheck' },
   { id: 'review', label: '内容审查', iconKey: 'ScanSearch' },
@@ -73,6 +82,36 @@ export const WORK_ITEM_TOOL_DEFINITIONS = Object.freeze({
     processingStatuses: Object.freeze(['修复中', WORK_ITEM_ACCEPTANCE_STATUS]),
     acceptanceStatus: WORK_ITEM_ACCEPTANCE_STATUS,
   }),
+  testTasks: Object.freeze({
+    toolId: 'testTasks',
+    routeSegment: 'test-tasks',
+    listLabel: '测试任务',
+    itemLabel: '测试任务',
+    itemNameLabel: '任务名称',
+    submitLabel: '创建测试任务',
+    countLabel: '个测试任务',
+    itemsKey: 'testTasks',
+    legacyItemsKey: 'testTasks',
+    itemIdKey: 'taskId',
+    directDetailType: 'test-task-detail',
+    directCommentType: 'test-task-comment',
+    unnamedTitle: '未命名测试任务',
+    noIdText: '无任务ID',
+    loadingText: '正在准备测试任务',
+    idleText: '点击测试任务后会准备项目对应的多维表格。',
+    missingTargetText: '目标测试任务不存在或没有权限查看',
+    detailAriaLabel: '测试任务详情',
+    missingTemplatePrefix: '找不到测试任务模板',
+    missingNodeText: '找不到项目测试任务表',
+    notLinkedText: '测试任务没有关联多维表格',
+    noTableText: '测试任务没有可读取的数据表',
+    missingRecordText: '测试任务记录不存在',
+    supportsPriority: false,
+    supportsUnassignedRouting: false,
+    dateLabel: '创建时间',
+    processingStatuses: Object.freeze(['测试中']),
+    acceptanceStatus: '',
+  }),
   feedback: Object.freeze({
     toolId: 'feedback',
     routeSegment: 'feedback',
@@ -101,7 +140,7 @@ export const WORK_ITEM_TOOL_DEFINITIONS = Object.freeze({
     supportsUnassignedRouting: false,
     dateLabel: '反馈时间',
     channelValue: '内部开发平台',
-    processingStatuses: Object.freeze(['处理中']),
+    processingStatuses: Object.freeze([]),
     acceptanceStatus: '',
   }),
 });
@@ -120,4 +159,18 @@ export function getWorkItemProcessingStatuses(toolId) {
 
 export function getWorkItemAcceptanceStatus(toolId) {
   return String(getWorkItemToolDefinition(toolId).acceptanceStatus || '').trim();
+}
+
+export function getWorkItemWaitingStatus(toolId) {
+  const normalizedToolId = String(toolId || '').trim();
+  if (normalizedToolId === 'bugs') {
+    return '未处理';
+  }
+  if (normalizedToolId === 'feedback') {
+    return FEEDBACK_STATUSES.waiting;
+  }
+  if (normalizedToolId === 'testTasks') {
+    return '待测试';
+  }
+  return '待处理';
 }

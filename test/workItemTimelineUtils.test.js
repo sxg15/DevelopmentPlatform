@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildWorkItemTimelineChronoId,
   buildWorkItemTimelineEvents,
   classifyWorkItemTimelineComment,
   filterWorkItemTimelineEvents,
@@ -124,6 +125,20 @@ test('filters and pagination separate key events from ordinary comments', () => 
   const manyEvents = Array.from({ length: 25 }, (_, index) => ({ id: String(index) }));
   assert.equal(sliceWorkItemTimelineEvents(manyEvents).length, 20);
   assert.equal(sliceWorkItemTimelineEvents(manyEvents, 40).length, 25);
+});
+
+test('React Chrono item IDs remain selector-safe when business event IDs contain colons', () => {
+  const event = {
+    id: 'status:status-1',
+    type: WORK_ITEM_TIMELINE_EVENT_TYPES.STATUS_CHANGED,
+    occurredAt: '2026-07-18T09:00:00.000Z',
+  };
+  const firstId = buildWorkItemTimelineChronoId(event, 0);
+  const secondId = buildWorkItemTimelineChronoId(event, 1);
+
+  assert.match(firstId, /^[a-zA-Z_][a-zA-Z0-9_-]*$/);
+  assert.equal(firstId.includes(':'), false);
+  assert.notEqual(firstId, secondId);
 });
 
 test('empty and malformed event arrays produce an empty timeline safely', () => {

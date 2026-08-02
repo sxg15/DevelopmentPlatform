@@ -1,16 +1,17 @@
-import { parseJsonResponse, requestJson } from './client.js';
+import { requestJson } from './client.js';
 
 export async function fetchCurrentUser() {
-  const response = await fetch('/api/me', {
-    credentials: 'same-origin',
-  });
-
-  if (response.status === 401) {
-    return null;
+  try {
+    const payload = await requestJson('/api/me', {
+      detectAuthenticationExpiration: false,
+    });
+    return payload.user || null;
+  } catch (error) {
+    if (error?.status === 401) {
+      return null;
+    }
+    throw error;
   }
-
-  const payload = await parseJsonResponse(response);
-  return payload.user || null;
 }
 
 export function fetchAppConfig() {
@@ -20,6 +21,7 @@ export function fetchAppConfig() {
 export async function exchangeCodeForUser(code) {
   const payload = await requestJson('/api/auth/feishu', {
     method: 'POST',
+    detectAuthenticationExpiration: false,
     headers: {
       'Content-Type': 'application/json',
     },
@@ -31,6 +33,7 @@ export async function exchangeCodeForUser(code) {
 export async function createDebugSession() {
   const payload = await requestJson('/api/auth/debug', {
     method: 'POST',
+    detectAuthenticationExpiration: false,
   });
   return payload.user;
 }
