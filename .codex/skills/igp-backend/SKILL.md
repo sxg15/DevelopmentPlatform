@@ -140,6 +140,9 @@ Read `AGENTS.md`, then locate the owning layer.
 - In the public Feishu bridge, prefer `tt.requestAccess`, fall back to
   `tt.requestAuthCode`, and bound each attempt plus the overall login so a missing
   desktop-client callback cannot leave the entry page loading forever.
+- Serve the Feishu H5 SDK through a reserved same-origin Gateway path backed by a
+  validated in-memory CDN cache. Apply the normal health and same-egress-IP checks
+  to that path, and do not add SDK hosting logic to the public Linux relay.
 - Mark managed SIGTERM shutdown as public-entry maintenance before closing the
   backend, and clear that state only after the new backend listener is ready.
   Never replace a running Agent package after a failed verified stop.

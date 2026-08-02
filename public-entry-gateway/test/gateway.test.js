@@ -12,6 +12,10 @@ import {
   decideEntry,
 } from '../src/entryDecision.js';
 import { normalizeGatewayConfig } from '../src/config.js';
+import {
+  FEISHU_SDK_PUBLIC_PATH,
+  FeishuSdkProvider,
+} from '../src/feishuSdkProvider.js';
 import { GatewayHealthMonitor, readMaintenanceState } from '../src/healthMonitor.js';
 import { isClientIpAllowed, isIpInCidr, normalizeIpAddress } from '../src/ipUtils.js';
 import { SshTunnelManager } from '../src/sshTunnelManager.js';
@@ -150,6 +154,33 @@ test('failed public IP probes do not refresh the last successful result', async 
   assert.equal(status.publicIpError, 'probe unavailable');
 });
 
+test('Feishu SDK provider validates and caches the official script', async () => {
+  let requestCount = 0;
+  const source = 'window.tt={requestAuthCode:function(){}};';
+  const provider = new FeishuSdkProvider({
+    fetchImpl: async () => {
+      requestCount += 1;
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get() {
+            return String(Buffer.byteLength(source));
+          },
+        },
+        async arrayBuffer() {
+          return Buffer.from(source);
+        },
+      };
+    },
+  });
+
+  const [first, second] = await Promise.all([provider.getSdk(), provider.getSdk()]);
+  assert.equal(first.toString('utf8'), source);
+  assert.equal(second.toString('utf8'), source);
+  assert.equal(requestCount, 1);
+});
+
 test('SSH tunnel arguments are restricted, pinned and reverse-only', () => {
   const config = normalizeGatewayConfig({
     publicEntry: { relayToken: TOKEN },
@@ -226,6 +257,11 @@ test('HTTP agent returns redirect, forbidden and maintenance responses', async (
       start() {},
       async stop() {},
     },
+    feishuSdkProvider: {
+      async getSdk() {
+        return Buffer.from('window.tt={requestAuthCode:function(){}};');
+      },
+    },
     logger: { log() {}, error() {} },
   });
   await agent.start();
@@ -246,6 +282,8 @@ test('HTTP agent returns redirect, forbidden and maintenance responses', async (
       'x-igp-client-ip': '47.100.74.169',
     });
     assert.equal(feishuBridge.statusCode, 200);
+    assert.match(feishuBridge.body, new RegExp(FEISHU_SDK_PUBLIC_PATH));
+    assert.doesNotMatch(feishuBridge.body, /lf-scm-cn\.feishucdn\.com/);
     assert.match(feishuBridge.body, /requestAccess/);
     assert.match(feishuBridge.body, /requestAuthCode/);
     assert.ok(
@@ -261,11 +299,28 @@ test('HTTP agent returns redirect, forbidden and maintenance responses', async (
     assert.ok(inlineScript);
     assert.doesNotThrow(() => new vm.Script(inlineScript));
 
+    const feishuSdk = await requestAgent(config.server.port, FEISHU_SDK_PUBLIC_PATH, {
+      'user-agent': 'Mozilla/5.0 Feishu/7.0 WebApp/appCenter',
+      'x-igp-relay-token': TOKEN,
+      'x-igp-client-ip': '47.100.74.169',
+    });
+    assert.equal(feishuSdk.statusCode, 200);
+    assert.equal(feishuSdk.body, 'window.tt={requestAuthCode:function(){}};');
+    assert.match(feishuSdk.headers['content-type'], /application\/javascript/);
+    assert.match(feishuSdk.headers['cache-control'], /immutable/);
+
     const forbidden = await requestAgent(config.server.port, '/', {
       'x-igp-relay-token': TOKEN,
       'x-igp-client-ip': '198.51.100.8',
     });
     assert.equal(forbidden.statusCode, 403);
+
+    const forbiddenSdk = await requestAgent(config.server.port, FEISHU_SDK_PUBLIC_PATH, {
+      'user-agent': 'Mozilla/5.0 Feishu/7.0 WebApp/appCenter',
+      'x-igp-relay-token': TOKEN,
+      'x-igp-client-ip': '198.51.100.8',
+    });
+    assert.equal(forbiddenSdk.statusCode, 403);
 
     state.maintenance = { active: true, phase: 'starting' };
     state.ready = false;

@@ -492,6 +492,9 @@ rollback release.
   entry URL before navigating to the LAN origin. The Gateway may serve the minimal
   H5 SDK bridge for Feishu user agents; prefer `tt.requestAccess`, fall back to
   `tt.requestAuthCode`, and bound every attempt plus the total login duration.
+  Serve the official H5 SDK through a health- and access-checked same-origin Agent
+  path backed by a validated process-memory CDN cache so the Feishu WebView does
+  not need to establish the external SDK TLS connection itself.
   Pass only the public app ID and a one-time authorization code, consume and remove
   that code immediately on the LAN page, and keep ordinary browsers on the direct
   302 path.

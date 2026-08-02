@@ -6,6 +6,10 @@ import {
   decideEntry,
   normalizeClientIpHeader,
 } from './entryDecision.js';
+import {
+  FEISHU_SDK_PUBLIC_PATH,
+  FeishuSdkProvider,
+} from './feishuSdkProvider.js';
 import { loadGatewayConfig } from './config.js';
 import { GatewayHealthMonitor } from './healthMonitor.js';
 import { SshTunnelManager } from './sshTunnelManager.js';
@@ -14,13 +18,18 @@ export async function createGatewayAgent(config, options = {}) {
   const logger = options.logger || console;
   const monitor = options.monitor || new GatewayHealthMonitor(config);
   const tunnel = options.tunnel || new SshTunnelManager(config, { logger });
+  const feishuSdkProvider = options.feishuSdkProvider || new FeishuSdkProvider();
   const server = http.createServer((request, response) => {
-    try {
-      handleEntryRequest(config, monitor, request, response);
-    } catch (error) {
+    handleEntryRequest(config, monitor, request, response, {
+      feishuSdkProvider,
+    }).catch((error) => {
       logger.error(error instanceof Error ? error.stack || error.message : String(error));
-      sendHtml(response, 500, '入口服务发生异常', '请稍后重试。');
-    }
+      if (!response.headersSent) {
+        sendHtml(response, 500, '入口服务发生异常', '请稍后重试。');
+      } else {
+        response.destroy();
+      }
+    });
   });
 
   return {
@@ -50,7 +59,7 @@ export async function createGatewayAgent(config, options = {}) {
   };
 }
 
-export function handleEntryRequest(config, monitor, request, response) {
+export async function handleEntryRequest(config, monitor, request, response, options = {}) {
   applySecurityHeaders(response);
   if (!['GET', 'HEAD'].includes(String(request.method || ''))) {
     response.setHeader('Allow', 'GET, HEAD');
@@ -72,6 +81,14 @@ export function handleEntryRequest(config, monitor, request, response) {
   });
 
   if (decision.status === ENTRY_STATUS.REDIRECT) {
+    if (isFeishuSdkRequest(request)) {
+      await sendFeishuSdk(
+        response,
+        options.feishuSdkProvider || new FeishuSdkProvider(),
+        request.method === 'HEAD',
+      );
+      return;
+    }
     if (config.feishu.appId && isFeishuClientRequest(request)) {
       sendFeishuAuthBridge(
         response,
@@ -107,6 +124,25 @@ function isFeishuClientRequest(request) {
   return userAgent.includes('feishu') || userAgent.includes('lark');
 }
 
+function isFeishuSdkRequest(request) {
+  try {
+    return new URL(String(request.url || '/'), 'http://gateway.invalid').pathname
+      === FEISHU_SDK_PUBLIC_PATH;
+  } catch {
+    return false;
+  }
+}
+
+async function sendFeishuSdk(response, provider, headOnly = false) {
+  const sdk = await provider.getSdk();
+  response.statusCode = 200;
+  response.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  response.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+  response.removeHeader('Pragma');
+  response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  response.end(headOnly ? undefined : sdk);
+}
+
 function sendFeishuAuthBridge(response, appId, targetUrl, headOnly = false) {
   const serializedAppId = serializeInlineScriptValue(appId);
   const serializedTargetUrl = serializeInlineScriptValue(targetUrl);
@@ -126,7 +162,12 @@ p{margin:0;color:#646a73;font-size:15px;line-height:1.7}
 </head>
 <body>
 <main><h1>正在登录开发平台</h1><p id="status">正在连接飞书，请稍候。</p></main>
-<script src="https://lf-scm-cn.feishucdn.com/lark/op/h5-js-sdk-1.5.44.js"></script>
+<script>window.__igpFeishuSdkState = 'loading';</script>
+<script
+  src="${FEISHU_SDK_PUBLIC_PATH}"
+  onload="window.__igpFeishuSdkState='loaded'"
+  onerror="window.__igpFeishuSdkState='failed';document.getElementById('status').textContent='飞书 SDK 加载失败，请关闭当前窗口后重新打开。'"
+></script>
 <script>
 (async () => {
   const appId = ${serializedAppId};
@@ -256,7 +297,14 @@ p{margin:0;color:#646a73;font-size:15px;line-height:1.7}
       return;
     }
     if (Date.now() >= runtimeDeadline) {
-      fail();
+      const sdkState = String(window.__igpFeishuSdkState || 'unknown');
+      fail({
+        message: sdkState === 'failed'
+          ? '飞书 SDK 加载失败'
+          : sdkState === 'loaded'
+            ? '飞书 SDK 已加载，但客户端未提供登录接口'
+            : '飞书 SDK 未完成加载',
+      });
       return;
     }
     window.setTimeout(tryLogin, 150);
@@ -286,7 +334,7 @@ p{margin:0;color:#646a73;font-size:15px;line-height:1.7}
   response.setHeader('Content-Type', 'text/html; charset=utf-8');
   response.setHeader(
     'Content-Security-Policy',
-    "default-src 'none'; script-src 'unsafe-inline' https://lf-scm-cn.feishucdn.com; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+    "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
   );
   response.end(headOnly ? undefined : body);
 }
