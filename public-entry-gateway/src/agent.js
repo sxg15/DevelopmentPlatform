@@ -13,6 +13,7 @@ import {
 import { loadGatewayConfig } from './config.js';
 import { GatewayHealthMonitor } from './healthMonitor.js';
 import { SshTunnelManager } from './sshTunnelManager.js';
+import { buildStatusPageHtml } from './statusPage.js';
 
 export async function createGatewayAgent(config, options = {}) {
   const logger = options.logger || console;
@@ -164,6 +165,7 @@ export async function handleEntryRequest(config, monitor, request, response, opt
     decision.message,
     request.method === 'HEAD',
     decision.statusCode === 503,
+    decision.status,
   );
 }
 
@@ -217,39 +219,25 @@ function applySecurityHeaders(response) {
   );
 }
 
-function sendHtml(response, statusCode, title, message, headOnly = false, refresh = false) {
-  const safeTitle = escapeHtml(title);
-  const safeMessage = escapeHtml(message);
-  const refreshTag = refresh ? '<meta http-equiv="refresh" content="5">' : '';
-  const body = `<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-${refreshTag}
-<title>${safeTitle}</title>
-<style>
-html,body{margin:0;min-height:100%;font-family:Arial,"Microsoft YaHei",sans-serif;background:#f5f7fa;color:#1f2329}
-body{display:grid;place-items:center}
-main{width:min(520px,calc(100% - 40px));text-align:center}
-h1{margin:0 0 12px;font-size:24px;font-weight:650}
-p{margin:0;color:#646a73;font-size:15px;line-height:1.7}
-</style>
-</head>
-<body><main><h1>${safeTitle}</h1><p>${safeMessage}</p></main></body>
-</html>`;
+function sendHtml(
+  response,
+  statusCode,
+  title,
+  message,
+  headOnly = false,
+  refresh = false,
+  kind = 'generic',
+) {
+  const body = buildStatusPageHtml({
+    statusCode,
+    title,
+    message,
+    refresh,
+    kind,
+  });
   response.statusCode = statusCode;
   response.setHeader('Content-Type', 'text/html; charset=utf-8');
   response.end(headOnly ? undefined : body);
-}
-
-function escapeHtml(value) {
-  return String(value || '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

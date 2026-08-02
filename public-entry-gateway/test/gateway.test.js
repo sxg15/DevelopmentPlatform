@@ -19,6 +19,7 @@ import { GatewayHealthMonitor, readMaintenanceState } from '../src/healthMonitor
 import { isClientIpAllowed, isIpInCidr, normalizeIpAddress } from '../src/ipUtils.js';
 import { SshTunnelManager } from '../src/sshTunnelManager.js';
 import { createGatewayAgent } from '../src/agent.js';
+import { buildStatusPageHtml } from '../src/statusPage.js';
 
 const TOKEN = 'a'.repeat(48);
 
@@ -235,6 +236,46 @@ test('SSH tunnel reconnects after an unexpected exit', () => {
   assert.equal(scheduled.delay, 1000);
 });
 
+test('network restriction page explains trusted access and provides retry action', () => {
+  const html = buildStatusPageHtml({
+    statusCode: 403,
+    title: '当前网络不可访问',
+    message: '开发平台仅允许在公司局域网或指定 VPN 环境中使用',
+    kind: ENTRY_STATUS.FORBIDDEN,
+  });
+  assert.match(html, /网络校验未通过/);
+  assert.match(html, /连接公司局域网/);
+  assert.match(html, /检查指定 VPN/);
+  assert.match(html, /重新检测/);
+  assert.match(html, /HTTP 403/);
+  assert.doesNotMatch(html, /172\.16\.20\.205/);
+});
+
+test('maintenance page advertises its bounded automatic refresh', () => {
+  const html = buildStatusPageHtml({
+    statusCode: 503,
+    title: '系统维护中',
+    message: '开发平台新版本正在启动',
+    refresh: true,
+    kind: ENTRY_STATUS.MAINTENANCE,
+  });
+  assert.match(html, /http-equiv="refresh" content="5"/);
+  assert.match(html, /页面每 5 秒检查一次/);
+  assert.match(html, /立即检测/);
+});
+
+test('status pages escape external error descriptions and reset invalid callbacks', () => {
+  const html = buildStatusPageHtml({
+    statusCode: 401,
+    title: '飞书登录未完成',
+    message: '<script>alert("x")</script>',
+  });
+  assert.doesNotMatch(html, /<script>alert/);
+  assert.match(html, /&lt;script&gt;alert/);
+  assert.match(html, /href="\/"/);
+  assert.match(html, /返回入口/);
+});
+
 test('HTTP agent returns redirect, forbidden and maintenance responses', async () => {
   const config = normalizeGatewayConfig({
     server: { port: 3199 },
@@ -329,6 +370,8 @@ test('HTTP agent returns redirect, forbidden and maintenance responses', async (
       'x-igp-client-ip': '198.51.100.8',
     });
     assert.equal(forbidden.statusCode, 403);
+    assert.match(forbidden.body, /网络校验未通过/);
+    assert.match(forbidden.body, /连接公司局域网/);
 
     const forbiddenCallback = await requestAgent(config.server.port, '/?code=x&state=y', {
       'user-agent': 'Mozilla/5.0 Feishu/7.0 WebApp/appCenter',
@@ -345,6 +388,7 @@ test('HTTP agent returns redirect, forbidden and maintenance responses', async (
     });
     assert.equal(maintenance.statusCode, 503);
     assert.match(maintenance.body, /新版本正在启动/);
+    assert.match(maintenance.body, /页面每 5 秒检查一次/);
   } finally {
     await agent.stop();
   }

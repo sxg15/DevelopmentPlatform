@@ -123,8 +123,8 @@ the current or rollback release.
   `test/frontendModuleBindings.test.js`.
 - Public-entry Agent IP/CIDR decisions, health freshness, reverse tunnel arguments,
   maintenance handling, ordinary-browser redirects, Feishu OAuth state/callback
-  handling, required authorization scope, callback source marker, and HTTP
-  responses are covered by
+  handling, required authorization scope, callback source marker, self-contained
+  403/503 status-page guidance, and HTTP responses are covered by
   `public-entry-gateway/test/gateway.test.js`. Managed package replacement,
   target-owned state, verified stops, and maintenance markers are covered by
   `test/publicEntryGatewayService.test.js`.

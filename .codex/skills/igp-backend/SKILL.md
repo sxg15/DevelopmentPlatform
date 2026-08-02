@@ -53,8 +53,9 @@ Read `AGENTS.md`, then locate the owning layer.
 - Daily reminder timing: `server/services/todoNotificationScheduler.js`;
   reminder orchestration and cards remain in `server/index.js`.
 - Managed public entry:
-  `server/services/publicEntryGatewayService.js` and the startup/shutdown hooks in
-  `server/index.js`.
+  `server/services/publicEntryGatewayService.js`, the startup/shutdown hooks in
+  `server/index.js`, and the self-contained Agent status UI in
+  `public-entry-gateway/src/statusPage.js`.
 
 ## Rules
 
@@ -134,6 +135,9 @@ Read `AGENTS.md`, then locate the owning layer.
   SSH key, runtime config, PID state, and logs under target-owned managed state;
   expose only its public key and non-secret readiness metadata through the
   bootstrap route.
+- Keep public-entry status pages self-contained under the Agent. Network-denied
+  pages should explain LAN/VPN recovery without exposing client IPs or internal
+  diagnostics; maintenance and unavailable pages may automatically refresh.
 - Provision the public Feishu app ID into the target-owned Gateway config so
   Feishu user agents can complete code-only login on the registered public URL.
   Never provision the app secret or persist returned authorization codes.

@@ -210,6 +210,8 @@ when those variables are absent.
   same-egress-IP access checks, LAN redirects, and the reverse SSH tunnel. Its
   build output belongs under `public-entry-gateway/Publish/`; the main build embeds
   that package for managed target provisioning.
+- `public-entry-gateway/src/statusPage.js`: self-contained 403/503/error status
+  pages with no external browser assets or internal diagnostics.
 - Deployment-tool packages belong under `deployment-tool/Publish/`; never write
   them into the application's root `Publish/` directory.
 
