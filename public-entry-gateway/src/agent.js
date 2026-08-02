@@ -128,14 +128,25 @@ p{margin:0;color:#646a73;font-size:15px;line-height:1.7}
 <main><h1>正在登录开发平台</h1><p id="status">正在连接飞书，请稍候。</p></main>
 <script src="https://lf-scm-cn.feishucdn.com/lark/op/h5-js-sdk-1.5.44.js"></script>
 <script>
-(() => {
+(async () => {
   const appId = ${serializedAppId};
   const targetUrl = ${serializedTargetUrl};
   const status = document.getElementById('status');
-  const deadline = Date.now() + 10000;
+  const runtimeDeadline = Date.now() + 10000;
+  const attemptTimeoutMs = 8000;
+  const totalTimeoutMs = 22000;
   let requested = false;
+  let completed = false;
+  const totalTimeoutId = window.setTimeout(() => {
+    fail({ message: '飞书登录超时，请关闭当前窗口后重新打开' });
+  }, totalTimeoutMs);
 
   function fail(error) {
+    if (completed) {
+      return;
+    }
+    completed = true;
+    window.clearTimeout(totalTimeoutId);
     const raw = error && (error.errString || error.errMsg || error.message);
     status.textContent = raw
       ? '飞书登录失败：' + String(raw).slice(0, 160)
@@ -143,42 +154,131 @@ p{margin:0;color:#646a73;font-size:15px;line-height:1.7}
   }
 
   function finish(result) {
+    if (completed) {
+      return;
+    }
     const code = result && (result.code || result.authCode || result.auth_code);
     if (!code) {
       fail({ message: '飞书没有返回授权码' });
       return;
     }
+    completed = true;
+    window.clearTimeout(totalTimeoutId);
     const destination = new URL(targetUrl);
     destination.searchParams.set('igpFeishuAuthCode', code);
     window.location.replace(destination.toString());
   }
 
+  function describeError(error, fallback) {
+    return error && (error.errString || error.errMsg || error.message)
+      ? error
+      : { message: fallback };
+  }
+
+  function requestCode(methodName) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const settle = (callback) => (value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        window.clearTimeout(timeoutId);
+        callback(value);
+      };
+      const timeoutId = window.setTimeout(
+        settle(() => reject({ message: methodName + ' 接口无响应' })),
+        attemptTimeoutMs,
+      );
+      const options = methodName === 'requestAccess'
+        ? {
+            appID: appId,
+            scopeList: [],
+            success: settle(resolve),
+            fail: settle(reject),
+            complete() {},
+          }
+        : {
+            appId,
+            success: settle(resolve),
+            fail: settle(reject),
+            complete() {},
+          };
+      try {
+        window.tt[methodName](options);
+      } catch (error) {
+        settle(reject)(error);
+      }
+    });
+  }
+
+  async function login() {
+    const methods = [];
+    if (typeof window.tt.requestAccess === 'function') {
+      methods.push('requestAccess');
+    }
+    if (typeof window.tt.requestAuthCode === 'function') {
+      methods.push('requestAuthCode');
+    }
+    if (methods.length === 0) {
+      throw new Error('飞书客户端不支持当前免登接口');
+    }
+
+    let lastError = null;
+    for (const methodName of methods) {
+      status.textContent = methodName === 'requestAccess'
+        ? '正在向飞书申请登录授权，请稍候。'
+        : '正在尝试备用登录方式，请稍候。';
+      try {
+        const result = await requestCode(methodName);
+        finish(result);
+        return;
+      } catch (error) {
+        lastError = describeError(error, methodName + ' 调用失败');
+      }
+    }
+    fail(lastError);
+  }
+
   function tryLogin() {
-    if (requested) {
+    if (requested || completed) {
       return;
     }
-    if (window.tt && typeof window.tt.requestAuthCode === 'function') {
+    if (
+      window.tt
+      && (
+        typeof window.tt.requestAccess === 'function'
+        || typeof window.tt.requestAuthCode === 'function'
+      )
+    ) {
       requested = true;
-      window.tt.requestAuthCode({
-        appId,
-        success: finish,
-        fail,
-        complete() {},
-      });
+      login().catch(fail);
       return;
     }
-    if (Date.now() >= deadline) {
+    if (Date.now() >= runtimeDeadline) {
       fail();
       return;
     }
     window.setTimeout(tryLogin, 150);
   }
 
+  if (window.h5sdk && typeof window.h5sdk.error === 'function') {
+    window.h5sdk.error((error) => {
+      if (!requested) {
+        fail(describeError(error, '飞书 SDK 初始化失败'));
+      }
+    });
+  }
   if (window.h5sdk && typeof window.h5sdk.ready === 'function') {
     window.h5sdk.ready(tryLogin);
   }
   tryLogin();
-})();
+})().catch((error) => {
+  const status = document.getElementById('status');
+  if (status) {
+    status.textContent = '飞书登录失败：' + String(error && error.message || error).slice(0, 160);
+  }
+});
 </script>
 </body>
 </html>`;

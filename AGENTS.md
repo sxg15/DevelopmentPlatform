@@ -490,9 +490,11 @@ rollback release.
   decisions on the LAN Agent, and redirect only to the configured LAN origin.
 - Feishu client requests must complete code-only login on the registered public
   entry URL before navigating to the LAN origin. The Gateway may serve the minimal
-  H5 SDK bridge for Feishu user agents; pass only the public app ID and a one-time
-  authorization code, consume and remove that code immediately on the LAN page,
-  and keep ordinary browsers on the direct 302 path.
+  H5 SDK bridge for Feishu user agents; prefer `tt.requestAccess`, fall back to
+  `tt.requestAuthCode`, and bound every attempt plus the total login duration.
+  Pass only the public app ID and a one-time authorization code, consume and remove
+  that code immediately on the LAN page, and keep ordinary browsers on the direct
+  302 path.
 - On managed backend SIGTERM, atomically mark the public entry as upgrading before
   shutdown. Clear the marker only after the replacement backend is listening.
   Failed verified Agent stops must block package replacement.

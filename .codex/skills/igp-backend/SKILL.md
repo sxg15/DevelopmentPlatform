@@ -137,6 +137,9 @@ Read `AGENTS.md`, then locate the owning layer.
 - Provision the public Feishu app ID into the target-owned Gateway config so
   Feishu user agents can complete code-only login on the registered public URL.
   Never provision the app secret or persist returned authorization codes.
+- In the public Feishu bridge, prefer `tt.requestAccess`, fall back to
+  `tt.requestAuthCode`, and bound each attempt plus the overall login so a missing
+  desktop-client callback cannot leave the entry page loading forever.
 - Mark managed SIGTERM shutdown as public-entry maintenance before closing the
   backend, and clear that state only after the new backend listener is ready.
   Never replace a running Agent package after a failed verified stop.

@@ -5,6 +5,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import vm from 'node:vm';
 import {
   ENTRY_STATUS,
   buildLocalRedirectUrl,
@@ -245,10 +246,20 @@ test('HTTP agent returns redirect, forbidden and maintenance responses', async (
       'x-igp-client-ip': '47.100.74.169',
     });
     assert.equal(feishuBridge.statusCode, 200);
+    assert.match(feishuBridge.body, /requestAccess/);
     assert.match(feishuBridge.body, /requestAuthCode/);
+    assert.ok(
+      feishuBridge.body.indexOf("methods.push('requestAccess')") <
+      feishuBridge.body.indexOf("methods.push('requestAuthCode')"),
+    );
+    assert.match(feishuBridge.body, /接口无响应/);
+    assert.match(feishuBridge.body, /飞书登录超时/);
     assert.match(feishuBridge.body, /cli_test/);
     assert.match(feishuBridge.body, /igpFeishuAuthCode/);
     assert.match(feishuBridge.body, /172\.16\.20\.205:3000/);
+    const inlineScript = feishuBridge.body.match(/<script>\s*([\s\S]*?)\s*<\/script>/)?.[1];
+    assert.ok(inlineScript);
+    assert.doesNotThrow(() => new vm.Script(inlineScript));
 
     const forbidden = await requestAgent(config.server.port, '/', {
       'x-igp-relay-token': TOKEN,
