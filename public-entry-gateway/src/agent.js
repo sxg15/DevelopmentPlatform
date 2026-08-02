@@ -7,9 +7,9 @@ import {
   normalizeClientIpHeader,
 } from './entryDecision.js';
 import {
-  FEISHU_SDK_PUBLIC_PATH,
-  FeishuSdkProvider,
-} from './feishuSdkProvider.js';
+  buildFeishuAuthorizationUrl,
+  FeishuOAuthStateStore,
+} from './feishuOAuth.js';
 import { loadGatewayConfig } from './config.js';
 import { GatewayHealthMonitor } from './healthMonitor.js';
 import { SshTunnelManager } from './sshTunnelManager.js';
@@ -18,10 +18,11 @@ export async function createGatewayAgent(config, options = {}) {
   const logger = options.logger || console;
   const monitor = options.monitor || new GatewayHealthMonitor(config);
   const tunnel = options.tunnel || new SshTunnelManager(config, { logger });
-  const feishuSdkProvider = options.feishuSdkProvider || new FeishuSdkProvider();
+  const feishuOAuthStateStore =
+    options.feishuOAuthStateStore || new FeishuOAuthStateStore();
   const server = http.createServer((request, response) => {
     handleEntryRequest(config, monitor, request, response, {
-      feishuSdkProvider,
+      feishuOAuthStateStore,
     }).catch((error) => {
       logger.error(error instanceof Error ? error.stack || error.message : String(error));
       if (!response.headersSent) {
@@ -81,27 +82,72 @@ export async function handleEntryRequest(config, monitor, request, response, opt
   });
 
   if (decision.status === ENTRY_STATUS.REDIRECT) {
-    if (isFeishuSdkRequest(request)) {
-      await sendFeishuSdk(
+    const oauthCallback = readFeishuOAuthCallback(request, config.publicEntry.baseUrl);
+    if (oauthCallback) {
+      const targetUrl = options.feishuOAuthStateStore?.consume(oauthCallback.state) || '';
+      if (!targetUrl) {
+        sendHtml(
+          response,
+          400,
+          '登录请求已失效',
+          '请关闭当前窗口后从飞书工作台重新打开开发平台。',
+          request.method === 'HEAD',
+        );
+        return;
+      }
+      if (oauthCallback.error) {
+        sendHtml(
+          response,
+          401,
+          '飞书登录未完成',
+          oauthCallback.errorDescription || '请关闭当前窗口后重新打开。',
+          request.method === 'HEAD',
+        );
+        return;
+      }
+      if (!oauthCallback.code) {
+        sendHtml(
+          response,
+          400,
+          '飞书没有返回授权码',
+          '请关闭当前窗口后重新打开。',
+          request.method === 'HEAD',
+        );
+        return;
+      }
+      const destination = new URL(targetUrl);
+      destination.searchParams.set('igpFeishuAuthCode', oauthCallback.code);
+      sendRedirect(
         response,
-        options.feishuSdkProvider || new FeishuSdkProvider(),
+        destination.toString(),
+        '正在进入开发平台',
         request.method === 'HEAD',
       );
       return;
     }
     if (config.feishu.appId && isFeishuClientRequest(request)) {
-      sendFeishuAuthBridge(
+      const stateStore =
+        options.feishuOAuthStateStore || new FeishuOAuthStateStore();
+      const state = stateStore.create(decision.location);
+      const authorizationUrl = buildFeishuAuthorizationUrl({
+        appId: config.feishu.appId,
+        redirectUri: buildOAuthRedirectUri(config.publicEntry.baseUrl),
+        state,
+      });
+      sendRedirect(
         response,
-        config.feishu.appId,
-        decision.location,
+        authorizationUrl,
+        '正在连接飞书登录',
         request.method === 'HEAD',
       );
       return;
     }
-    response.statusCode = 302;
-    response.setHeader('Location', decision.location);
-    response.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    response.end(request.method === 'HEAD' ? undefined : '正在进入开发平台');
+    sendRedirect(
+      response,
+      decision.location,
+      '正在进入开发平台',
+      request.method === 'HEAD',
+    );
     return;
   }
   const title = decision.status === ENTRY_STATUS.FORBIDDEN
@@ -124,223 +170,38 @@ function isFeishuClientRequest(request) {
   return userAgent.includes('feishu') || userAgent.includes('lark');
 }
 
-function isFeishuSdkRequest(request) {
+function readFeishuOAuthCallback(request, publicBaseUrl) {
   try {
-    return new URL(String(request.url || '/'), 'http://gateway.invalid').pathname
-      === FEISHU_SDK_PUBLIC_PATH;
+    const url = new URL(String(request.url || '/'), publicBaseUrl);
+    const state = String(url.searchParams.get('state') || '');
+    const code = String(url.searchParams.get('code') || '');
+    const error = String(url.searchParams.get('error') || '');
+    if (!state || (!code && !error)) {
+      return null;
+    }
+    return {
+      state,
+      code,
+      error,
+      errorDescription: String(url.searchParams.get('error_description') || ''),
+    };
   } catch {
-    return false;
+    return null;
   }
 }
 
-async function sendFeishuSdk(response, provider, headOnly = false) {
-  const sdk = await provider.getSdk();
-  response.statusCode = 200;
-  response.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-  response.setHeader('Cache-Control', 'public, max-age=86400, immutable');
-  response.removeHeader('Pragma');
-  response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
-  response.end(headOnly ? undefined : sdk);
+function buildOAuthRedirectUri(publicBaseUrl) {
+  const url = new URL(publicBaseUrl);
+  url.search = '';
+  url.hash = '';
+  return url.toString();
 }
 
-function sendFeishuAuthBridge(response, appId, targetUrl, headOnly = false) {
-  const serializedAppId = serializeInlineScriptValue(appId);
-  const serializedTargetUrl = serializeInlineScriptValue(targetUrl);
-  const body = `<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>开发平台</title>
-<style>
-html,body{margin:0;min-height:100%;font-family:Arial,"Microsoft YaHei",sans-serif;background:#f5f7fa;color:#1f2329}
-body{display:grid;place-items:center}
-main{width:min(520px,calc(100% - 40px));text-align:center}
-h1{margin:0 0 12px;font-size:22px;font-weight:650}
-p{margin:0;color:#646a73;font-size:15px;line-height:1.7}
-</style>
-</head>
-<body>
-<main><h1>正在登录开发平台</h1><p id="status">正在连接飞书，请稍候。</p></main>
-<script>window.__igpFeishuSdkState = 'loading';</script>
-<script
-  src="${FEISHU_SDK_PUBLIC_PATH}"
-  onload="window.__igpFeishuSdkState='loaded'"
-  onerror="window.__igpFeishuSdkState='failed';document.getElementById('status').textContent='飞书 SDK 加载失败，请关闭当前窗口后重新打开。'"
-></script>
-<script>
-(async () => {
-  const appId = ${serializedAppId};
-  const targetUrl = ${serializedTargetUrl};
-  const status = document.getElementById('status');
-  const runtimeDeadline = Date.now() + 10000;
-  const attemptTimeoutMs = 8000;
-  const totalTimeoutMs = 22000;
-  let requested = false;
-  let completed = false;
-  const totalTimeoutId = window.setTimeout(() => {
-    fail({ message: '飞书登录超时，请关闭当前窗口后重新打开' });
-  }, totalTimeoutMs);
-
-  function fail(error) {
-    if (completed) {
-      return;
-    }
-    completed = true;
-    window.clearTimeout(totalTimeoutId);
-    const raw = error && (error.errString || error.errMsg || error.message);
-    status.textContent = raw
-      ? '飞书登录失败：' + String(raw).slice(0, 160)
-      : '飞书登录能力未就绪，请关闭当前窗口后重新打开。';
-  }
-
-  function finish(result) {
-    if (completed) {
-      return;
-    }
-    const code = result && (result.code || result.authCode || result.auth_code);
-    if (!code) {
-      fail({ message: '飞书没有返回授权码' });
-      return;
-    }
-    completed = true;
-    window.clearTimeout(totalTimeoutId);
-    const destination = new URL(targetUrl);
-    destination.searchParams.set('igpFeishuAuthCode', code);
-    window.location.replace(destination.toString());
-  }
-
-  function describeError(error, fallback) {
-    return error && (error.errString || error.errMsg || error.message)
-      ? error
-      : { message: fallback };
-  }
-
-  function requestCode(methodName) {
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const settle = (callback) => (value) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        window.clearTimeout(timeoutId);
-        callback(value);
-      };
-      const timeoutId = window.setTimeout(
-        settle(() => reject({ message: methodName + ' 接口无响应' })),
-        attemptTimeoutMs,
-      );
-      const options = methodName === 'requestAccess'
-        ? {
-            appID: appId,
-            scopeList: [],
-            success: settle(resolve),
-            fail: settle(reject),
-            complete() {},
-          }
-        : {
-            appId,
-            success: settle(resolve),
-            fail: settle(reject),
-            complete() {},
-          };
-      try {
-        window.tt[methodName](options);
-      } catch (error) {
-        settle(reject)(error);
-      }
-    });
-  }
-
-  async function login() {
-    const methods = [];
-    if (typeof window.tt.requestAccess === 'function') {
-      methods.push('requestAccess');
-    }
-    if (typeof window.tt.requestAuthCode === 'function') {
-      methods.push('requestAuthCode');
-    }
-    if (methods.length === 0) {
-      throw new Error('飞书客户端不支持当前免登接口');
-    }
-
-    let lastError = null;
-    for (const methodName of methods) {
-      status.textContent = methodName === 'requestAccess'
-        ? '正在向飞书申请登录授权，请稍候。'
-        : '正在尝试备用登录方式，请稍候。';
-      try {
-        const result = await requestCode(methodName);
-        finish(result);
-        return;
-      } catch (error) {
-        lastError = describeError(error, methodName + ' 调用失败');
-      }
-    }
-    fail(lastError);
-  }
-
-  function tryLogin() {
-    if (requested || completed) {
-      return;
-    }
-    if (
-      window.tt
-      && (
-        typeof window.tt.requestAccess === 'function'
-        || typeof window.tt.requestAuthCode === 'function'
-      )
-    ) {
-      requested = true;
-      login().catch(fail);
-      return;
-    }
-    if (Date.now() >= runtimeDeadline) {
-      const sdkState = String(window.__igpFeishuSdkState || 'unknown');
-      fail({
-        message: sdkState === 'failed'
-          ? '飞书 SDK 加载失败'
-          : sdkState === 'loaded'
-            ? '飞书 SDK 已加载，但客户端未提供登录接口'
-            : '飞书 SDK 未完成加载',
-      });
-      return;
-    }
-    window.setTimeout(tryLogin, 150);
-  }
-
-  if (window.h5sdk && typeof window.h5sdk.error === 'function') {
-    window.h5sdk.error((error) => {
-      if (!requested) {
-        fail(describeError(error, '飞书 SDK 初始化失败'));
-      }
-    });
-  }
-  if (window.h5sdk && typeof window.h5sdk.ready === 'function') {
-    window.h5sdk.ready(tryLogin);
-  }
-  tryLogin();
-})().catch((error) => {
-  const status = document.getElementById('status');
-  if (status) {
-    status.textContent = '飞书登录失败：' + String(error && error.message || error).slice(0, 160);
-  }
-});
-</script>
-</body>
-</html>`;
-  response.statusCode = 200;
-  response.setHeader('Content-Type', 'text/html; charset=utf-8');
-  response.setHeader(
-    'Content-Security-Policy',
-    "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
-  );
-  response.end(headOnly ? undefined : body);
-}
-
-function serializeInlineScriptValue(value) {
-  return JSON.stringify(String(value || '')).replaceAll('<', '\\u003c');
+function sendRedirect(response, location, message, headOnly = false) {
+  response.statusCode = 302;
+  response.setHeader('Location', location);
+  response.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  response.end(headOnly ? undefined : message);
 }
 
 function applySecurityHeaders(response) {

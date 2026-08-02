@@ -5,7 +5,6 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import vm from 'node:vm';
 import {
   ENTRY_STATUS,
   buildLocalRedirectUrl,
@@ -13,9 +12,9 @@ import {
 } from '../src/entryDecision.js';
 import { normalizeGatewayConfig } from '../src/config.js';
 import {
-  FEISHU_SDK_PUBLIC_PATH,
-  FeishuSdkProvider,
-} from '../src/feishuSdkProvider.js';
+  buildFeishuAuthorizationUrl,
+  FeishuOAuthStateStore,
+} from '../src/feishuOAuth.js';
 import { GatewayHealthMonitor, readMaintenanceState } from '../src/healthMonitor.js';
 import { isClientIpAllowed, isIpInCidr, normalizeIpAddress } from '../src/ipUtils.js';
 import { SshTunnelManager } from '../src/sshTunnelManager.js';
@@ -154,31 +153,35 @@ test('failed public IP probes do not refresh the last successful result', async 
   assert.equal(status.publicIpError, 'probe unavailable');
 });
 
-test('Feishu SDK provider validates and caches the official script', async () => {
-  let requestCount = 0;
-  const source = 'window.tt={requestAuthCode:function(){}};';
-  const provider = new FeishuSdkProvider({
-    fetchImpl: async () => {
-      requestCount += 1;
-      return {
-        ok: true,
-        status: 200,
-        headers: {
-          get() {
-            return String(Buffer.byteLength(source));
-          },
-        },
-        async arrayBuffer() {
-          return Buffer.from(source);
-        },
-      };
-    },
+test('Feishu OAuth states are one-time, bounded and expiring', () => {
+  let now = 1000;
+  let seed = 0;
+  const store = new FeishuOAuthStateStore({
+    now: () => now,
+    ttlMs: 500,
+    maxStates: 2,
+    randomBytesImpl: () => Buffer.alloc(24, ++seed),
   });
 
-  const [first, second] = await Promise.all([provider.getSdk(), provider.getSdk()]);
-  assert.equal(first.toString('utf8'), source);
-  assert.equal(second.toString('utf8'), source);
-  assert.equal(requestCount, 1);
+  const first = store.create('http://172.16.20.205:3000/first');
+  assert.equal(store.consume(first), 'http://172.16.20.205:3000/first');
+  assert.equal(store.consume(first), '');
+
+  const expired = store.create('http://172.16.20.205:3000/expired');
+  now = 1600;
+  assert.equal(store.consume(expired), '');
+
+  const authorizationUrl = new URL(buildFeishuAuthorizationUrl({
+    appId: 'cli_test',
+    redirectUri: 'http://47.100.74.169/',
+    state: 'state-token',
+  }));
+  assert.equal(authorizationUrl.origin, 'https://accounts.feishu.cn');
+  assert.equal(authorizationUrl.pathname, '/open-apis/authen/v1/authorize');
+  assert.equal(authorizationUrl.searchParams.get('client_id'), 'cli_test');
+  assert.equal(authorizationUrl.searchParams.get('redirect_uri'), 'http://47.100.74.169/');
+  assert.equal(authorizationUrl.searchParams.get('response_type'), 'code');
+  assert.equal(authorizationUrl.searchParams.get('state'), 'state-token');
 });
 
 test('SSH tunnel arguments are restricted, pinned and reverse-only', () => {
@@ -257,11 +260,7 @@ test('HTTP agent returns redirect, forbidden and maintenance responses', async (
       start() {},
       async stop() {},
     },
-    feishuSdkProvider: {
-      async getSdk() {
-        return Buffer.from('window.tt={requestAuthCode:function(){}};');
-      },
-    },
+    feishuOAuthStateStore: new FeishuOAuthStateStore(),
     logger: { log() {}, error() {} },
   });
   await agent.start();
@@ -276,38 +275,48 @@ test('HTTP agent returns redirect, forbidden and maintenance responses', async (
       'http://172.16.20.205:3000/projects/50?tool=bugs',
     );
 
-    const feishuBridge = await requestAgent(config.server.port, '/projects/50?tool=bugs', {
+    const feishuLogin = await requestAgent(config.server.port, '/projects/50?tool=bugs', {
       'user-agent': 'Mozilla/5.0 Feishu/7.0',
       'x-igp-relay-token': TOKEN,
       'x-igp-client-ip': '47.100.74.169',
     });
-    assert.equal(feishuBridge.statusCode, 200);
-    assert.match(feishuBridge.body, new RegExp(FEISHU_SDK_PUBLIC_PATH));
-    assert.doesNotMatch(feishuBridge.body, /lf-scm-cn\.feishucdn\.com/);
-    assert.match(feishuBridge.body, /requestAccess/);
-    assert.match(feishuBridge.body, /requestAuthCode/);
-    assert.ok(
-      feishuBridge.body.indexOf("methods.push('requestAccess')") <
-      feishuBridge.body.indexOf("methods.push('requestAuthCode')"),
+    assert.equal(feishuLogin.statusCode, 302);
+    const authorizationUrl = new URL(feishuLogin.headers.location);
+    assert.equal(authorizationUrl.origin, 'https://accounts.feishu.cn');
+    assert.equal(authorizationUrl.searchParams.get('client_id'), 'cli_test');
+    assert.equal(
+      authorizationUrl.searchParams.get('redirect_uri'),
+      'http://47.100.74.169/',
     );
-    assert.match(feishuBridge.body, /接口无响应/);
-    assert.match(feishuBridge.body, /飞书登录超时/);
-    assert.match(feishuBridge.body, /cli_test/);
-    assert.match(feishuBridge.body, /igpFeishuAuthCode/);
-    assert.match(feishuBridge.body, /172\.16\.20\.205:3000/);
-    const inlineScript = feishuBridge.body.match(/<script>\s*([\s\S]*?)\s*<\/script>/)?.[1];
-    assert.ok(inlineScript);
-    assert.doesNotThrow(() => new vm.Script(inlineScript));
+    const oauthState = authorizationUrl.searchParams.get('state');
+    assert.ok(oauthState);
 
-    const feishuSdk = await requestAgent(config.server.port, FEISHU_SDK_PUBLIC_PATH, {
-      'user-agent': 'Mozilla/5.0 Feishu/7.0 WebApp/appCenter',
-      'x-igp-relay-token': TOKEN,
-      'x-igp-client-ip': '47.100.74.169',
-    });
-    assert.equal(feishuSdk.statusCode, 200);
-    assert.equal(feishuSdk.body, 'window.tt={requestAuthCode:function(){}};');
-    assert.match(feishuSdk.headers['content-type'], /application\/javascript/);
-    assert.match(feishuSdk.headers['cache-control'], /immutable/);
+    const oauthCallback = await requestAgent(
+      config.server.port,
+      `/?code=auth-code&state=${encodeURIComponent(oauthState)}`,
+      {
+        'user-agent': 'Mozilla/5.0 Feishu/7.0 WebApp/appCenter',
+        'x-igp-relay-token': TOKEN,
+        'x-igp-client-ip': '47.100.74.169',
+      },
+    );
+    assert.equal(oauthCallback.statusCode, 302);
+    assert.equal(
+      oauthCallback.headers.location,
+      'http://172.16.20.205:3000/projects/50?tool=bugs&igpFeishuAuthCode=auth-code',
+    );
+
+    const replayedCallback = await requestAgent(
+      config.server.port,
+      `/?code=auth-code&state=${encodeURIComponent(oauthState)}`,
+      {
+        'user-agent': 'Mozilla/5.0 Feishu/7.0 WebApp/appCenter',
+        'x-igp-relay-token': TOKEN,
+        'x-igp-client-ip': '47.100.74.169',
+      },
+    );
+    assert.equal(replayedCallback.statusCode, 400);
+    assert.match(replayedCallback.body, /登录请求已失效/);
 
     const forbidden = await requestAgent(config.server.port, '/', {
       'x-igp-relay-token': TOKEN,
@@ -315,12 +324,12 @@ test('HTTP agent returns redirect, forbidden and maintenance responses', async (
     });
     assert.equal(forbidden.statusCode, 403);
 
-    const forbiddenSdk = await requestAgent(config.server.port, FEISHU_SDK_PUBLIC_PATH, {
+    const forbiddenCallback = await requestAgent(config.server.port, '/?code=x&state=y', {
       'user-agent': 'Mozilla/5.0 Feishu/7.0 WebApp/appCenter',
       'x-igp-relay-token': TOKEN,
       'x-igp-client-ip': '198.51.100.8',
     });
-    assert.equal(forbiddenSdk.statusCode, 403);
+    assert.equal(forbiddenCallback.statusCode, 403);
 
     state.maintenance = { active: true, phase: 'starting' };
     state.ready = false;

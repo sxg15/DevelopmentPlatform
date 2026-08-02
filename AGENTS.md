@@ -489,12 +489,10 @@ rollback release.
   relay loopback, restrict its SSH key to that listener, keep health/access
   decisions on the LAN Agent, and redirect only to the configured LAN origin.
 - Feishu client requests must complete code-only login on the registered public
-  entry URL before navigating to the LAN origin. The Gateway may serve the minimal
-  H5 SDK bridge for Feishu user agents; prefer `tt.requestAccess`, fall back to
-  `tt.requestAuthCode`, and bound every attempt plus the total login duration.
-  Serve the official H5 SDK through a health- and access-checked same-origin Agent
-  path backed by a validated process-memory CDN cache so the Feishu WebView does
-  not need to establish the external SDK TLS connection itself.
+  entry URL before navigating to the LAN origin. Use the standard Feishu OAuth
+  authorization-code redirect instead of depending on H5 JSAPI availability.
+  OAuth states must be one-time, process-local, bounded, and expiring, and the
+  callback may restore only the previously validated LAN target.
   Pass only the public app ID and a one-time authorization code, consume and remove
   that code immediately on the LAN page, and keep ordinary browsers on the direct
   302 path.
