@@ -79,6 +79,8 @@ the current or rollback release.
   `test/apiClient.test.js`.
 - Shared authentication-expiration contracts and reauthorization navigation:
   `test/authenticationErrorUtils.test.js`.
+- Feishu H5 code-only login API selection:
+  `test/feishuH5.test.js`.
 - Backend config/runtime/integrations: `test/serverConfig.test.js`,
   `test/serverRuntime.test.js`, `test/configEditor.test.js`,
   `test/wikiClient.test.js`, and `test/feishuAssistant.test.js`.

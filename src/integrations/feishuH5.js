@@ -42,22 +42,24 @@ export async function waitForFeishuRuntime() {
 }
 
 export async function getFeishuAuthCode(feishuRuntime, appId) {
+  if (feishuRuntime.requestAuthCode) {
+    return requestAuthCode(feishuRuntime.requestAuthCode, appId);
+  }
+
   try {
     if (feishuRuntime.requestAccess) {
       return await requestAccessCode(feishuRuntime.requestAccess, appId, FEISHU_USER_SCOPES);
     }
   } catch (error) {
-    if (feishuRuntime.requestAccess && shouldRetryWithoutOptionalScopes(error)) {
+    if (
+      feishuRuntime.requestAccess
+      && FEISHU_USER_SCOPES.length > 0
+      && shouldRetryWithoutOptionalScopes(error)
+    ) {
       return await requestAccessCode(feishuRuntime.requestAccess, appId, []);
     }
 
-    if (!shouldFallbackToRequestAuthCode(error) || !feishuRuntime.requestAuthCode) {
-      throw error;
-    }
-  }
-
-  if (feishuRuntime.requestAuthCode) {
-    return requestAuthCode(feishuRuntime.requestAuthCode, appId);
+    throw error;
   }
 
   throw new Error('飞书客户端不支持当前免登接口');
@@ -207,10 +209,6 @@ function createFeishuError(error) {
   feishuError.errno = error?.errno;
   feishuError.rawMessage = rawMessage;
   return feishuError;
-}
-
-function shouldFallbackToRequestAuthCode(error) {
-  return error?.errno === 103;
 }
 
 function shouldRetryWithoutOptionalScopes(error) {
