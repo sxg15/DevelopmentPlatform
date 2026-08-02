@@ -91,6 +91,10 @@ Treat shared definitions as the canonical frontend/backend contract.
   for feedback;
   test administrators count `待测试`/`测试中`, selected testers count assigned
   `测试中`, zero counts stay hidden, and realtime events refresh the values.
+- `builds` and `review` are visible navigation placeholders for all project
+  members even when the permission matrix omits them. Their shared definitions
+  carry `disabled: true` and `statusText: '开发中'`; the frontend must render
+  `（开发中）` and never select them or issue backend requests.
 - Opening the authenticated app silently creates a missing personal-settings
   record with notifications disabled. Record creation must not delay or fail the
   normal workspace startup path.

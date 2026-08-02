@@ -792,6 +792,29 @@ button:focus-visible {
   color: #0f766e;
 }
 
+.project-tool-button:disabled,
+.project-tool-button:disabled:hover {
+  color: #7d8985;
+  background: rgba(255, 255, 255, 0.38);
+  border-color: transparent;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.project-tool-button:disabled .project-tool-icon,
+.project-tool-button:disabled:hover .project-tool-icon {
+  color: #9aa5a1;
+}
+
+.project-tool-copy {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 0 3px;
+}
+
 .project-tool-label {
   min-width: 0;
   overflow: hidden;
@@ -799,6 +822,15 @@ button:focus-visible {
   font-weight: 900;
   line-height: 22px;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-tool-development-status {
+  flex: 0 0 auto;
+  color: #9a6700;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 18px;
   white-space: nowrap;
 }
 

@@ -261,6 +261,9 @@ rollback release.
   existing project tables.
 - Every project tool definition includes an `iconKey`; the project navigation maps
   it to a Lucide icon and uses a generic icon only for stale or unknown tool data.
+- `打包列表` and `内容审查` remain visible to every project member as disabled
+  development placeholders. Show `（开发中）`, do not allow selection or backend
+  requests, and keep other tools governed by the permission matrix.
 - Explicit "不知道该由谁处理" routing is supported only for requirements and Bugs.
   It sends assignment cards to the project's `研发超级管理员`.
 - `研发超级管理员` can assign requirement/Bug handlers but does not inherit all

@@ -13,7 +13,7 @@
 7. `bitable.projectPermission.fieldNames.permissionUsers` 默认读取 `超级管理员`、`研发超级管理员`、`研发`、`测试`、`发行`、`商务` 六列，权限列名不同才需要修改。
 8. “项目权限”表必须新增人员列 `研发超级管理员`，并在每个项目行配置负责分配需求/Bug的人员；对应配置项是 `bitable.projectPermission.fieldNames.developmentSuperAdmins`。该角色可访问需求和 Bug、变更处理人，并会收到未指定处理人的分配卡片，但不继承删除或编辑内容等超级管理员权限。
 9. 在 `bitable.toolPermission` 中填入“工具权限”多维表格配置；`tableId` 可留空，系统会默认读取第一张数据表。
-10. `bitable.toolPermission.fieldNames.department` 默认读取 `部门`；工具列默认读取 `需求列表`、`Bug列表`、`反馈列表`、`打包列表`、`内容审查`，值为 `允许` 才显示该工具。
+10. `bitable.toolPermission.fieldNames.department` 默认读取 `部门`；工具列默认读取 `需求列表`、`Bug列表`、`反馈列表`、`打包列表`、`内容审查`。除固定显示且不可点击的“打包列表（开发中）”和“内容审查（开发中）”外，字段值为 `允许` 才显示对应工具。
 11. 在 `knowledgeBase.spaceId` 中填入知识库空间 ID；`requirementsParentName`、`bugsParentName`、`feedbackParentName` 默认分别是 `需求列表`、`Bug列表`、`反馈列表`，模板名默认都是 `模板`。
 12. `knowledgeBase.requirementsFieldNames` 用于配置需求表字段名；除原有需求字段外，模板还必须包含单选字段 `需要提交附件`（选项为 `是`、`否`）和附件字段 `提交附件`，对应配置项为 `requiresSubmissionAttachment`、`submittedAttachments`。需求的 `处理状态` 单选字段包含 `待验收`，该状态按处理中统计。
 13. `knowledgeBase.bugsFieldNames` 用于配置 Bug 表字段名；默认读取 `BugID`、`标题`、`详细描述`、`优先级`、`处理人员`、`处理状态`、`发现时间`、`期望时限`、`留言`。Bug 的 `处理状态` 单选字段同样包含 `待验收`。

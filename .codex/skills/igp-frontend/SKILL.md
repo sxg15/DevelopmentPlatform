@@ -126,6 +126,9 @@ Read `AGENTS.md`, then inspect only the owning frontend modules.
 - Preserve local snapshot and draft keys when changing workspace state.
 - Render every project tool with its required shared `iconKey`; keep a generic
   Lucide fallback for stale cached tool definitions.
+- Always append the shared `builds` and `review` definitions as disabled project
+  navigation placeholders, display their `（开发中）` status, and block both
+  native button activation and the tool-selection handler.
 - Keep stylesheet import order: base, overview, version management, work items,
   test tasks, AI planning, auth, settings, responsive.
 - Add component-specific CSS to the owning stylesheet; add cross-module responsive

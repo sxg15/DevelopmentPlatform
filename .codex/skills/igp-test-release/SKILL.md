@@ -63,7 +63,9 @@ the current or rollback release.
 - Frontend cache/list/fields: `test/localCacheAndUpdateManifest.test.js`,
   `test/workItemListUtils.test.js`, `test/workItemFieldUtils.test.js`,
   `test/projectOverviewDisplayUtils.test.js`,
-  `test/workItemTimelineUtils.test.js`.
+  `test/workItemTimelineUtils.test.js`, and
+  `test/projectToolDisplayUtils.test.js`. Keep coverage for the always-visible,
+  disabled `builds` and `review` development placeholders.
 - Frontend module binding regression: `test/frontendModuleBindings.test.js`.
 - Test-task JSON, permissions, transitions, feedback retries, and service behavior:
   `test/testTaskUtils.test.js` and `test/testTaskService.test.js`.

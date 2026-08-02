@@ -1,5 +1,55 @@
 const PENDING_COUNT_TOOL_IDS = Object.freeze(['requirements', 'bugs', 'testTasks', 'feedback']);
 
+export function getProjectToolsForDisplay(project, definitions) {
+  const canonicalTools = Array.isArray(definitions) ? definitions.filter(Boolean) : [];
+  const tools = Array.isArray(project?.allowedTools) && project.allowedTools.length > 0
+    ? project.allowedTools
+    : canonicalTools;
+  const normalizedTools = [];
+  const addedToolIds = new Set();
+
+  for (const tool of tools) {
+    const canonicalTool = canonicalTools.find((item) => item.id === tool?.id) || tool;
+    const toolId = String(canonicalTool?.id || '').trim();
+    if (
+      !toolId
+      || !canonicalTool?.label
+      || addedToolIds.has(toolId)
+      || (toolId === 'aiPlans' && !project?.aiPlanning?.enabled)
+    ) {
+      continue;
+    }
+    normalizedTools.push(canonicalTool);
+    addedToolIds.add(toolId);
+  }
+
+  const overviewTool = canonicalTools.find((tool) => tool.id === 'overview');
+  if (overviewTool && !addedToolIds.has('overview')) {
+    normalizedTools.unshift(overviewTool);
+    addedToolIds.add('overview');
+  }
+
+  const versionTool = canonicalTools.find((tool) => tool.id === 'versions');
+  if (versionTool && !addedToolIds.has('versions')) {
+    normalizedTools.splice(1, 0, versionTool);
+    addedToolIds.add('versions');
+  }
+
+  for (const tool of canonicalTools) {
+    if (!isDevelopmentProjectTool(tool) || addedToolIds.has(tool.id)) {
+      continue;
+    }
+    normalizedTools.push(tool);
+    addedToolIds.add(tool.id);
+  }
+
+  return normalizedTools;
+}
+
+export function isDevelopmentProjectTool(tool) {
+  return tool?.disabled === true && Boolean(String(tool?.statusText || '').trim());
+}
+
 export function normalizeRelatedWorkItemCounts(counts) {
   if (!counts || typeof counts !== 'object' || Array.isArray(counts)) {
     return {};

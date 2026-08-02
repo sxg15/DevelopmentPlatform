@@ -98,6 +98,8 @@ import { TestTaskManagement } from '../test-tasks/TestTaskManagement.jsx';
 import { fetchAiProjectActivity } from '../../api/aiPlans.js';
 import {
   getProjectToolPendingCount,
+  getProjectToolsForDisplay,
+  isDevelopmentProjectTool,
   isProjectToolPendingCountTool,
   normalizeRelatedWorkItemCounts,
 } from './projectToolDisplayUtils.js';
@@ -515,7 +517,7 @@ function ProjectWorkspace({
   const [aiActivityRefreshSequence, setAiActivityRefreshSequence] = useState(0);
   const processedDirectKeyRef = useRef('');
   const processedRealtimeEventRef = useRef('');
-  const visibleTools = getProjectTools(project);
+  const visibleTools = getProjectToolsForDisplay(project, PROJECT_TOOLS);
   const activeTool = visibleTools.find((tool) => tool.id === activeToolId) || visibleTools[0];
   const activeWorkItemConfig = activeToolId === 'testTasks'
     ? null
@@ -665,7 +667,8 @@ function ProjectWorkspace({
   }
 
   async function handleToolClick(toolId) {
-    if (!visibleTools.some((tool) => tool.id === toolId)) {
+    const selectedTool = visibleTools.find((tool) => tool.id === toolId);
+    if (!selectedTool || isDevelopmentProjectTool(selectedTool)) {
       return;
     }
 
@@ -944,6 +947,7 @@ function ProjectWorkspace({
           <nav className="project-tool-nav" aria-label="项目功能">
             {visibleTools.map((tool) => {
               const ToolIcon = getProjectToolIcon(tool.iconKey);
+              const isDevelopmentTool = isDevelopmentProjectTool(tool);
               const pendingCount = tool.id === 'aiPlans'
                 ? aiActivity.pendingReviewCount
                 : getProjectToolPendingCount(relatedWorkItemCounts, tool.id);
@@ -963,13 +967,26 @@ function ProjectWorkspace({
                     `project-tool-button-${tool.id}`,
                     activeToolId === tool.id ? 'is-active' : '',
                     pendingCount > 0 ? 'has-pending-count' : '',
+                    isDevelopmentTool ? 'is-development' : '',
                   ].filter(Boolean).join(' ')}
-                  aria-label={pendingCount > 0 ? `${tool.label}，${pendingCount}${pendingLabel}` : tool.label}
+                  aria-label={
+                    isDevelopmentTool
+                      ? `${tool.label}，${tool.statusText}`
+                      : pendingCount > 0
+                        ? `${tool.label}，${pendingCount}${pendingLabel}`
+                        : tool.label
+                  }
                   aria-pressed={activeToolId === tool.id}
-                  onClick={() => handleToolClick(tool.id)}
+                  disabled={isDevelopmentTool}
+                  onClick={isDevelopmentTool ? undefined : () => handleToolClick(tool.id)}
                 >
                   <ToolIcon className="project-tool-icon" aria-hidden="true" />
-                  <span className="project-tool-label">{tool.label}</span>
+                  <span className="project-tool-copy">
+                    <span className="project-tool-label">{tool.label}</span>
+                    {isDevelopmentTool ? (
+                      <span className="project-tool-development-status">（{tool.statusText}）</span>
+                    ) : null}
+                  </span>
                   {pendingCount > 0 ? (
                     <span className="project-tool-pending-badge">{pendingCount}{pendingLabel}</span>
                   ) : null}
@@ -5120,7 +5137,7 @@ function getWorkspacePreferenceName(project) {
 }
 
 function getInitialWorkspacePreferences(cacheUserKey, project) {
-  const visibleTools = getProjectTools(project);
+  const visibleTools = getProjectToolsForDisplay(project, PROJECT_TOOLS);
   const stored = readLocalPreference(cacheUserKey, getWorkspacePreferenceName(project), {}) || {};
   const defaultToolId = visibleTools.some((tool) => tool.id === 'overview')
     ? 'overview'
@@ -5826,29 +5843,6 @@ function formatCommentTime(value) {
 
 function formatProjectTitle(project) {
   return `${project.projectName || '未命名项目'} (${project.projectId || '无ID'})`;
-}
-
-function getProjectTools(project) {
-  const tools = Array.isArray(project?.allowedTools) && project.allowedTools.length > 0
-    ? project.allowedTools
-    : PROJECT_TOOLS;
-  const normalizedTools = tools
-    .map((tool) => PROJECT_TOOLS.find((item) => item.id === tool.id) || tool)
-    .filter((tool) => (
-      tool?.id
-      && tool?.label
-      && (tool.id !== 'aiPlans' || project?.aiPlanning?.enabled)
-    ));
-
-  if (!normalizedTools.some((tool) => tool.id === 'overview')) {
-    normalizedTools.unshift(PROJECT_TOOLS[0]);
-  }
-  const versionTool = PROJECT_TOOLS.find((tool) => tool.id === 'versions');
-  if (versionTool && !normalizedTools.some((tool) => tool.id === 'versions')) {
-    normalizedTools.splice(1, 0, versionTool);
-  }
-
-  return normalizedTools;
 }
 
 function formatErrorMessage(error) {

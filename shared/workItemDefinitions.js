@@ -17,8 +17,20 @@ export const PROJECT_TOOL_DEFINITIONS = Object.freeze([
   { id: 'bugs', label: 'Bug列表', iconKey: 'Bug' },
   { id: 'testTasks', label: '测试任务', iconKey: 'ListChecks' },
   { id: 'feedback', label: '反馈列表', iconKey: 'MessageSquare' },
-  { id: 'builds', label: '打包列表', iconKey: 'PackageCheck' },
-  { id: 'review', label: '内容审查', iconKey: 'ScanSearch' },
+  {
+    id: 'builds',
+    label: '打包列表',
+    iconKey: 'PackageCheck',
+    disabled: true,
+    statusText: '开发中',
+  },
+  {
+    id: 'review',
+    label: '内容审查',
+    iconKey: 'ScanSearch',
+    disabled: true,
+    statusText: '开发中',
+  },
 ]);
 
 export const WORK_ITEM_TOOL_DEFINITIONS = Object.freeze({

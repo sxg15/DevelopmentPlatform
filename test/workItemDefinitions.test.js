@@ -29,6 +29,11 @@ test('project tools keep overview first and use unique identifiers', () => {
     assert.ok(tool.iconKey);
     assert.equal(hasProjectToolIcon(tool.iconKey), true);
   }
+  for (const toolId of ['builds', 'review']) {
+    const tool = PROJECT_TOOL_DEFINITIONS.find((item) => item.id === toolId);
+    assert.equal(tool.disabled, true);
+    assert.equal(tool.statusText, '开发中');
+  }
   assert.ok(getProjectToolIcon('unknown-icon'));
 });
 

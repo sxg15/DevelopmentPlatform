@@ -214,6 +214,9 @@ test('project tool navigation renders icons and pending work item badges', () =>
   assert.match(source, /getProjectToolIcon\(tool\.iconKey\)/);
   assert.match(source, /project-tool-pending-badge/);
   assert.match(source, /isProjectToolPendingCountTool\(normalizedToolId\)/);
+  assert.match(source, /disabled=\{isDevelopmentTool\}/);
+  assert.match(source, /project-tool-development-status/);
+  assert.match(source, /（\{tool\.statusText\}）/);
   assert.match(source, /tool\.id === 'testTasks'[\s\S]*\? '待办'[\s\S]*: '未处理'/);
   assert.match(source, /\{pendingCount\}\{pendingLabel\}/);
 });
